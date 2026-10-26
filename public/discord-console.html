@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dc-bridge 控制台</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1e1f22; --panel: #2b2d31; --panel-2: #313338;
+    --text: #e6e7e9; --muted: #9aa0a6; --border: #3f4147;
+    --accent: #5865f2; --danger: #da373c; --ok: #3ba55d;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 60px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 18px; }
+  header .actions { margin-left: auto; display: flex; gap: 8px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--muted); }
+  .pill.ok { border-color: rgba(59,165,93,.5); color: #8fe3ab; }
+  .pill.bad { border-color: rgba(218,55,60,.5); color: #ff9a9e; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .card h2 span { font-weight: 400; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 7px 14px; font: inherit; cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button.danger { background: var(--danger); }
+  input, textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
+  textarea { font-family: var(--mono); font-size: 12px; min-height: 84px; resize: vertical; }
+  label { display: block; font-size: 12px; color: var(--muted); }
+  label input, label textarea { margin-top: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .muted { color: var(--muted); }
+  pre#logs { margin: 0; max-height: 320px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  pre#emoji-log { margin: 10px 0 0; max-height: 180px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--muted); border-radius: 0; padding: 5px 10px; font-size: 12px; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart .bar-peak { fill: #d4a72c; }
+  .chart .bar-off { fill: var(--accent); }
+  .chart .bar-mixed { fill: #9b59b6; }
+  .chart .axis { fill: var(--muted); font-size: 10px; }
+  .chart .gridline { stroke: var(--border); stroke-width: 1; }
+  .bar-wrap { display: flex; align-items: center; gap: 6px; min-width: 90px; }
+  .bar-track { flex: 1; height: 7px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
+  .bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); min-width: 2px; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: var(--panel-2); }
+  tr.detail > td { background: var(--panel-2); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .msg { font-size: 12px; }
+  .msg.ok { color: #8fe3ab; }
+  .msg.err { color: #ff9a9e; }
+  .gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .gate form { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: grid; gap: 12px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="gate" class="gate hidden">
+  <form id="gate-form">
+    <h1>dc-bridge 控制台</h1>
+    <p class="muted" style="margin:0">貼上啟動日誌裡的 console token。</p>
+    <input id="gate-token" type="password" autocomplete="off" placeholder="console token" required>
+    <button type="submit">進入</button>
+    <p id="gate-error" class="msg err"></p>
+  </form>
+</div>
+
+<main id="app" class="hidden">
+  <header>
+    <h1>大肥魚 console</h1>
+    <div class="pills" id="pills"></div>
+    <div class="actions">
+      <button id="refresh" class="ghost">重新整理</button>
+      <button id="logout" class="ghost">登出</button>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>狀態</h2>
+    <div class="grid" id="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>花費 <span id="usage-total" class="muted"></span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <div class="seg" id="usage-range">
+        <button data-range="24h" aria-pressed="true">24 小時</button>
+        <button data-range="3d" aria-pressed="false">3 天</button>
+        <button data-range="7d" aria-pressed="false">7 天</button>
+        <button data-range="30d" aria-pressed="false">30 天</button>
+      </div>
+      <span id="usage-price" class="muted" style="font-size:12px"></span>
+    </div>
+    <div class="grid" id="usage-totals"></div>
+    <div id="usage-chart" class="chart"></div>
+    <div id="usage-note" class="muted" style="font-size:12px;margin-top:6px"></div>
+    <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <thead><tr><th>會話</th><th class="num">輪</th><th class="num">步</th><th class="num">未命中</th><th class="num">命中輸入</th><th class="num">輸出</th><th class="num">花費</th><th>占比</th></tr></thead>
+        <tbody id="usage-rows"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="usage-reset" class="ghost danger">清空帳本</button>
+      <span id="usage-msg" class="msg"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>邀請機器人 <span class="muted">（管理員）</span></h2>
+    <p class="muted" style="margin:0 0 10px">連結已包含目前所有功能的權限。貼給要邀請 bot 的人，或在 Discord 開啟。</p>
+    <div class="row" style="margin-bottom:8px">
+      <button id="invite-open">開啟邀請頁</button>
+      <button id="invite-copy" class="ghost">複製連結</button>
+      <span id="invite-msg" class="msg"></span>
+    </div>
+    <input id="invite-url" readonly placeholder="載入中…">
+    <div id="invite-perms" class="muted" style="margin-top:8px;font-size:12px"></div>
+  </section>
+
+  <section class="card">
+    <h2>表情目錄 <span id="emoji-count" class="muted"></span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <button id="emoji-rebuild">更新目錄</button>
+      <span id="emoji-job" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>伺服器</th><th>條目</th><th>建立時間</th></tr></thead>
+        <tbody id="emoji-guilds"></tbody>
+      </table>
+    </div>
+    <pre id="emoji-log" class="hidden"></pre>
+  </section>
+
+  <section class="card">
+    <h2>黑話詞庫 <span id="slang-count" class="muted"></span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <span id="slang-learning" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>詞</th><th>意思</th><th>用法</th><th>狀態</th><th>次數</th><th>操作</th></tr></thead>
+        <tbody id="slang-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>會話 <span id="session-count" class="muted"></span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>等待中</th><th></th></tr></thead>
+        <tbody id="sessions"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>白名單與媒體</h2>
+    <form id="config-form" class="grid">
+      <label>allow.guilds<textarea id="allow-guilds" placeholder="一行一個 ID"></textarea></label>
+      <label>allow.channels<textarea id="allow-channels" placeholder="一行一個 ID"></textarea></label>
+      <label>allow.users（私聊）<textarea id="allow-users" placeholder="一行一個 ID"></textarea></label>
+      <label>ownerIds<textarea id="owner-ids" placeholder="一行一個 ID"></textarea></label>
+      <label>deny.guilds<textarea id="deny-guilds"></textarea></label>
+      <label>deny.channels<textarea id="deny-channels"></textarea></label>
+      <label>deny.users<textarea id="deny-users"></textarea></label>
+      <label>media.maxBytes<input id="media-max-bytes" type="number" min="65536" step="1048576"></label>
+      <label>media.maxModelBytes<input id="media-max-model-bytes" type="number" min="131072" step="131072"></label>
+      <label>media.maxLongEdge<input id="media-max-long-edge" type="number" min="256" max="2048" step="64"></label>
+      <label>media.maxCount<input id="media-max-count" type="number" min="1" max="8"></label>
+      <label>media.timeoutMs<input id="media-timeout" type="number" min="2000" max="60000" step="1000"></label>
+      <div class="row" style="grid-column:1/-1">
+        <button type="submit">儲存</button>
+        <span id="config-msg" class="msg"></span>
+      </div>
+    </form>
+    <p class="muted" style="margin:10px 0 0">每行一個 Discord ID（字串）。preset、模型、port、token 請改 config.json 後重啟。</p>
+  </section>
+
+  <section class="card">
+    <h2>日誌</h2>
+    <pre id="logs"></pre>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const KEY = 'dc-console-token';
+  let token = localStorage.getItem(KEY) || '';
+  let configLoaded = false;
+  let timer = null;
+
+  const fromQuery = new URLSearchParams(location.search).get('token');
+  if (fromQuery) {
+    token = fromQuery;
+    localStorage.setItem(KEY, token);
+    history.replaceState(null, '', location.pathname);
+  }
+
+  const el = (tag, props = {}, ...children) => {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      // dataset 是唯讀 getter，直接指派會在 async 函式（嚴格模式）裡拋錯。
+      if (key === 'dataset') Object.assign(node.dataset, value);
+      else node[key] = value;
+    }
+    for (const child of children) if (child != null) node.append(child);
+    return node;
+  };
+
+  const fmtUptime = (sec) => {
+    if (!Number.isFinite(sec)) return '—';
+    const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+    if (d) return d + ' 天 ' + h + ' 小時';
+    if (h) return h + ' 小時 ' + m + ' 分';
+    return m + ' 分 ' + Math.floor(sec % 60) + ' 秒';
+  };
+  const fmtAgo = (ts) => {
+    if (!ts) return '—';
+    const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (sec < 60) return sec + ' 秒前';
+    if (sec < 3600) return Math.round(sec / 60) + ' 分前';
+    if (sec < 86400) return Math.round(sec / 3600) + ' 小時前';
+    return new Date(ts).toLocaleString();
+  };
+  const lines = (value) => String(value ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+
+  function showGate(message) {
+    $('app').classList.add('hidden');
+    $('gate').classList.remove('hidden');
+    $('gate-error').textContent = message || '';
+    $('gate-token').value = '';
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+  function showApp() {
+    $('gate').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    if (!configLoaded) loadConfig().catch(() => {});
+    refresh();
+    if (!timer) timer = setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+  }
+
+  async function api(path, options = {}) {
+    const headers = { ...(options.headers || {}), authorization: 'Bearer ' + token };
+    if (options.body) headers['content-type'] = 'application/json';
+    const res = await fetch(path, { ...options, headers });
+    if (res.status === 401) { showGate('token 不正確或已失效'); throw new Error('unauthorized'); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  function renderStatus(s) {
+    $('pills').replaceChildren(
+      el('span', { className: 'pill ' + (s.bot ? 'ok' : 'bad') }, s.bot ? s.bot.tag : 'Discord 未登入'),
+      el('span', { className: 'pill ' + (s.dsh.lastFrameAt ? 'ok' : '') }, 'DSH ' + (s.dsh.lastFrameAt ? '串流中' : '等待事件')),
+      el('span', { className: 'pill' }, s.dsh.preset + ' / ' + s.dsh.model),
+      el('span', { className: 'pill' }, '上線 ' + fmtUptime(s.uptimeSec)),
+    );
+
+    const items = [
+      ['Bot', s.bot ? s.bot.tag + '（' + s.bot.id + '）' : '—'],
+      ['DSH', s.dsh.baseUrl],
+      ['模型', s.dsh.provider + ' / ' + s.dsh.model + '（' + s.dsh.effort + '）'],
+      ['Preset', s.dsh.preset],
+      ['事件流', s.dsh.lastFrameAt ? '最後一幀 ' + fmtAgo(s.dsh.lastFrameAt) : '還沒收到任何幀'],
+      ['會話', s.sessions + ' 個｜等待回答 ' + s.pending + '｜離線佇列 ' + (s.queue ?? 0) + ' 條'],
+      ['白名單', 'guilds ' + s.allow.guilds + '｜channels ' + s.allow.channels + '｜users ' + s.allow.users],
+      ['管理員', s.ownerIds.length ? s.ownerIds.join(', ') : '未設定'],
+      ['圖片', s.media.enabled ? ('≤' + Math.round(s.media.maxBytes / 1048576) + 'MB，長邊 ≤' + s.media.maxLongEdge + '，最多 ' + s.media.maxCount + ' 張') : '關閉'],
+      ['表情目錄', (s.emoji?.entries ?? 0) + ' 條／' + (s.emoji?.guilds ?? 0) + ' 個伺服器'],
+      ['黑話', s.slang ? (s.slang.enabled ? ('待確認 ' + s.slang.candidate + '｜已確認 ' + s.slang.confirmed) : '關閉') : '—'],
+      ['控制台', s.console.host + ':' + s.console.port],
+    ];
+    $('status').replaceChildren(...items.map(([k, v]) => el('div', {},
+      el('div', { className: 'muted', style: 'font-size:12px' }, k),
+      el('div', { className: 'mono', style: 'word-break:break-all' }, v),
+    )));
+    $('session-count').textContent = '（' + s.sessions + '）';
+  }
+
+  let inviteUrl = '';
+
+  function renderInvite(data) {
+    inviteUrl = data?.url ?? '';
+    $('invite-url').value = inviteUrl;
+    const perms = data?.permissions ?? [];
+    $('invite-perms').textContent = perms.length
+      ? `權限：${perms.map((permission) => permission.label).join('、')}（bitfield ${data.bitfield}）`
+      : '';
+  }
+
+  // ── 花費 ──────────────────────────────────────────────────────────────────
+  // 總計是帳本的權威累計（含橋接啟動前的歷史）；走勢圖只畫所選時間窗，
+  // 圖上合計與「總花費」的差額會明白寫出來，避免看起來像算錯。
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  let usageRange = '24h';
+  let usageData = null;
+  let usageOpenKey = null;
+  let usageDetail = null;
+
+  const usageNum = (value) => {
+    const n = Number(value) || 0;
+    if (n >= 1e8) return (n / 1e8).toFixed(2) + ' 億';
+    if (n >= 1e5) return Math.round(n / 1e4) + ' 萬';
+    if (n >= 1e4) return (n / 1e4).toFixed(1) + ' 萬';
+    return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  };
+  const usageMoney = (value, symbol) => {
+    const sym = symbol || '¥';
+    const n = Number(value) || 0;
+    if (n === 0) return sym + '0';
+    if (n < 0.01) return sym + n.toFixed(4);
+    return sym + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  };
+  const usagePct = (value) => (Number.isFinite(Number(value)) ? (Number(value) * 100).toFixed(1) + '%' : '—');
+  const usageRate = (buckets) => {
+    const b = buckets || {};
+    const input = (b.cacheMiss || 0) + (b.cacheHit || 0) + (b.cacheWrite || 0);
+    return input > 0 ? (b.cacheHit || 0) / input : 0;
+  };
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const usageClock = (at, bucketMs) => {
+    const d = new Date(at);
+    if (bucketMs >= 3600_000) return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad2(d.getHours()) + ':00';
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  };
+
+  function renderUsageChart(series) {
+    const box = $('usage-chart');
+    const buckets = series?.buckets ?? [];
+    if (!buckets.length || !buckets.some((b) => (b.cost || 0) > 0 || (b.tokens || 0) > 0)) {
+      box.replaceChildren(el('div', { className: 'muted', style: 'font-size:12px;padding:12px 0' }, '這個時間窗內還沒有用量。'));
+      return;
+    }
+    const W = 720, H = 150, padL = 4, padR = 4, padT = 8, padB = 22;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const max = Math.max(...buckets.map((b) => b.cost || 0), 0) || 1;
+    const step = plotW / buckets.length;
+    const barW = Math.max(1, step * 0.72);
+    const node = (tag, attrs) => {
+      const n = document.createElementNS(SVG_NS, tag);
+      for (const [key, value] of Object.entries(attrs)) n.setAttribute(key, value);
+      return n;
+    };
+    const svg = node('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '花費走勢' });
+    for (const fraction of [0, 0.5, 1]) {
+      const y = padT + plotH - fraction * plotH;
+      svg.append(node('line', { x1: padL, y1: y, x2: W - padR, y2: y, class: 'gridline' }));
+    }
+    buckets.forEach((b, i) => {
+      const cost = b.cost || 0;
+      const h = cost > 0 ? Math.max(1.5, (cost / max) * plotH) : 0;
+      const x = padL + i * step + (step - barW) / 2;
+      const tip = node('title', {});
+      tip.textContent = `${usageClock(b.t, series.bucketMs)}\n花費：${usageMoney(cost, series.symbol)}`
+        + `\n未命中 ${usageNum(b.cacheMiss)}｜命中 ${usageNum(b.cacheHit)}｜輸出 ${usageNum(b.output)}`
+        + `\n步數 ${usageNum(b.steps)}｜輪次 ${usageNum(b.turns)}`
+        + `\n時段：${b.tier === 'peak' ? '高峰期（單價 ×2）' : b.tier === 'mixed' ? '跨時段' : '空閒'}`;
+      if (h > 0) {
+        const rect = node('rect', {
+          x, y: padT + plotH - h, width: barW, height: h, rx: 2,
+          class: 'bar-' + (b.tier === 'peak' ? 'peak' : b.tier === 'mixed' ? 'mixed' : 'off'),
+        });
+        rect.append(tip);
+        svg.append(rect);
+      }
+      // 0 的格子也要能 hover，否則「那幾個小時很安靜」看不出來。
+      const hit = node('rect', { x: padL + i * step, y: padT, width: step, height: plotH, fill: 'transparent' });
+      hit.append(tip.cloneNode(true));
+      svg.append(hit);
+    });
+    const tickEvery = Math.max(1, Math.ceil(buckets.length / 6));
+    for (let i = 0; i < buckets.length; i += tickEvery) {
+      const label = node('text', {
+        x: padL + i * step + step / 2, y: H - padB + 15, 'text-anchor': 'middle', class: 'axis',
+      });
+      label.textContent = usageClock(buckets[i].t, series.bucketMs);
+      svg.append(label);
+    }
+    box.replaceChildren(svg);
+  }
+
+  function usageDetailRow(sym) {
+    const cell = el('td', { colSpan: 8 });
+    if (!usageDetail) {
+      cell.append(el('span', { className: 'muted' }, '讀取逐輪明細…'));
+    } else if (usageDetail.error) {
+      cell.append(el('span', { className: 'msg err' }, usageDetail.error));
+    } else {
+      const turns = usageDetail.turns ?? [];
+      cell.append(el('div', { className: 'muted', style: 'font-size:12px;margin-bottom:6px' },
+        `${usageDetail.key}｜可追溯 ${turns.length} 輪｜已歸屬 ${usageMoney(usageDetail.attributedCost, sym)}`
+        + (Number(usageDetail.unattributedCost) > 0 ? `｜未逐輪歸屬 ${usageMoney(usageDetail.unattributedCost, sym)}` : '')));
+      if (!turns.length) {
+        cell.append(el('span', { className: 'muted' }, '這個會話只有累計值，沒有可追溯的逐輪紀錄。'));
+      } else {
+        cell.append(el('table', {},
+          el('thead', {}, el('tr', {},
+            el('th', { className: 'num' }, '輪'), el('th', {}, '結束時間'), el('th', { className: 'num' }, '步'),
+            el('th', { className: 'num' }, '未命中'), el('th', { className: 'num' }, '命中輸入'),
+            el('th', { className: 'num' }, '輸出'), el('th', { className: 'num' }, '花費'), el('th', {}, '時段'),
+          )),
+          el('tbody', {}, ...turns.map((turn) => {
+            const tb = turn.buckets ?? {};
+            return el('tr', {},
+              el('td', { className: 'num' }, '#' + turn.turn),
+              el('td', {}, turn.endedAt ? new Date(turn.endedAt).toLocaleString() : '—'),
+              el('td', { className: 'num' }, usageNum(turn.steps)),
+              el('td', { className: 'num' }, usageNum(tb.cacheMiss)),
+              el('td', { className: 'num' }, usageNum(tb.cacheHit)),
+              el('td', { className: 'num' }, usageNum(tb.output)),
+              el('td', { className: 'num' }, usageMoney(turn.cost, sym)),
+              el('td', {}, turn.tier === 'peak' ? '高峰' : turn.tier === 'off' ? '空閒' : turn.tier === 'mixed' ? '跨時段' : '—'),
+            );
+          })),
+        ));
+      }
+    }
+    return el('tr', { className: 'detail' }, cell);
+  }
+
+  function renderUsage(data) {
+    usageData = data;
+    const t = data?.totals ?? {};
+    const b = t.buckets ?? {};
+    const series = data?.series ?? {};
+    const prices = data?.prices;
+    const sym = prices?.symbol ?? '¥';
+    $('usage-total').textContent = (Number(t.cost) || 0) > 0 ? '累計 ' + usageMoney(t.cost, sym) : '';
+    $('usage-price').textContent = prices
+      ? `價目 ${prices.version}｜${prices.now?.label ?? ''}（${prices.now?.model ?? ''}）｜現在是`
+        + (prices.now?.tier === 'peak' ? '高峰時段（單價 ×2）' : '空閒時段')
+      : '';
+
+    const items = [
+      ['總花費', usageMoney(t.cost, sym) + (t.byTier ? `（高峰 ${usageMoney(t.byTier.peak, sym)}｜空閒 ${usageMoney(t.byTier.off, sym)}）` : '')],
+      ['輪 / 步', usageNum(t.turns) + ' 輪｜' + usageNum(t.steps) + ' 步'],
+      ['Token', '輸入 ' + usageNum(t.inputTokens) + '（命中率 ' + usagePct(t.cacheHitRate) + '）｜輸出 ' + usageNum(b.output)],
+      ['平均每輪', usageMoney(t.avgCostPerTurn, sym)],
+    ];
+    $('usage-totals').replaceChildren(...items.map(([k, v]) => el('div', {},
+      el('div', { className: 'muted', style: 'font-size:12px' }, k),
+      el('div', { className: 'mono', style: 'word-break:break-all' }, v),
+    )));
+
+    renderUsageChart(series);
+
+    const notes = [
+      `圖上是近 ${data?.hours ?? 24} 小時：${usageMoney(series.totals?.cost ?? 0, sym)}，`
+      + `${usageNum(series.totals?.tokens ?? 0)} token`
+      + (series.busiest ? `｜最貴一格 ${usageClock(series.busiest.t, series.bucketMs)} ${usageMoney(series.busiest.cost, sym)}` : ''),
+    ];
+    if ((series.offChartCost ?? 0) > 0.0001) {
+      notes.push(`另有 ${usageMoney(series.offChartCost, sym)} 是更早的歷史（只有累計值，沒有逐時明細），所以圖上合計會小於總花費。`);
+    }
+    if (series.countedSamples === 0) {
+      notes.push('時間窗內沒有取樣：可能真的沒呼叫，或逐輪明細已被容量上限淘汰（總量仍然準）。');
+    }
+    if (t.estimated) notes.push('⚠️ 有模型不在價目表，按兜底價估算。');
+    if ((data?.ledger?.droppedLines ?? 0) > 0) {
+      notes.push(`⚠️ 帳本有 ${data.ledger.droppedLines} 行讀不回來（已跳過，其餘照常計算）。`);
+    }
+    $('usage-note').textContent = notes.join(' ');
+
+    const list = data?.conversations ?? [];
+    const totalCost = Number(t.cost) || 0;
+    const rows = [];
+    if (!list.length) {
+      rows.push(el('tr', {}, el('td', { colSpan: 8, className: 'muted' }, '還沒有可歸屬的回合；DSH 產生用量後這裡會出現。')));
+    }
+    for (const c of list) {
+      const cb = c.buckets ?? {};
+      const share = totalCost > 0 ? (Number(c.cost) || 0) / totalCost : 0;
+      rows.push(el('tr', { className: 'clickable', dataset: { usageKey: c.key } },
+        el('td', { className: 'mono' }, c.key),
+        el('td', { className: 'num' }, usageNum(c.turns)),
+        el('td', { className: 'num' }, usageNum(c.steps)),
+        el('td', { className: 'num' }, usageNum(cb.cacheMiss)),
+        el('td', { className: 'num' }, usageNum(cb.cacheHit)),
+        el('td', { className: 'num' }, usageNum(cb.output)),
+        el('td', { className: 'num' }, usageMoney(c.cost, sym)),
+        el('td', {}, el('div', { className: 'bar-wrap' },
+          el('div', { className: 'bar-track' }, el('div', { className: 'bar-fill', style: 'width:' + Math.max(2, Math.round(share * 100)) + '%' })),
+          el('span', { className: 'muted', style: 'font-size:11px' }, (share * 100).toFixed(1) + '%'),
+        )),
+      ));
+      if (c.key === usageOpenKey) rows.push(usageDetailRow(sym));
+    }
+    $('usage-rows').replaceChildren(...rows);
+  }
+
+  async function refreshUsage() {
+    try {
+      renderUsage(await api('/api/usage?range=' + encodeURIComponent(usageRange)));
+      const msg = $('usage-msg');
+      if (msg.classList.contains('err')) { msg.textContent = ''; msg.className = 'msg'; }
+    } catch (error) {
+      $('usage-msg').textContent = '花費讀取失敗：' + error.message;
+      $('usage-msg').className = 'msg err';
+    }
+  }
+
+  function renderEmoji(emoji) {
+    const items = emoji?.items ?? [];
+    $('emoji-count').textContent = `（${emoji?.entries ?? 0} 條 / ${emoji?.guilds ?? 0} 個伺服器）`;
+    $('emoji-guilds').replaceChildren(...(items.length ? items.map((g) => el('tr', {},
+      el('td', {}, g.guildName || g.guildId),
+      el('td', {}, String(g.entries)),
+      el('td', {}, g.builtAt ? new Date(g.builtAt).toLocaleString() : '—'),
+    )) : [el('tr', {}, el('td', { colSpan: 3, className: 'muted' }, '還沒有目錄；按「更新目錄」跑一次。'))]));
+
+    const job = emoji?.job;
+    const log = job?.log ?? [];
+    const box = $('emoji-log');
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    box.classList.toggle('hidden', log.length === 0);
+    box.textContent = log.join('\n');
+    if (atBottom) box.scrollTop = box.scrollHeight;
+
+    let text = '';
+    if (job?.running) {
+      const last = log[log.length - 1] ?? '';
+      const match = last.match(/(\d+)\s*-\s*(\d+)\s*\/\s*(\d+)/);
+      text = '更新中…' + (match ? `（${match[2]}/${match[3]}）` : '');
+    }
+    else if (job?.exitCode === 0 && job?.finishedAt) text = '上次更新成功（' + new Date(job.finishedAt).toLocaleString() + '）';
+    else if (job?.error) text = '上次失敗：' + job.error;
+    else if (job?.exitCode != null) text = '上次結束 exit ' + job.exitCode;
+    else if (log.length > 0) text = /完成：更新/.test(log[log.length - 1]) ? '上次建置完成（重啟後只留日誌）' : '上次建置結束';
+    $('emoji-job').textContent = text;
+    $('emoji-rebuild').disabled = Boolean(job?.running);
+  }
+
+  let slangEntries = [];
+  const SLANG_LABEL = { candidate: '待確認', confirmed: '已確認', rejected: '已拒絕' };
+
+  function renderSlang(data) {
+    slangEntries = data?.entries ?? [];
+    const stats = data?.stats ?? {};
+    $('slang-count').textContent = `（待確認 ${stats.candidate ?? 0}｜已確認 ${stats.confirmed ?? 0}｜已拒絕 ${stats.rejected ?? 0}）`;
+    const learning = data?.learning;
+    $('slang-learning').textContent = learning?.enabled
+      ? (learning.running ? '學習中…' : `佇列 ${learning.queued ?? 0}｜今天 ${learning.today ?? 0}/${learning.maxPerDay ?? 0}`)
+      : '黑話學習已關閉（config.json 的 discord.slang.enabled）';
+    $('slang-rows').replaceChildren(...(slangEntries.length ? slangEntries.map((entry) => el('tr', {},
+      el('td', {}, el('strong', {}, entry.term)),
+      el('td', {}, entry.meaning),
+      el('td', { className: 'muted' }, entry.usage || '—'),
+      el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
+      el('td', {}, String(entry.seen ?? 0)),
+      el('td', {}, el('div', { className: 'row' },
+        entry.status === 'candidate' ? el('button', { dataset: { action: 'confirm', id: entry.id }, textContent: '確認' }) : null,
+        entry.status !== 'rejected' ? el('button', { className: 'ghost', dataset: { action: 'reject', id: entry.id }, textContent: '拒絕' }) : null,
+        el('button', { className: 'ghost', dataset: { action: 'edit', id: entry.id }, textContent: '編輯' }),
+        el('button', { className: 'danger', dataset: { action: 'delete', id: entry.id }, textContent: '刪除' }),
+      )),
+    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有詞條；在允許的頻道累積 20 則訊息後會自動學。'))]));
+  }
+
+  function renderSessions(list) {    $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
+      el('td', { className: 'mono' }, s.key),
+      el('td', { className: 'mono' }, s.sessionId),
+      el('td', {}, fmtAgo(s.lastActive)),
+      el('td', {}, s.pending ? (s.pending === 'question' ? '提問' : '審批') : '—'),
+      el('td', {}, el('button', {
+        className: 'danger', dataset: { key: s.key }, textContent: '重置',
+      })),
+    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, '還沒有任何會話'))]));
+  }
+
+  function renderLogs(logs) {
+    const box = $('logs');
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+    box.textContent = logs.map((l) => l.text).join('\n');
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  function fillConfig(c) {
+    const join = (v) => (v || []).join('\n');
+    $('allow-guilds').value = join(c.allow.guilds);
+    $('allow-channels').value = join(c.allow.channels);
+    $('allow-users').value = join(c.allow.users);
+    $('owner-ids').value = join(c.ownerIds);
+    $('deny-guilds').value = join(c.deny.guilds);
+    $('deny-channels').value = join(c.deny.channels);
+    $('deny-users').value = join(c.deny.users);
+    $('media-max-bytes').value = c.media.maxBytes;
+    $('media-max-model-bytes').value = c.media.maxModelBytes;
+    $('media-max-long-edge').value = c.media.maxLongEdge;
+    $('media-max-count').value = c.media.maxCount;
+    $('media-timeout').value = c.media.timeoutMs;
+  }
+
+  async function loadConfig() {
+    const c = await api('/api/config');
+    fillConfig(c);
+    configLoaded = true;
+  }
+
+  async function refresh() {
+    const results = await Promise.allSettled([
+      api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
+      api('/api/usage?range=' + encodeURIComponent(usageRange)),
+    ]);
+    if (results[0].status === 'fulfilled') renderStatus(results[0].value);
+    if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
+    if (results[1].status === 'fulfilled') renderSessions(results[1].value.sessions);
+    if (results[2].status === 'fulfilled') renderLogs(results[2].value.logs);
+    if (results[3].status === 'fulfilled') renderSlang(results[3].value);
+    if (results[4].status === 'fulfilled') renderInvite(results[4].value);
+    if (results[5].status === 'fulfilled') renderUsage(results[5].value);
+  }
+
+  $('gate-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    token = $('gate-token').value.trim();
+    if (!token) return;
+    localStorage.setItem(KEY, token);
+    try { await api('/api/status'); showApp(); } catch (error) { $('gate-error').textContent = error.message; }
+  });
+
+  $('logout').addEventListener('click', () => {
+    localStorage.removeItem(KEY);
+    token = '';
+    showGate('');
+  });
+  $('refresh').addEventListener('click', () => refresh());
+
+  $('usage-range').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-range]');
+    if (!button) return;
+    usageRange = button.dataset.range;
+    for (const other of $('usage-range').querySelectorAll('button')) {
+      other.setAttribute('aria-pressed', String(other === button));
+    }
+    refreshUsage();
+  });
+
+  $('usage-rows').addEventListener('click', async (event) => {
+    const row = event.target.closest('tr[data-usage-key]');
+    if (!row) return;
+    const key = row.dataset.usageKey;
+    if (usageOpenKey === key) {
+      usageOpenKey = null;
+      usageDetail = null;
+      renderUsage(usageData);
+      return;
+    }
+    usageOpenKey = key;
+    usageDetail = null;
+    renderUsage(usageData);
+    try {
+      usageDetail = await api('/api/usage/turns?key=' + encodeURIComponent(key) + '&limit=200');
+    } catch (error) {
+      usageDetail = { error: '逐輪明細讀取失敗：' + error.message };
+    }
+    if (usageOpenKey === key) renderUsage(usageData);
+  });
+
+  $('usage-reset').addEventListener('click', async () => {
+    if (!confirm('清空 token 帳本？累計花費與逐輪明細都會消失，重啟或事件流重連後才會重新拉回累計值（逐輪明細只能重新累積）。')) return;
+    try {
+      await api('/api/usage/reset', { method: 'POST', body: JSON.stringify({}) });
+      usageOpenKey = null;
+      usageDetail = null;
+      await refreshUsage();
+      $('usage-msg').textContent = '已清空帳本';
+      $('usage-msg').className = 'msg ok';
+      setTimeout(() => {
+        if ($('usage-msg').textContent === '已清空帳本') { $('usage-msg').textContent = ''; $('usage-msg').className = 'msg'; }
+      }, 4000);
+    } catch (error) {
+      $('usage-msg').textContent = '清空失敗：' + error.message;
+      $('usage-msg').className = 'msg err';
+    }
+  });
+
+  $('invite-open').addEventListener('click', () => {
+    if (inviteUrl) window.open(inviteUrl, '_blank', 'noopener');
+  });
+
+  $('invite-copy').addEventListener('click', async () => {
+    if (!inviteUrl) return;
+    const msg = $('invite-msg');
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      copied = true;
+    } catch {
+      // 控制台常跑在 http://（非 secure context），clipboard API 可能不存在。
+      const input = $('invite-url');
+      input.select();
+      try { copied = document.execCommand('copy'); } catch { copied = false; }
+    }
+    msg.textContent = copied ? '已複製' : '請手動複製上面的連結';
+    msg.className = 'msg ' + (copied ? 'ok' : 'err');
+    setTimeout(() => { msg.textContent = ''; }, 2500);
+  });
+
+  $('emoji-rebuild').addEventListener('click', async () => {
+    $('emoji-rebuild').disabled = true;
+    try {
+      await api('/api/emojis/rebuild', { method: 'POST', body: JSON.stringify({}) });
+      await refresh();
+    } catch (error) {
+      alert('更新失敗：' + error.message);
+      $('emoji-rebuild').disabled = false;
+    }
+  });
+
+  $('slang-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const entry = slangEntries.find((item) => item.id === button.dataset.id);
+    if (!entry) return;
+    const action = button.dataset.action;
+    button.disabled = true;
+    try {
+      if (action === 'delete') {
+        if (!confirm('刪除「' + entry.term + '」？')) return;
+        await api('/api/slang/delete', { method: 'POST', body: JSON.stringify({ id: entry.id }) });
+      } else if (action === 'edit') {
+        const term = prompt('詞', entry.term);
+        if (term === null) return;
+        const meaning = prompt('意思', entry.meaning);
+        if (meaning === null) return;
+        const usage = prompt('什麼時候用（可留空）', entry.usage ?? '');
+        if (usage === null) return;
+        await api('/api/slang/update', {
+          method: 'POST',
+          body: JSON.stringify({ id: entry.id, term, meaning, usage }),
+        });
+      } else {
+        await api('/api/slang/' + action, { method: 'POST', body: JSON.stringify({ id: entry.id }) });
+      }
+      await refresh();
+    } catch (error) {
+      alert('操作失敗：' + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('sessions').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-key]');
+    if (!button) return;
+    const key = button.dataset.key;
+    if (!confirm('重置 ' + key + '？下一則訊息會開新上下文。')) return;
+    button.disabled = true;
+    try {
+      await api('/api/sessions/reset', { method: 'POST', body: JSON.stringify({ key }) });
+      await refresh();
+    } catch (error) {
+      alert('重置失敗：' + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('config-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const msg = $('config-msg');
+    msg.textContent = '儲存中…';
+    msg.className = 'msg';
+    try {
+      const result = await api('/api/config', {
+        method: 'POST',
+        body: JSON.stringify({
+          allow: {
+            guilds: lines($('allow-guilds').value),
+            channels: lines($('allow-channels').value),
+            users: lines($('allow-users').value),
+          },
+          deny: {
+            guilds: lines($('deny-guilds').value),
+            channels: lines($('deny-channels').value),
+            users: lines($('deny-users').value),
+          },
+          ownerIds: lines($('owner-ids').value),
+          media: {
+            maxBytes: Number($('media-max-bytes').value),
+            maxModelBytes: Number($('media-max-model-bytes').value),
+            maxLongEdge: Number($('media-max-long-edge').value),
+            maxCount: Number($('media-max-count').value),
+            timeoutMs: Number($('media-timeout').value),
+          },
+        }),
+      });
+      fillConfig(result.config);
+      msg.textContent = '已儲存（白名單與媒體立即生效）';
+      msg.className = 'msg ok';
+      await refresh();
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  if (token) showApp(); else showGate('');
+})();
+</script>
+</body>
+</html>

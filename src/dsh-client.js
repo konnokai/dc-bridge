@@ -163,6 +163,35 @@ export function isLoopbackBase(baseUrl) {
   }
 }
 
+/**
+ * baseUrl 是否指向**这台机器**（回环，或本机网卡上的 IP）。
+ *
+ * 用途与 {@link isLoopbackBase} 相同：决定能不能拿本机的签名密钥去铸 Cookie。
+ * 为什么不能只认回环：DSH 用 `--host 192.168.98.21` 启动时只监听那个网卡地址，
+ * 127.0.0.1 连不上；桥接与 DSH 在同一台机器、走 LAN IP 是常见部署（本机浏览器也要用）。
+ * 签名密钥就在本机，绑谁的 IP 都还是同一份信任，所以允许；但**只认 IP 字面值** ——
+ * 网域名称可能今天指向本机、明天指向别人，不能拿密钥去赌 DNS。
+ */
+export function isLocalBase(baseUrl) {
+  if (isLoopbackBase(baseUrl)) return true;
+  let host;
+  try {
+    host = new URL(String(baseUrl)).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return false;
+  }
+  const family = host.includes(':')
+    ? 'IPv6'
+    : (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) ? 'IPv4' : null);
+  if (!family) return false;
+  for (const addresses of Object.values(os.networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === family && address.address === host) return true;
+    }
+  }
+  return false;
+}
+
 /** 新协议 RPC 的 args 包装：旧 payload -> { <参数名>: payload }。 */
 const METHOD_ARG_WRAPPERS = {
   'session/list': '_request',
@@ -384,9 +413,10 @@ export class NodeApiClient extends AbstractApiClient {
     if (this.cookie && Date.now() < this._cookieExpiresAt - MINTED_COOKIE_REFRESH_MARGIN_MS) return this.cookie;
     this.cookie = null;
     const secret = this.browserSessionSecret();
-    // 铸造只对回环地址成立：签名密钥取自本机 DSH_HOME，远程 DSH 用的是另一份密钥，
-    // 拿本机密钥去签只会换来 401。
-    const canMint = secret !== null && isLoopbackBase(this.baseUrl);
+    // 铸造只对本机 DSH 成立：签名密钥取自本机 DSH_HOME，远程 DSH 用的是另一份密钥，
+    // 拿本机密钥去签只会换来 401。回环与「本机网卡 IP」都算本机（见 isLocalBase）——
+    // DSH 用 `--host <LAN IP>` 启动时 127.0.0.1 根本连不上。
+    const canMint = secret !== null && isLocalBase(this.baseUrl);
     // 优先级：默认**铸造优先**——它不依赖「启动器有没有把 stdout 记进日志」，也不随
     // DSH 重启失效，是唯一不需要每次升级重新适配的一条路。两个例外：
     // 用户在 config.json 里显式填了 dsh.authToken（那是明确意图，尊重它），

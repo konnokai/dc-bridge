@@ -4,9 +4,8 @@
 // - 只暴露只读工具 `web_search` 与 `web_fetch`：查网络用语/梗/黑话、抓取网页正文。
 // - 不暴露任何本地文件、命令执行、写操作。
 // - 查询词做基础清洗：去 CQ 码、控制字符、超长截断。
-// - 搜索：优先走 **DSH 同一路 DeepSeek 联网搜索**（src/web-search.js：同一端点/模型/
-//   服务端 web_search 工具，凭据取 config/env/DSH 的 .credentials.yaml），
-//   不可用时回退 Bing（RSS 优先）。搜索词不再默认发给 Bing。
+// - 搜索：按 config.json 的 webSearch.provider 走 SearXNG（自架）、DeepSeek（与 DSH 同一路）
+//   或 Bing，见 src/web-search.js。搜索词不再默认发给 Bing。
 // - `web_fetch` 仅允许 http/https：
 //   - 禁止 URL 内嵌凭据；
 //   - 禁止 localhost / .local / 私有 IP / 环回 / 链路本地 / CGNAT 等内网地址；
@@ -53,7 +52,7 @@ const server = new McpServer({ name: 'web-search-safe', version: '0.2.1-r1' });
 
 server.tool(
   'web_search',
-  '只读联网搜索：优先使用与 DSH 相同的 DeepSeek 联网搜索（结果更准、不把群里的词发给搜索引擎广告网络），不可用时自动回退 Bing。返回标题/URL/摘要，不执行任何本地操作。适合查网络用语、梗、事实性问题和热点。',
+  '只读联网搜索：按 config.json 的 webSearch.provider 走 SearXNG（自架实例）、DeepSeek 或 Bing，返回标题/URL/摘要，不执行任何本地操作。适合查网络用语、梗、事实性问题和热点。',
   { query: z.string().describe('要搜索确认的网络用语/黑话/梗/事实性问题') },
   async ({ query }) => {
     const clean = sanitizeQuery(query);

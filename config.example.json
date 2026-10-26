@@ -1,13 +1,101 @@
 {
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
-    "provider": "deepseek-official",
-    "model": "deepseek-flash",
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
     "reasoningEffort": "max",
     "authToken": "",
     "authHeader": "authorization",
     "authPrefix": "Bearer",
     "allowRemote": false
+  },
+  "discord": {
+    "token": "",
+    "agentPreset": "dc-chat",
+    "workspaceTitle": "Discord 聊天",
+    "ownerIds": [],
+    "allow": {
+      "guilds": [],
+      "channels": [],
+      "users": []
+    },
+    "deny": {
+      "guilds": [],
+      "channels": [],
+      "users": []
+    },
+    "allowAllWhenEmpty": false,
+    "requireMentionInGuild": true,
+    "messageContentIntent": true,
+    "ackMessage": "",
+    "maxMessageChars": 2000,
+    "questionTimeoutMs": 300000,
+    "typing": true,
+    "sendDelayMs": 300,
+    "sessionDir": "",
+    "media": {
+      "enabled": true,
+      "maxBytes": 8388608,
+      "maxModelBytes": 1048576,
+      "maxLongEdge": 1280,
+      "maxCount": 4,
+      "timeoutMs": 25000
+    },
+    "context": {
+      "enabled": true,
+      "messages": 12,
+      "maxChars": 3000
+    },
+    "batch": {
+      "debounceMs": 3000,
+      "maxWaitMs": 15000,
+      "maxMessages": 20
+    },
+    "security": {
+      "blockSensitive": true
+    },
+    "queue": {
+      "max": 50,
+      "retryMs": 10000
+    },
+    "emoji": {
+      "enabled": true,
+      "dir": "",
+      "maxCandidates": 12,
+      "maxChars": 600
+    },
+    "reactions": {
+      "enabled": false,
+      "probability": 0.15,
+      "cooldownMs": 600000,
+      "maxPerHour": 10,
+      "minKeywordScore": 2
+    },
+    "memory": {
+      "enabled": false,
+      "maxMessages": 30,
+      "injectMessages": 5,
+      "maxChars": 800,
+      "ttlDays": 30
+    },
+    "slang": {
+      "enabled": false,
+      "extractMinMessages": 20,
+      "extractCooldownMs": 600000,
+      "maxPerDay": 40,
+      "injectMax": 8,
+      "maxChars": 1500,
+      "maxCandidates": 200,
+      "maxConfirmed": 500,
+      "learnerPreset": "dc-learner",
+      "timeoutMs": 90000
+    },
+    "console": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 3110,
+      "token": ""
+    }
   },
   "role": {
     "maxInjectChars": 6000
@@ -270,6 +358,8 @@
     "apiKey": "",
     "apiKeyEnv": "DEEPSEEK_API_KEY",
     "baseURL": "",
+    "searxngURL": "",
+    "allowPrivate": false,
     "model": "deepseek-v4-flash",
     "maxUses": 5,
     "maxTokens": 4096,

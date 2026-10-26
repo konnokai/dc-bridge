@@ -7,6 +7,10 @@
 > 🔒 QQ 会话的权限边界与安全承诺见 **[RULES.md](RULES.md)**。
 >
 > 🎤 独立的「发语音」工具已拆到仓库上一级的 **`../voice-tool/`**（命令行 `voice-cli.mjs` / 图形界面 `voice-gui.mjs`），不再依赖 qq-bridge 运行。
+>
+> 🟦 **Discord 版（聊天模式）**：入口是 `src/discord-bridge.js`，`npm run start:discord`；DSH 端先跑
+> `node scripts/setup-dsh.mjs --discord` 装 `dc-chat` preset。设置、权限边界与限制见
+> **[docs/guides/DISCORD.md](docs/guides/DISCORD.md)**。下面其余内容仍是 QQ 版说明；QQ 代码保留未删，两边可并存。
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 

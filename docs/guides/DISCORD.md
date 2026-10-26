@@ -1,0 +1,489 @@
+# Discord ↔ DeepSeek Harness 橋接（聊天模式）
+
+把 Discord 的訊息接進本機 DSH：使用者在 Discord 傳訊息 → 橋接建立／沿用一個 DSH 會話 → agent 的回覆、
+提問與工具審批送回同一個頻道。
+
+只做聊天。沒有語音、黑名單學習、主動開話題、QQ 版那種十頁控制台；表情包、reactions、跨頻道記憶、黑話學習與小型控制台見下文。
+
+## 架構
+
+```
+Discord 訊息 ──► src/discord-bridge.js ──► DSH Web API（127.0.0.1:3080/api）
+                        ▲                              │
+                        └──── turn/end、提問、審批 ────┘
+```
+
+- Discord 側：`discord.js` 14（Gateway，`messageCreate`）。
+- DSH 側：直接使用 `src/dsh-client.js`（Cookie 鑄造、斜線 RPC、`/api/remote.mux` 事件流）。
+- 沒有一行 QQ / SnowLuma 程式碼參與。QQ 那套（`src/bridge.js` 等）留在原處，兩邊可並存，但**不要同時
+  對同一個 Discord 頻道跑兩個實例**（橋接有單一實例鎖，第二個會直接退出）。
+
+## 前置條件
+
+1. 執行中的 DSH Web（預設 `http://127.0.0.1:3080`），而且**跟橋接同一台機器**——橋接要用
+   `~/.dsh/.credentials.yaml` 的簽名金鑰在本機鑄造 Cookie。DSH 用 `--host <LAN IP>` 啟動、只監聽
+   那個網卡時，`dsh.baseUrl` 直接寫那個 IP 也可以：本機網卡 IP 同樣算「本機」。
+2. Node.js ≥ 22.13。
+3. 一個 Discord 應用程式與 bot token。
+4. （選用）`ffmpeg`：解析度／體積太大的圖片要靠它在本地縮小。沒裝也能跑，只是大圖會被跳過並說明原因。
+5. Discord Developer Portal → Bot → **Message Content Intent**。不開也能跑（見下方
+   `discord.messageContentIntent`），但頻道裡只有 @bot 的訊息看得到內容。
+
+## 安裝
+
+```powershell
+npm install
+
+# 1) 建立 Discord 應用程式
+#    https://discord.com/developers/applications → New Application → Bot → Reset Token
+#    Privileged Gateway Intents → 勾 Message Content Intent（不想開就跳過，改設定見下）
+#    OAuth2 → URL Generator → scopes: bot + applications.commands
+#    （slash command 需要 applications.commands；只勾 bot 的話指令叫不出來）
+#    bot permissions：見下方「邀請機器人」的 6 個權限（啟動後用 /invite 或控制台產生的連結最省事）
+#    用產生的網址把 bot 邀進伺服器
+
+# 2) 填 config.json（沒有就從 config.example.json 複製）
+Copy-Item config.example.json config.json
+#    把 config.json 的 discord.token 填成 bot token；
+#    discord.ownerIds 填你自己的 Discord user id（開啟開發者模式 → 右鍵自己的名字 → 複製使用者 ID）。
+
+# 3) 安裝 DSH 端的 dc-chat preset，然後重啟 DSH
+node scripts/setup-dsh.mjs --discord
+
+# 4) 啟動橋接
+npm run start:discord
+```
+
+想在 Linux 上常駐（DSH 自己也是 pm2 管的話）：
+
+```bash
+pm2 start src/discord-bridge.js --name dc-bridge --time
+pm2 logs dc-bridge
+```
+
+> `DISCORD_TOKEN` 要給**子程序**看到，`.bashrc` 裡必須是 `export DISCORD_TOKEN=...`；
+> 只寫 `DISCORD_TOKEN=...` 的話互動 shell 自己看得到、node 看不到。
+> pm2 會記住啟動當下的環境；改了 token 用 `pm2 restart dc-bridge --update-env`。
+
+看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
+
+> `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-learner` preset（`plugins/dc-agent-presets`）與
+> `mcp-web-search-safe` / `mcp-discord` 兩個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
+> profile 裡你自己加的其它 MCP。
+
+## 設定（`config.json` 的 `discord` 段）
+
+| 欄位 | 說明 |
+| --- | --- |
+| `token` | Bot token。留空時讀環境變數 `DISCORD_TOKEN`。**不要提交進 git** |
+| `agentPreset` | 會話使用的 DSH preset，預設 `dc-chat`。找不到就直接拒絕建會話（見「安全邊界」） |
+| `workspaceTitle` | DSH 介面裡的會話歸組名稱，預設 `Discord 聊天` |
+| `ownerIds` | 管理員的 Discord user id（**字串**陣列）。管理命令（含 slash command）與工具審批只認這些人 |
+| `allow.guilds` | 允許的伺服器 id |
+| `allow.channels` | 允許的頻道 id（討論串用自己的 id，不是母頻道） |
+| `allow.users` | 允許私聊的 user id。**不影響伺服器頻道** |
+| `deny.guilds` / `deny.channels` / `deny.users` | 黑名單，優先於白名單。`deny.channels` 也擋掉這個頻道底下的討論串 |
+| `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
+| `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
+| `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 3000（500~30000） |
+| `batch.maxWaitMs` | 一批從第一則算起最多等多久，預設 15000（1000~120000）；訊息一直進來也不會無限延後 |
+| `batch.maxMessages` | 一批最多幾則，滿了立刻送出，預設 20（1~50） |
+| `messageContentIntent` | 是否申請 Message Content 特權意圖，預設 `true`。設 `false` 時會強制 `requireMentionInGuild: true`（不然收不到內容） |
+| `ackMessage` | 收到訊息後的立即回覆，預設空字串（關閉） |
+| `maxMessageChars` | 單則訊息上限，200 ~ 2000，預設 2000 |
+| `questionTimeoutMs` | 等提問／審批回答的時間，預設 300000（5 分鐘） |
+| `typing` | 送出「正在輸入」提示，預設 `true` |
+| `sendDelayMs` | 連續送出的間隔，預設 300 毫秒 |
+| `sessionDir` | 會話工作目錄，預設 `<repo>/state/discord-agents` |
+| `media.enabled` | 是否把 Discord 圖片附件送進模型，預設 `true` |
+| `media.maxBytes` | 單張下載上限，預設 8MB；超過就不抓 |
+| `media.maxModelBytes` | 送進模型的單張上限，預設 1MB；超過用 ffmpeg 縮圖 |
+| `media.maxLongEdge` | 縮圖後的長邊上限，預設 1280（256 ~ 2048） |
+| `media.maxCount` | 一批訊息最多處理幾張，預設 4（1 ~ 8） |
+| `media.timeoutMs` | 單張縮圖的 ffmpeg 逾時，預設 25000 |
+| `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則） |
+| `context.messages` | 抓幾則，預設 12（0 = 關閉，上限 50） |
+| `context.maxChars` | 上下文區塊的字數上限，預設 3000 |
+| `security.blockSensitive` | 回覆含本機路徑／憑證／已知令牌時整條攔截，預設 `true` |
+| `queue.max` | DSH 連不上時每個會話最多排幾批，預設 50 |
+| `queue.retryMs` | 恢復後的重試間隔，預設 10000 |
+| `emoji.enabled` | 是否注入自訂表情候選、代換 `:名稱:`，預設 `true` |
+| `emoji.dir` | 表情目錄位置，預設 `state/discord-emoji/` |
+| `emoji.maxCandidates` | 每回合最多注入幾個候選，預設 12（3~30） |
+| `emoji.maxChars` | 表情提示的字數上限，預設 600 |
+| `reactions.enabled` | 對「沒叫 bot」的頻道訊息偶爾加 reaction，預設 `false` |
+| `reactions.probability` | 命中後實際加 reaction 的機率，預設 0.15 |
+| `reactions.cooldownMs` | 同一頻道兩次 reaction 的最短間隔，預設 10 分鐘 |
+| `reactions.maxPerHour` | 全域每小時上限，預設 10 |
+| `reactions.minKeywordScore` | 訊息與表情目錄的最低關鍵字分數，預設 2（1 = 更積極） |
+| `memory.enabled` | 跨頻道記憶開關，預設 `false`（要在 `config.json` 明確打開） |
+| `memory.maxMessages` | 每個人最多保留幾則，預設 30（5~100） |
+| `memory.injectMessages` | 每次最多注入幾則，預設 5（1~20） |
+| `memory.maxChars` | 注入區塊的字數上限，預設 800（200~3000） |
+| `memory.ttlDays` | 記憶保留幾天，預設 30（1~365） |
+| `slang.enabled` | 黑話學習開關，預設 `false`（會把頻道文字送去模型） |
+| `slang.extractMinMessages` | 同一頻道累積幾則才抽一次，預設 20（5~200） |
+| `slang.extractCooldownMs` | 兩次抽取的最短間隔，預設 10 分鐘 |
+| `slang.maxPerDay` | 每天最多抽幾次，預設 40 |
+| `slang.injectMax` | 每則 prompt 最多注入幾條已確認詞，預設 8 |
+| `slang.maxChars` | 注入區塊的字數上限，預設 1500 |
+| `slang.maxCandidates` / `slang.maxConfirmed` | 詞庫上限，預設 200 / 500 |
+| `slang.learnerPreset` | 學習會話用的 preset，預設 `dc-learner`（沒有工具、短 prompt） |
+| `slang.timeoutMs` | 學習回合逾時，預設 90000 |
+| `console.enabled` | 是否啟動控制台，預設 `true` |
+| `console.host` | 綁定位址，預設 `127.0.0.1`。填 LAN IP（例如 `192.168.1.1`）或 `0.0.0.0` 才能從別台開 |
+| `console.port` | 控制台埠，預設 `3110` |
+| `console.token` | 控制台 token；留空時自動產生並寫到 `state/discord-console-token` |
+
+> **id 一律寫字串。** Discord 的 snowflake 是 19 位數字，寫成 JSON 數字會在 `JSON.parse` 就先掉精度，
+> 橋接會直接報錯而不是幫你轉。
+
+`dsh` 段沿用 QQ 版的欄位（`baseUrl`、`provider`、`model`、`reasoningEffort`、`authToken`、`allowRemote`）。
+預設是 `opencode-go` / `deepseek-v4.1-flash`（橋接的內建預設）。實際可用的 provider/model 以 DSH 的
+`session/modelCatalog` 為準——不在 `routableProviders` 裡的組合會讓每個回合在送出訊息前就失敗。
+`dsh.authToken` 通常留空，讓橋接用 `~/.dsh/.credentials.yaml` 離線鑄造 Cookie。
+
+聯網搜尋走 `webSearch` 段（`setup-dsh.mjs --discord` 會把 `mcp-web-search-safe` 掛進 profile）：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `webSearch.provider` | `searxng`（自架）/ `deepseek` / `bing` / `auto`（DeepSeek 優先、Bing 後備） |
+| `webSearch.searxngURL` | SearXNG 的 `/search` 端點，例如 `http://192.168.1.1:58918/search` |
+| `webSearch.allowPrivate` | 允許 http / 私有位址（自架實例要開，預設 `false`） |
+| `webSearch.maxResults` | 單次回傳幾條，預設 8 |
+
+SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，否則只會回 HTML（工具會明確報錯）。
+
+## 用法
+
+- **私聊**：直接把 bot 加好友，訊息全部處理（使用者要在 `allow.users` 裡，或白名單全空且
+  `allowAllWhenEmpty: true`）。Discord 要求 bot 與物件至少同一個伺服器才收得到私聊，
+  所以先把 bot 邀進你自己的伺服器。
+- **頻道**：預設要 @bot 或回覆 bot 的訊息。`requireMentionInGuild: false` 是「自由參與」，見下一節。
+- **討論串**：視為獨立會話（用自己的 channel id），不會跟母頻道共用上下文。白名單看討論串自己的 id；
+  黑名單也看母頻道，母頻道在 `deny.channels` 裡時，底下的討論串一律擋掉。
+
+### 批次與自由參與
+
+同一個會話的訊息不是一則一則送進模型，而是**合成一批**：收到訊息後等 `batch.debounceMs`，
+期間的新訊息併進同一批；從第一則算起最多等 `batch.maxWaitMs`，滿 `batch.maxMessages` 則立刻送出。
+一批只開一個 DSH 回合。
+
+批次在 prompt 裡長這樣（頻道）：
+
+```
+【新訊息】（★ = 在叫你：@你或回覆你）
+阿華：今天好熱
+★小明：@大肥魚 你覺得呢 [引用 阿華：今天好熱]
+```
+
+- **`requireMentionInGuild: true`（預設）**：只有 @bot 或回覆 bot 的訊息會進批次，所以每一行都有 ★，
+  模型照 persona 的規則一定會回。
+- **`requireMentionInGuild: false`（自由參與）**：頻道裡允許的訊息全部進批次。沒有 ★ 的是大家在聊，
+  persona 規定預設不說話，只有真的有話想接才呼叫發送工具；有 ★ 的照樣要回。
+  - 只有批次裡有 ★ 時才會亮「正在輸入」，也只有這時才送 `ackMessage`。
+  - 指令（`!reset` 等）、提問的回答、非管理員 `/` 的拒絕訊息只認 ★ 的訊息；沒叫 bot 的 `!xxx` 就是一般聊天。
+  - 沒有 ★ 的那批出錯（模型不可用、DSH 拒收、回合被中止）只記日誌，不在頻道貼錯誤訊息。
+  - 暱稱或內文裡的 `★`、`【管理員】` 會被改寫成 `☆`、`[管理員]`，多行訊息的續行會縮排，群友沒辦法偽造標記。
+  - 跨頻道記憶只記 ★ 的訊息。
+  - 每一批都是一個模型回合，**頻道越熱鬧花費越高**。先在小頻道試，搭配 `batch.debounceMs` 調整。
+- **私聊**：每一則都算在叫 bot，同樣會合批。
+
+### 指令
+
+| 指令 | 誰能用 | 作用 |
+| --- | --- | --- |
+| `/reset`（或 `!reset`、`!new`） | 管理員 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文 |
+| `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類 |
+| `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
+| `/forget`（或 `!forget`） | 所有人 | 刪除自己在**這個伺服器**的跨頻道記憶；不影響目前頻道的對話上下文 |
+| 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
+
+`/reset`、`/status`、`/invite` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
+只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
+
+- **誰看得到選單**：`default_member_permissions: Administrator`，只有伺服器管理員的 `/` 選單會出現這三個指令。
+  Discord 沒辦法把指令選單只開給某一個人，所以用 Administrator 縮小範圍。
+- **誰能執行**：執行時只認 `ownerIds`。伺服器管理員看得到選單，但不在 `ownerIds` 裡就會被拒絕。
+
+> Discord 官方客戶端會把未註冊的 `/xxx` 當成指令輸入，可能不讓你送出。`/reset`、`/status`、`/forget`
+> 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡）。
+> `!` 別名是一般訊息，頻道裡要 @bot 或回覆 bot 才算數（私聊直接打）。
+> DSH 的斜線命令沒有別名（`!model` 會被當成普通文字）。
+
+非管理員對 bot 打 `/` 開頭會被拒絕，不會送進模型。
+
+### 提問與審批
+
+- agent 用 `ask_user_question` 提問 → 問題與選項送到頻道，**這個頻道下一則叫 bot 的訊息就是答案**
+  （頻道要 @bot 或回覆 bot，私聊直接打；回選項文字，或直接打自己的答案）。任何人都能回答提問。
+- agent 請求工具審批 → 只有 `ownerIds` 能回「通過 / 同意 / 允許 / 批准 / yes / y / approve / ok」或
+  「拒絕 / 不同意 / 不允許 / 駁回 / no / n / reject / deny」。其他人在審批掛著時照常聊天，不會被吃掉。
+- 等到 `questionTimeoutMs` 沒人回 → 橋接代替使用者取消，並在頻道說明。
+
+## 邀請機器人
+
+用 `/invite`（管理員）或控制台的「邀請機器人」卡片產生連結。兩邊用的是同一份權限清單：
+
+| 權限 | 用途 |
+| --- | --- |
+| 查看頻道 | 讀取允許的頻道 |
+| 傳送訊息 | 回覆 |
+| 在討論串傳送訊息 | 在討論串裡回覆 |
+| 讀取訊息歷史 | 頻道上下文、reaction 的語料 |
+| 新增反應 | 偶爾加 reaction |
+| 使用外部表情 | 送其他伺服器的自訂表情 |
+
+- scope 是 `bot applications.commands`。**`applications.commands` 不能省**，少了它 slash command 不會註冊。
+- bitfield 是 `274878237760`；不含 Administrator、Manage Guild、Manage Messages、Attach Files。
+- 已經在伺服器裡的 bot 再開一次連結，Discord 會用新權限更新它的身分組，不會重複邀請。
+- 頻道層級的權限覆蓋仍可能擋掉；邀請連結只給伺服器層級。
+
+## 控制台
+
+橋接啟動時會印一行：
+
+```
+控制台：http://127.0.0.1:3110/?token=<自動產生的 token>
+```
+
+打開就能看到：
+
+- **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批
+- **花費**：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
+- **邀請機器人**：產生含目前功能權限的邀請連結，可開啟或複製
+- **會話**：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
+- **黑話詞庫**：候選／已確認／已拒絕、意思與用法、出現次數；可確認、拒絕、編輯、刪除
+- **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` 直接編輯，存檔後**立即生效**並寫回 `config.json`
+- **日誌**：最近 200 行（記憶體 ring buffer，重啟就清空）
+
+不做的事（跟 QQ 版控制台不同）：人格編輯、模式切換、語音。那些在 Discord 版沒有對應概念，
+或需要重啟 DSH 才有意義。
+
+> token 留空時會自動產生，存在 `state/discord-console-token`（重啟沿用）。要換 token 就刪掉那個檔，或直接在
+> `config.json` 填 `console.token`。
+
+**從別台開**：把 `console.host` 改成那台機器的 LAN IP（例如 `192.168.1.1`）或 `0.0.0.0`，重啟橋接。
+
+> ⚠️ 綁非 loopback 等於把管理介面放到網路上，token 是唯一的門。請確認防火牆只開放給你的網段，
+> 而且 token 夠長（自動產生的有 32 字元）。只用本機的話建議維持 `127.0.0.1`，再用
+> `ssh -L 3110:127.0.0.1:3110 192.168.1.1` 轉進去。
+
+## 花費看板
+
+控制台「花費」卡片與 QQ 版共用同一份帳本程式（`src/token-ledger.js`、`src/model-prices.js`），
+資料存在 `state/discord-usage.jsonl`。
+
+- **總計是權威值**：來自 DSH `session/follow` 快照的 `tokenUsage` 投影（整條會話日誌，含橋接
+  啟動前的歷史），加上基線之後的逐條增量。事件重連重送不會翻倍。
+- **逐輪明細**：由 `assistant/message` 的 `usage` 折疊而來；點表格中的會話列可展開。
+- **走勢圖**：24 小時 / 3 天 / 7 天 / 30 天。柱子顏色代表當時是高峰（金色，單價 ×2）或
+  空閒（藍色）；圖上只畫所選時間窗，視窗外的歷史會另外列出金額。
+- **歸屬**：`ch:` / `dm:` 會話按頻道分組；黑話學習會話歸 `internal:黑話學習`。歸屬第一次確定後就記在
+  帳本裡：`/reset` 掉的舊會話、橋接重啟後的學習會話都留在原本的分組。從沒歸屬過的 session
+  （不是橋接建的）各自顯示成 `未归属:<session 前 8 碼>`（帳本與 QQ 版共用，所以是簡體），不會混進頻道。
+- **精度邊界**：投影基線只有累計值、沒有逐時明細，只能整體按快照時刻的峰谷計價；橋接
+  執行期間的逐條取樣是精確的。
+- **空狀態**：還沒有可歸屬的回合時會明講，不會顯示 NaN。
+
+價目表內建 DeepSeek 官方價（元 / 百萬 token；高峰為空閒的 2 倍，中國法定節假日除外）。
+要覆蓋時在 `config.json` 加 `pricing`（格式與 QQ 版相同，見 `docs/guides/TOKEN_USAGE_CONSOLE.md`），
+改完重啟橋接。金額是讀取時才折算，所以改價目表**不需要重算歷史**。
+
+控制台端點（都要 console token）：`GET /api/usage?range=24h|3d|7d|30d`、
+`GET /api/usage/turns?key=ch:<id>`、`POST /api/usage/reset`（清空帳本，不可恢復）。
+
+## 表情目錄
+
+自訂表情不是全部塞進 prompt（3~4 個伺服器、幾百個表情會吃掉幾千 token）。做法是：
+
+1. **建目錄**（一次性／有新表情時重跑）：
+
+   ```bash
+   npm run build:emojis                    # 所有 bot 所在的伺服器
+   node scripts/build-discord-emojis.mjs --guild <id> --force
+   node scripts/build-discord-emojis.mjs --limit 3   # 先試 3 個
+   ```
+
+   腳本會抓每個 emoji 的圖（Discord CDN）、一次 4~5 張丟給視覺模型，讓它寫
+   「外觀、情緒、使用時機、tags」，存到 `state/discord-emoji/<guildId>.json`。
+   只重做新的或換圖的（sha256 比對）。
+
+   平時不用手動跑：橋接會監聽 `emojiCreate` / `emojiUpdate` / `emojiDelete`，
+   15 秒去抖後自動重掃（hash 快取只會索引變動的那幾個）。控制台「表情目錄」卡片也有
+   「更新目錄」按鈕，輸出寫在 `state/emoji-build.log`。
+
+   建置期間卡片會顯示「更新中…（已完成/總數）」與日誌尾巴，子程序的輸出一併進
+   控制台「日誌」與 pm2 log，不用等建置結束才看得到進度。
+
+2. **每回合挑 top N**：當前伺服器 +6 分、名稱命中 +4、中文 bigram 關鍵字命中 +2；
+   先放當前伺服器最多 3 個，再補到 `emoji.maxCandidates` 個，受 `emoji.maxChars` 限制。
+
+3. **模型輸出 `:名稱:`**，橋接在送出前換成 `<:名稱:id>`（動畫用 `<a:…>`）。同名時
+   當前伺服器優先；找不到就保留原文。這樣 prompt 不用塞長長的 ID，也不會抄錯。
+
+跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
+就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
+用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `274878237760`）。
+貼圖（guild sticker）才是綁伺服器的，跨服只能改送圖片。
+
+### 表情反應（reaction）
+
+不用回話也能有反應。只有「沒有 @ bot、也沒有回覆 bot」的**頻道訊息**才會走這條路；
+被叫到的訊息會正常回覆，不會再多加 reaction。
+
+- 條件：訊息與目錄的關鍵字分數 ≥ `reactions.minKeywordScore`、通過 `reactions.probability`、
+  該頻道距上次 reaction ≥ `reactions.cooldownMs`、全域每小時 ≤ `reactions.maxPerHour`。
+- 指令、bot 自己、非允許頻道、私聊都不觸發。
+- 用的是 bridge 端的關鍵字分數，**不額外呼叫模型**，所以不會燒 token。
+- 需要 **Add Reactions** 權限（`1<<6 = 64`）；`/invite` 的連結已包含。
+- 只加 reaction，不回訊息；失敗（多半是權限）只記 log，不會吵使用者。
+
+## 跨頻道記憶（選用）
+
+同一個人在不同頻道找你時，橋接會把他最近對你說過的話帶進 prompt，讓你在另一個頻道也認得他。
+
+- **只記有叫 bot 的訊息**：沒 @ 你、也不是回覆你的訊息不會進記憶。私聊不記，也不會把私聊內容帶到頻道。
+- **只在同一個伺服器內共用**：A 伺服器的記憶不會帶到 B 伺服器。
+- **只記公開頻道**：`@everyone` 看不到的頻道與私密討論串不記；NSFW 來源只會在 NSFW 頻道出現。
+- **不是摘要**：目前只帶最近幾則原文，不做模型摘要，所以不會編造你沒說過的事。
+- **會過期**：預設 30 天；每個人最多留 30 則，每次最多注入 5 則。
+
+設定在 `config.json` 的 `discord.memory`，欄位見上面的設定表。預設 `false`，要開：
+
+```json
+"memory": { "enabled": true }
+```
+
+刪除自己的記憶：
+
+- `/forget`（slash command，結果只有自己看得到）
+- `!forget`（一般訊息，適合 slash command 還沒生效時）
+
+只刪跨頻道記憶；目前這個頻道的 DSH 會話上下文不受影響，要一起清用 `/reset`（管理員）。
+
+> 記憶檔在 `state/discord-memory.json`，`state/` 已被 `.gitignore` 排除。檔案壞掉時會改名為
+> `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。
+
+## 黑話學習（選用）
+
+從允許的公開頻道收集語料 → 學習會話抽候選 → 管理員在控制台確認 → 下一則 prompt 才看得到。
+
+- **只收公開頻道**：`allow.guilds` / `allow.channels` 內、`@everyone` 看得到的頻道；私聊、
+  私密討論串、NSFW 頻道不收。含本機路徑／憑證特徵的訊息也不送進學習會話。
+- **不會自動轉正**：候選只存在 `state/discord-slang.json`，控制台按「確認」才會注入。
+- **每伺服器分開**：A 服的詞不會出現在 B 服。
+- **成本控制**：同一頻道累積 `extractMinMessages` 則、距上次 ≥ `extractCooldownMs`、
+  每天 ≤ `maxPerDay` 才抽一次；失敗也吃冷卻，不會每則訊息重試。
+- **學習會話隔離**：獨立 DSH 會話、不進 `reverse`、不回 Discord；提問／審批自動取消、結束就歸檔。
+- **注入**：只有 `confirmed`，按出現次數排序，格式 `【群裡的黑話】- 詞：意思（用法：…）`。
+- **prompt injection**：頻道訊息會轉義後包進 `<chat>`，prompt 明講只當語料。學習會話用
+  `dc-learner`（短 prompt），並在註冊期把 profile 掛的唯讀 web-search MCP 一起移除；
+  `request/header` 的 `tools` 是 0 個，模型沒有工具可呼叫。
+
+開啟：
+
+```json
+"slang": { "enabled": true }
+```
+
+控制台「黑話詞庫」卡片可以確認／拒絕／編輯／刪除，候選排在最前面。詞庫檔在
+`state/discord-slang.json`（`state/` 已被 gitignore）；壞檔會備份成 `.corrupt-<timestamp>`
+再重建，上限 200 候選 / 500 已確認，超過先丟出現次數少的候選。
+
+> `dc-learner` 由 `node scripts/setup-dsh.mjs --discord` 安裝（跟 `dc-chat` 同一個 bundle）。
+> 如果 DSH 的 preset 清單沒有它，學習會記一行錯誤並跳過，聊天不受影響；重跑安裝再重啟 DSH 即可。
+
+## 誰決定要不要發訊息（MCP）
+
+回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話，就呼叫 `mcp__discord__send_message`：
+
+| 參數 | 說明 |
+| --- | --- |
+| `token` | 這個 DSH 會話的令牌（橋接用它反查要送到哪個頻道） |
+| `content` | 要送出的訊息（Discord Markdown；`:名稱:` 會換成伺服器表情） |
+
+每一則 prompt 的**最後一行**（時間之後）都會帶 `【發送】token=…`，模型照抄即可。
+Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在叫它）就至少送一則；沒有 ★ 就預設不說話。
+**沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
+
+- **模型指定不了頻道**：工具只收 token，橋接用 token 反查會話；被 prompt injection 也只會
+  送回原本那個頻道。令牌綁在 DSH 會話上，`/reset` 或橋接重啟後會換一組。
+- **權限**：橋接只接受「還活著的會話 + 目前在白名單裡」的會話（討論串也看母頻道的黑名單）；
+  令牌過期時工具會回錯誤，並提示模型去抄最新一則【發送】行。已經排隊、還沒送出的訊息，
+  遇到 `/reset` 也會被擋下來，不會送進新的會話。
+- **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
+  模型不會誤以為已送出。
+- **一輪最多 5 則**；同一會話的訊息照順序送，超過 2000 字由橋接切段。
+- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。
+  先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
+
+發送端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與 `POST /send`，
+網址與令牌寫在 `state/discord-agent.json`（橋接重啟就換一組）。MCP server 是
+`src/mcp-discord.js`，由 DSH 以 stdio 拉起。
+
+## 行為細節
+
+- 回覆只在模型呼叫 `mcp__discord__send_message` 時送出；回合文字不會自動貼出。不做逐字串流。
+- **引用**：★ 的訊息回覆了某則訊息時，被引用的作者與原文會以 `[引用 某人：原文]` 接在那一行後面。
+- **頻道上下文**：會用 `channel.messages.fetch` 抓這一批第一則之前的 `context.messages` 則訊息放進
+  prompt。預設模式每一批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶（橋接重啟或
+  `/reset` 後再帶一次）。這需要 bot 的 **Read Message History** 權限；不需要 Message Content 意圖。
+  私聊不加，DSH 會話本身就有上下文。
+- **圖片**：批次裡每則訊息的圖片依序編號，那一行會標 `[圖1]`、`[圖2]`，圖片本體跟著送進模型；
+  整批最多 `media.maxCount` 張。
+- **時間感**：每次 prompt 在【發送】行之前是現在時間（含星期與時區）；這一批第一則超過 15 分鐘時會標
+  「這則是 X 前發的」，模型才不會把排隊很久的舊訊息當成剛發生。
+- **跨頻道記憶**：開啟 `memory.enabled` 後，這一批裡叫 bot 的人（最多 3 位），在別的公開頻道對 bot
+  說過的話會放在「頻道上下文」之後、「現在時間」之前；只帶最近幾則原文，不是摘要。
+- **黑話**：開啟 `slang.enabled` 後，管理員確認過的詞會放在頻道上下文之後；只有候選時不會注入。
+- **DSH 斷線**：連不上時每個會話最多排 `queue.max` 批（記憶體，重啟消失；`/reset` 會清掉），每 `queue.retryMs`
+  探活一次，恢復後自動補投；排隊的批次裡有 ★ 時，第一次排隊會在頻道提示一次。
+- **出站閘門**：模型用工具送出的內容若命中本機路徑／憑證特徵或已知令牌（Discord/DSH/控制台/會話令牌），
+  整條攔截，不會把原文送出去。
+- 超過 `maxMessageChars` 會先在換行邊界切段，沒有換行才硬切（不會切開 emoji）。
+- Discord 顯示 Markdown，所以**不**轉純文字（QQ 版會轉）。
+- 每個會話的批次依序投遞（同一會話同時只跑一個 prompt 佇列），避免上下文順序錯亂。
+- 頻道訊息會帶上發言者名稱（`暱稱：內容`）；管理員訊息加 `【管理員】` 前綴。
+- 送出時 `allowedMentions: { parse: [] }`，模型輸出不會不小心 @everyone。
+- DSH 重啟後事件流會自動重連，並重新 follow `state/discord-sessions.json` 裡的會話。
+
+## 安全邊界
+
+1. **沒有本地工具**：`dc-chat` preset 不掛 bash / 檔案讀寫 / 子代理 / 工作流。`dc-tool-restrict` 會把它們
+   從工具清單隱藏，執行期再用白名單擋一次。
+2. **fail-closed preset**：啟動時向 DSH 要 preset 清單；`agentPreset` 不在清單裡就拒絕建立會話，並在頻道
+   回報安裝提示。**絕不**回退到 DSH 預設 preset（那通常有完整本地工具）。
+3. **白名單**：預設全擋。`deny` 優先於 `allow`；`deny.channels` 也擋母頻道底下的討論串。
+4. **審批只有 `ownerIds` 能回**；管理命令同理（slash command 選單只給伺服器管理員看，執行時再驗 `ownerIds`）。
+5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
+6. **發送端點只在本機**：`mcp-discord` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`
+   （`state/discord-agent.json`，0600）加會話令牌；沒帶令牌的請求一律 401，不會因為漏帶而
+   升級成別的身分。端點只開 `POST /hello` 與 `POST /send`。
+
+## 已知限制
+
+- 圖片附件（png/jpeg/webp/gif）會轉成 base64 送進模型；超過 `media.maxLongEdge` 或
+  `media.maxModelBytes` 時先用 ffmpeg 縮小，縮不動才跳過並告訴模型「附件未提供」。
+  下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
+- **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
+- 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__send_message`（唯一能把訊息送進
+  Discord 的路徑），加上只讀的 `mcp__web-search-safe__web_search` / `web_fetch`。
+- 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
+- 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、跨頻道記憶見上文。
+- DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）也一樣。
+- 頻道上下文需要 bot 的 **Read Message History** 權限；沒有權限時會跳過上下文並記一行 log。
+- 對話映射只存在本機 `state/discord-sessions.json`；刪掉它等於所有頻道都開新會話（DSH 舊會話仍在）。
+
+## 疑難排解
+
+| 症狀 | 先看 |
+| --- | --- |
+| 啟動就報 `Used disallowed intents` | Developer Portal 沒開 Message Content Intent。開了重啟，或把 `messageContentIntent` 設 `false` |
+| 頻道裡 @bot 沒反應 | bot 有 `Read Message History` / `Send Messages` 權限？頻道在 `allow.channels` 或伺服器在 `allow.guilds`？ |
+| 回「找不到 preset」 | 跑 `node scripts/setup-dsh.mjs --discord`，然後**重啟 DSH** |
+| `DSH 鉴权不可用` | `~/.dsh/.credentials.yaml` 讀不到，或 DSH 不在本機。確認 `DSH_HOME` |
+| 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但沒有呼叫發送工具」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
+| 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |
+| 回合直接失敗 `session/model-unavailable` | `dsh.provider` / `dsh.model` 不在 DSH 的 `routableProviders`。用 `session/modelCatalog` 查可用組合，改 `config.json` |

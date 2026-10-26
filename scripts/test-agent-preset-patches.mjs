@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import {
-  BUNDLE_DIR, GUARD_SPECIFIER, PRESETS, REPO_ROOT,
+  BUNDLE_DIR, DISCORD_PRESETS, GUARD_SPECIFIER, PRESETS, REPO_ROOT,
   buildPatches, patchFileFor, presetRowId,
 } from './build-agent-preset-patches.mjs';
 
@@ -117,6 +117,30 @@ console.log('## 4. bundle 声明与安全边界');
     if (typeof guardFn({ name }) !== 'string') deniedAll = false;
   }
   ok(deniedAll, '非法/未知/空工具名一律拒绝（fail-closed）');
+}
+
+console.log('## 5. Discord preset bundle（dc-chat / dc-learner）');
+{
+  const bundleDir = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets');
+  const pkg = JSON.parse(read(path.join(bundleDir, 'package.json')));
+  const patches = pkg.dsh?.bundle?.patch;
+  ok(Array.isArray(patches), 'dc-agent-presets 的 dsh.bundle.patch 是陣列');
+  for (const name of DISCORD_PRESETS) {
+    const declared = `./presets/${name}.patch.yml`;
+    const file = path.join(bundleDir, 'presets', `${name}.patch.yml`);
+    ok(patches?.includes(declared), `dc bundle 列出了 ${declared}`);
+    ok(fs.existsSync(file), `${declared} 存在`);
+    const row = load(file)[0].insert[0];
+    ok(row.id === presetRowId(name) && row.config?.id === name, `${name}: patch 行 id 與 config.id 正確`);
+    const guard = row.config.plugins.find((r) => r.id === 'dc-tool-restrict');
+    ok(guard?.name === 'dc-agent-presets/dc-tool-restrict.mjs', `${name}: dc-tool-restrict 引用正確`);
+    ok(!row.config.plugins.some((r) => typeof r.name === 'string' && (r.name.startsWith('.') || path.isAbsolute(r.name))),
+      `${name}: 沒有相對/絕對路徑子行名`);
+    if (name === 'dc-learner') {
+      ok(!row.config.plugins.some((r) => typeof r.id === 'string' && r.id.startsWith('tool-')),
+        'dc-learner: 沒有任何工具行（抽取器不掛工具）');
+    }
+  }
 }
 
 console.log(failures === 0 ? '\n✅ agent preset patch 契约通过' : `\n❌ ${failures} 项失败`);

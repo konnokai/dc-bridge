@@ -23,12 +23,38 @@ import yaml from 'js-yaml';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..');
 
-/** 由桥接托管的两个 preset（顺序即 patch 层顺序）。 */
+/**
+ * 由橋接托管的 preset（順序即 patch 層順序）。
+ * QQ 版與 Discord 版各自一個 bundle：安裝路徑、守衛實作與白名單都不同，
+ * 綁在同一個 bundle 只會讓兩邊的邊界互相牽扯。
+ */
 export const PRESETS = ['qq-chat', 'qq-chat-v2'];
+export const DISCORD_PRESETS = ['dc-chat', 'dc-learner'];
+export const ALL_PRESETS = [...PRESETS, ...DISCORD_PRESETS];
 
 /** preset 行 id：与 config.id（桥接解析的 preset 名）区分开，方便在 profile patch 里按行定位。 */
 export function presetRowId(name) {
   return `preset-${name}`;
+}
+
+/** preset 所屬的 bundle 名稱。 */
+export function bundleNameFor(name) {
+  return DISCORD_PRESETS.includes(name) ? 'dc-agent-presets' : 'qq-agent-presets';
+}
+
+/** preset 所屬 bundle 的安裝目錄。 */
+export function bundleDirFor(name) {
+  return path.join(REPO_ROOT, 'plugins', bundleNameFor(name));
+}
+
+/** 該 preset 用的守衛行 id。 */
+export function guardIdFor(name) {
+  return DISCORD_PRESETS.includes(name) ? 'dc-tool-restrict' : 'qq-tool-restrict';
+}
+
+/** 守衛行在 patch 裡的引用方式（從 profile 目錄可解析的裸說明符）。 */
+export function guardSpecifierFor(name) {
+  return `${bundleNameFor(name)}/${guardIdFor(name)}.mjs`;
 }
 
 /**
@@ -45,11 +71,12 @@ export const GUARD_SPECIFIER = 'qq-agent-presets/qq-tool-restrict.mjs';
 /** 源里允许出现的相对行名 → 新机制下的等价引用。其它相对名一律报错（避免静默装不上）。 */
 const RELATIVE_ROW_REWRITES = new Map([
   ['./qq-tool-restrict.mjs', GUARD_SPECIFIER],
+  ['./dc-tool-restrict.mjs', 'dc-agent-presets/dc-tool-restrict.mjs'],
 ]);
 
-export const BUNDLE_DIR = path.join(REPO_ROOT, 'plugins', 'qq-agent-presets');
+export const BUNDLE_DIR = bundleDirFor('qq-chat');
 export function patchFileFor(name) {
-  return path.join(BUNDLE_DIR, 'presets', `${name}.patch.yml`);
+  return path.join(bundleDirFor(name), 'presets', `${name}.patch.yml`);
 }
 function sourceDirFor(name) {
   return path.join(REPO_ROOT, 'dsh', 'agent-presets', name);
@@ -103,7 +130,7 @@ function normalizeRows(rows, preset) {
     return next;
   });
   const normalized = walk(rows, 'plugins');
-  for (const required of ['persona', 'qq-tool-restrict']) {
+  for (const required of ['persona', guardIdFor(preset)]) {
     if (!seen.has(required)) throw new Error(`${preset}: 行列表缺少 ${required} 行（安全/人格边界不允许缺失）`);
   }
   return normalized;
@@ -111,6 +138,7 @@ function normalizeRows(rows, preset) {
 
 /** 渲染一个 preset 的 patch 文件内容。 */
 export function renderPatch(name) {
+  const guard = guardSpecifierFor(name);
   const dir = sourceDirFor(name);
   const meta = readYaml(path.join(dir, 'preset.yml'));
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new Error(`${name}: preset.yml 必须是映射`);
@@ -133,7 +161,7 @@ export function renderPatch(name) {
     `# 本文件由 scripts/build-agent-preset-patches.mjs 生成，请勿手工编辑。`,
     `# 源：dsh/agent-presets/${name}/preset.yml + agent.cordis.yml（人格正文与工具面都在那里改）。`,
     `# 作用：把 ${name} 作为一条 @deepseek-ai/dsh-agent-preset 行插入 profile（DSH 0.1.7+ 的 preset 机制）。`,
-    `# 守卫行 qq-tool-restrict 用裸说明符 ${GUARD_SPECIFIER}：子行 name 按 profile 目录解析，`,
+    `# 守卫行 ${guardIdFor(name)} 用裸说明符 ${guard}：子行 name 按 profile 目录解析，`,
     `# 该包以 link: 依赖注册在 profile package.json（node_modules junction 由 setup-dsh.mjs 维护）。`,
     '',
   ].join('\n');
@@ -144,11 +172,13 @@ export function renderPatch(name) {
 /** 生成（或校验）全部 patch 文件。@returns {{file:string,changed:boolean}[]} */
 export function buildPatches({ check = false, log = () => {} } = {}) {
   const results = [];
-  for (const name of PRESETS) {
+  for (const name of ALL_PRESETS) {
     const file = patchFileFor(name);
     const content = renderPatch(name);
     const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
-    const changed = current !== content;
+    // 比較前先把 CRLF 收斂成 LF：Windows 上 core.autocrlf=true 會把 checkout 出來的檔案
+    // 變成 CRLF，但那不是內容漂移，不該讓 --check 失敗、也不該讓 git status 變髒。
+    const changed = (current ?? '').replace(/\r\n/g, '\n') !== content;
     if (changed && !check) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content, 'utf8');

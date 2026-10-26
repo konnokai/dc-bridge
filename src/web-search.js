@@ -45,6 +45,8 @@ const defaultConfig = Object.freeze({
   apiKey: '',
   apiKeyEnv: DEFAULT_API_KEY_ENV,
   baseURL: '',
+  searxngURL: '',
+  allowPrivate: false,
   model: DEFAULT_MODEL,
   maxUses: 5,
   maxTokens: 4096,
@@ -66,13 +68,17 @@ export function loadSearchConfig(root) {
     file = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
   } catch {}
   const raw = file?.webSearch && typeof file.webSearch === 'object' && !Array.isArray(file.webSearch) ? file.webSearch : {};
-  const provider = raw.provider === 'deepseek' || raw.provider === 'bing' ? raw.provider : 'auto';
+  const provider = ['deepseek', 'bing', 'searxng'].includes(raw.provider) ? raw.provider : 'auto';
   return {
     ...defaultConfig,
     provider,
     apiKey: typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '',
     apiKeyEnv: typeof raw.apiKeyEnv === 'string' && raw.apiKeyEnv.trim() ? raw.apiKeyEnv.trim() : DEFAULT_API_KEY_ENV,
     baseURL: typeof raw.baseURL === 'string' ? raw.baseURL.trim().replace(/\/+$/, '') : '',
+    // SearXNG 實例的 /search 端點（例如 http://192.168.98.21:58918/search）。
+    searxngURL: typeof raw.searxngURL === 'string' ? raw.searxngURL.trim() : '',
+    // 只給操作者自己指定的 LAN/私有位址用；不影響 web_fetch 的 SSRF 防護。
+    allowPrivate: raw.allowPrivate === true,
     model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : DEFAULT_MODEL,
     maxUses: num(raw.maxUses, defaultConfig.maxUses, 1, 5),
     maxTokens: num(raw.maxTokens, defaultConfig.maxTokens, 256, 8192),
@@ -407,6 +413,75 @@ export function parseBingHtml(html, maxResults = 8) {
 }
 
 /** Bing 搜索（RSS 优先，HTML 兜底）。 */
+/**
+ * SearXNG：`GET <searxngURL>?q=...&format=json`。
+ *
+ * 私有/LAN 位址必須明寫 `allowPrivate: true`（端點是操作者自己設定的，不是使用者輸入）。
+ * 公開端點走既有的 safeFetch（https + 公網位址 + DNS 全量校驗）。
+ * SearXNG 的實例必須在 settings.yml 的 `search.formats` 裡開啟 `json`，否則會回 HTML。
+ */
+export async function searxngSearch(query, config = defaultConfig) {
+  const base = String(config.searxngURL ?? '').trim();
+  if (!base) throw new Error('未設定 webSearch.searxngURL');
+  let url;
+  try {
+    url = new URL(base);
+  } catch {
+    throw new Error('webSearch.searxngURL 無效');
+  }
+  if (!/^https?:$/.test(url.protocol)) throw new Error('webSearch.searxngURL 只能是 http/https');
+  if (url.username || url.password) throw new Error('webSearch.searxngURL 不能包含凭据');
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+  if (!url.searchParams.has('language')) url.searchParams.set('language', 'zh-TW');
+  if (!url.searchParams.has('safesearch')) url.searchParams.set('safesearch', '1');
+
+  const maxBytes = 2 * 1024 * 1024;
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let text;
+  if (config.allowPrivate === true) {
+    const response = await fetch(url, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`SearXNG HTTP ${response.status}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) throw new Error('SearXNG 回應過大');
+    text = buffer.toString('utf8');
+  } else {
+    if (url.protocol !== 'https:') throw new Error('公開的 SearXNG 端點必須是 https');
+    const res = await safeFetch(url.toString(), maxBytes);
+    if (res.statusCode < 200 || res.statusCode >= 300) throw new Error(`SearXNG HTTP ${res.statusCode}`);
+    text = res.body;
+  }
+
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new Error('SearXNG 回應不是 JSON（实例需在 settings.yml 的 search.formats 加入 json）');
+  }
+
+  const seen = new Set();
+  const results = [];
+  for (const item of doc?.results ?? []) {
+    const link = typeof item?.url === 'string' ? item.url : '';
+    if (!/^https?:\/\//i.test(link) || seen.has(link)) continue;
+    seen.add(link);
+    results.push({
+      title: String(item.title ?? link),
+      url: link,
+      snippet: String(item.content ?? ''),
+    });
+    if (results.length >= (config.maxResults ?? 8)) break;
+  }
+  return results;
+}
+
 export async function bingSearch(query, config = defaultConfig) {
   const maxResults = config.maxResults || defaultConfig.maxResults;
   const rss = new URL('https://cn.bing.com/search');
@@ -439,8 +514,9 @@ export function clearSearchCache() {
 }
 
 /**
- * 统一入口：按配置选择 provider；`auto` 先试 DeepSeek（与 DSH 同源），失败回退 Bing。
- * @returns {{query:string, provider:'deepseek'|'bing', results:object[], fallbackFrom?:string, note?:string}}
+ * 统一入口：按配置选择 provider。
+ * `auto` 先试 DeepSeek（与 DSH 同源），失败回退 Bing；`searxng` 只走自架的 SearXNG。
+ * @returns {{query:string, provider:'deepseek'|'bing'|'searxng', results:object[], fallbackFrom?:string, note?:string}}
  */
 export async function webSearch(query, options = {}) {
   const q = String(query ?? '').trim();
@@ -459,12 +535,18 @@ export async function webSearch(query, options = {}) {
     const results = await bingSearch(q, config);
     return { query: q, provider: 'bing', results };
   };
+  const attemptSearxng = async () => {
+    const results = await searxngSearch(q, config);
+    return { query: q, provider: 'searxng', results };
+  };
 
   let value;
   if (wanted === 'deepseek') {
     value = await attemptDeepSeek();
   } else if (wanted === 'bing') {
     value = await attemptBing();
+  } else if (wanted === 'searxng') {
+    value = await attemptSearxng();
   } else {
     try {
       value = await attemptDeepSeek();

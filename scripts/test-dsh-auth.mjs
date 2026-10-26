@@ -13,9 +13,10 @@
 // 并且陈旧 token 确实不通（防止有人把发现逻辑改回去而不自知）。
 //
 // 用法：node scripts/test-dsh-auth.mjs   （需要 DSH 正在运行）
+import os from 'node:os';
 import {
   NodeApiClient, discoverDshLaunchToken, discoverDshSessionCookie,
-  readBrowserSessionSecret, resolveDshHome, mintBrowserSessionCookie, isLoopbackBase
+  readBrowserSessionSecret, resolveDshHome, mintBrowserSessionCookie, isLoopbackBase, isLocalBase
 } from '../src/dsh-client.js';
 
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
@@ -32,6 +33,18 @@ function check(label, cond, extra = '') {
 // ── 纯函数层（不需要 DSH 在线）────────────────────────────────────────────
 check('isLoopbackBase 认回环', isLoopbackBase('http://127.0.0.1:3080') === true);
 check('isLoopbackBase 拒非回环', isLoopbackBase('http://10.0.0.5:3080') === false);
+
+{
+  // DSH 用 --host <LAN IP> 启动时只监听那个网卡，127.0.0.1 连不上；
+  // 同一台机器走 LAN IP 必须还能铸 Cookie，否则只能被迫开 allowRemote 送 launch token。
+  const localIp = Object.values(os.networkInterfaces()).flat()
+    .find((a) => a && a.family === 'IPv4' && !a.internal)?.address;
+  check('isLocalBase 认本机网卡 IP', localIp ? isLocalBase(`http://${localIp}:2815`) === true : true,
+    localIp ?? '（这台机器没有非内部 IPv4，跳过）');
+  check('isLocalBase 拒非本机 IP', isLocalBase('http://192.0.2.1:2815') === false);
+  check('isLocalBase 不认 DNS 名称', isLocalBase('http://example.invalid:2815') === false);
+  check('isLocalBase 认回环', isLocalBase('http://127.0.0.1:3080') === true);
+}
 
 const secret = readBrowserSessionSecret();
 check('读到 browser-session 签名密钥（32 字节）', secret?.byteLength === 32, secret ? `${secret.byteLength} bytes` : `未读到（${resolveDshHome()}）`);

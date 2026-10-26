@@ -1,15 +1,21 @@
 {
-  "name": "qq-bridge",
+  "name": "dc-bridge",
   "version": "0.2.1-r1",
   "private": true,
   "license": "MIT",
-  "description": "Bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ. Targets the DSH Cookie-auth / slash-RPC / remote.mux protocol generation, so it deliberately names no DSH version here.",
+  "description": "Bridge between Discord and the DeepSeek Harness Web API: Discord messages become DSH agent prompts, agent replies, questions and approvals go back to the same channel. The repository still carries the original QQ (SnowLuma / OneBot) bridge, but the Discord entry point (src/discord-bridge.js) does not use it.",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "start": "node src/bridge.js",
+    "start:discord": "node src/discord-bridge.js",
+    "setup:discord": "node scripts/setup-dsh.mjs --discord",
+    "build:emojis": "node scripts/build-discord-emojis.mjs",
+    "test:discord": "node scripts/test-discord-bridge.mjs",
+    "test:discord-memory": "node scripts/test-discord-memory.mjs",
+    "test:discord-slang": "node scripts/test-discord-slang.mjs",
     "test:audit": "node scripts/test-audit.mjs",
     "test:token": "node scripts/test-token-economy.mjs && node scripts/test-reply-wait.mjs && node scripts/test-qq-model-view.mjs && node scripts/test-qq-preset-contract.mjs",
     "test:tokens": "node scripts/test-token-usage.mjs",
@@ -66,6 +72,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@snowluma/mcp": "^1.14.20",
     "@snowluma/sdk": "^1.14.20",
+    "discord.js": "^14.27.0",
     "js-yaml": "^4.3.2",
     "zod": "^4.4.3"
   }

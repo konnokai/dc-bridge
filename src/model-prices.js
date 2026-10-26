@@ -98,6 +98,12 @@ export const DEFAULT_PRICE_TABLE = {
       label: 'DeepSeek-V4.1-Flash',
       off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
     },
+    // 實際送進 DSH 的模型 id（config 的 dsh.model）；少了這個別名，
+    // 每一筆都會被當成未登記模型。價格與 deepseek-flash 相同。
+    'deepseek-v4.1-flash': {
+      label: 'DeepSeek-V4.1-Flash',
+      off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
+    },
     'deepseek-v4-flash': {
       label: 'DeepSeek-V4.1-Flash（旧模型名）',
       off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }

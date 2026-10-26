@@ -13,6 +13,7 @@
 | --- | --- | --- |
 | [guides/PROJECT_GUIDE.md](guides/PROJECT_GUIDE.md) | **权威项目说明书**（113 KB / 1450+ 行）：架构、内外核划分、数据流、配置全解、安全机制、调试与改进指南，含 2026-08-20 ~ 2026-09-11 的逐轮更新记录 | ✅ **唯一权威版本**（另一份同名精简版已归档到 legacy，见下） |
 | [guides/DSH_SETUP.md](guides/DSH_SETUP.md) | DSH 端安装说明：`qq-chat` / `qq-chat-v2` preset 与三个 MCP server 怎么挂到目标设备的 DSH 上 | ✅ |
+| [guides/DISCORD.md](guides/DISCORD.md) | **Discord 版桥接（聊天模式）**：安装、设定、权限边界、提问/审批、已知限制。入口 `src/discord-bridge.js`，DSH 端用 `setup-dsh.mjs --discord` 装 `dc-chat` preset | ✅ **Discord 版唯一说明** |
 | [guides/VOICE.md](guides/VOICE.md) | 语音发送全解：独立工具（`voice-tool/` 的图形界面与命令行）、桥接 CLI、AI 工具、控制台面板，以及**工具拆出后的配置解析顺序** | ✅ 2026 整理时已更新（工具移到上一级 `voice-tool/`） |
 | [guides/TOKEN_USAGE_CONSOLE.md](guides/TOKEN_USAGE_CONSOLE.md) | 控制台「令牌与花费」看板：数据来源、计价口径（峰谷分时）、API、配置 | ✅ |
 | [guides/CONSOLE-UI-TESTING.md](guides/CONSOLE-UI-TESTING.md) | 控制台离线预览（`npm run preview:console`）与离线浏览器回归（`npm run test:console-ui`）怎么用 | ✅ 2026 整理时自 `scripts/` 移入 |
@@ -26,6 +27,9 @@
 | [design/SOCIAL_MODE_PLAN.md](design/SOCIAL_MODE_PLAN.md) | 一代仿真模式（`reserved`）的头脑风暴定案：规则引擎管「何时说」、LLM 管「说什么」 | ⚠️ 描述的一代状态机已实现；`reserved2` 已是默认模式，设计背景仍有效 |
 | [design/DSH_QQ_TOOLS_PLAN.md](design/DSH_QQ_TOOLS_PLAN.md) | 「一切皆工具」总路线与交接文档：当前能力盘点、安全性设计、分阶段计划 | ⚠️ 阶段计划大部分已完成，作为路线/安全设计参考仍有效 |
 | [design/真人语感策略.md](design/真人语感策略.md) | 拟人化策略：短句碎片、接梗、错别字、话题漂移、选择性沉默、括号用法 | ⚠️ 文首已自注：部分「现状」写于旧版随机分句时期，最新行为以 PROJECT_GUIDE / 代码为准 |
+| [design/PLAN_SLANG.md](design/PLAN_SLANG.md) | Discord 版黑话学习：收集窗口、学习会话、候选审核、注入、控制台 API | ✅ v1 已实作；联网考究未做（本机文件） |
+| [design/PLAN_TOKEN_DASHBOARD.md](design/PLAN_TOKEN_DASHBOARD.md) | Discord 版 token/花费看板计画：接 `token-ledger` / `model-prices`、控制台 API 与 UI | ✅ 已实作（本机文件） |
+| [design/PLAN_EMOJI.md](design/PLAN_EMOJI.md) | Discord 表情/贴图：v1 目录 + 关键字 top-N + `:名称:` 代换；v2 omlx embedding + Qdrant；v3 贴图/reaction | 🚧 v1 与 v3 的 reaction 已实作，v2 与贴图待做（本机文件） |
 
 ## research/ —— 调研记录（结论可直接引用，过程可能过时）
 

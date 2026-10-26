@@ -1,0 +1,15 @@
+{
+  "name": "dc-agent-presets",
+  "version": "0.1.0",
+  "description": "dc-bridge 的 DSH agent preset bundle：把 dc-chat（聊天）與 dc-learner（黑話抽取）作為 @deepseek-ai/dsh-agent-preset 行插入（DSH 0.1.7+ 的 preset 機制），並攜帶 dc-tool-restrict 安全守衛",
+  "type": "module",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./presets/dc-chat.patch.yml",
+        "./presets/dc-learner.patch.yml"
+      ]
+    }
+  }
+}

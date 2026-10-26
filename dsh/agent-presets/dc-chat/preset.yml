@@ -1,0 +1,3 @@
+name: Discord 聊天角色
+description: 橋接到 Discord 頻道／私聊的聊天智能體。性格與說話方式在 agent.cordis.yml 的 persona 段調整。
+order: 11

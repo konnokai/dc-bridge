@@ -12,6 +12,7 @@
 // 本文件不访问网络：CDN 下载用注入的 safeFetchBuffer 桩，搜索只测纯函数与参数校验。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,7 @@ import {
   parseBingRss,
   readDshCredential,
   resolveSearchApiKey,
+  searxngSearch,
   webSearch
 } from '../src/web-search.js';
 
@@ -223,6 +225,97 @@ await test('loadSearchConfig 默认值与越界收敛', async () => {
     fs.writeFileSync(path.join(dir, 'config.json'), '{broken json');
     assert.equal(loadSearchConfig(dir).provider, 'auto', '坏配置不得让搜索崩溃');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+await test('loadSearchConfig 支援 searxng（含私有端點開關）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-search-searx-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
+      webSearch: { provider: 'searxng', searxngURL: ' http://192.168.98.21:58918/search ', allowPrivate: true }
+    }));
+    const cfg = loadSearchConfig(dir);
+    assert.equal(cfg.provider, 'searxng');
+    assert.equal(cfg.searxngURL, 'http://192.168.98.21:58918/search');
+    assert.equal(cfg.allowPrivate, true);
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ webSearch: { provider: 'searxng' } }));
+    assert.equal(loadSearchConfig(dir).allowPrivate, false, 'allowPrivate 預設 false');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+await test('searxngSearch：解析 JSON、去重、丟掉非 http(s) 結果', async () => {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.searchParams.get('format') !== 'json' || url.searchParams.get('q') !== '測試') {
+      res.writeHead(400);
+      res.end('bad request');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [
+      { title: 'A', url: 'https://a.example/', content: 'aa' },
+      { title: 'A dup', url: 'https://a.example/', content: 'dup' },
+      { title: 'FTP', url: 'ftp://b.example/', content: 'bad' },
+      { title: 'C', url: 'https://c.example/', content: 'cc' },
+    ] }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const results = await searxngSearch('測試', {
+      searxngURL: `http://127.0.0.1:${server.address().port}/search`,
+      allowPrivate: true,
+      maxResults: 5,
+      timeoutMs: 5000,
+    });
+    assert.deepEqual(results.map((r) => r.url), ['https://a.example/', 'https://c.example/']);
+    assert.equal(results[0].snippet, 'aa');
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+await test('searxngSearch：回 HTML 時明確要求開 json 格式', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html>not json</html>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const error = await searxngSearch('q', {
+      searxngURL: `http://127.0.0.1:${server.address().port}/search`,
+      allowPrivate: true,
+      timeoutMs: 5000,
+    }).catch((e) => e);
+    assert.match(String(error.message), /formats/);
+  } finally { await new Promise((resolve) => server.close(resolve)); }
+});
+
+await test('searxngSearch：公開端點必須 https（私有要明開 allowPrivate）', async () => {
+  const error = await searxngSearch('q', {
+    searxngURL: 'http://192.0.2.1:1/search',
+    allowPrivate: false,
+    timeoutMs: 1000,
+  }).catch((e) => e);
+  assert.match(String(error.message), /https/);
+});
+
+await test('webSearch：provider=searxng 走 SearXNG', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'S', url: 'https://s.example/', content: 'ss' }] }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const value = await webSearch('測試', {
+      provider: 'searxng',
+      config: {
+        provider: 'searxng',
+        searxngURL: `http://127.0.0.1:${server.address().port}/search`,
+        allowPrivate: true,
+        maxResults: 5,
+        timeoutMs: 5000,
+      },
+    });
+    assert.equal(value.provider, 'searxng');
+    assert.equal(value.results[0].url, 'https://s.example/');
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
 await test('resolveSearchApiKey 的优先级：config > env > DSH 凭据', async () => {

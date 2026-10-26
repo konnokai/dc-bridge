@@ -1,16 +1,18 @@
 #!/usr/bin/env node
-// setup-dsh.mjs — 在目标设备上安装 qq-bridge 的 DSH 端配置
+// setup-dsh.mjs — 在目标设备上安装桥接的 DSH 端配置
 //
-// 功能：
+// 功能（QQ 版，默认）：
 //   1. 安装两套 agent preset：qq-chat、qq-chat-v2
 //      （DSH 0.1.7 机制：作为 qq-agent-presets bundle 的 patch 层插入
 //        @deepseek-ai/dsh-agent-preset 行；~/.dsh/.agent-presets/ 目录已不再被读取）
-//   2. 在 DSH profile 的 cordis.patch.yml 中挂载三个 MCP server：
-//      mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
+//   2. 在 DSH profile 的 cordis.patch.yml 中挂载 MCP server：
+//      QQ：mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
+//      Discord：mcp-web-search-safe / mcp-discord（模型自己决定要不要发讯息）
 //   3. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
 //
 // 用法：
-//   node scripts/setup-dsh.mjs [profile]
+//   node scripts/setup-dsh.mjs [profile]              # QQ 版
+//   node scripts/setup-dsh.mjs --discord [profile]    # Discord 版：只装 dc-chat / dc-learner preset
 //
 // 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
@@ -19,12 +21,15 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
-import { BUNDLE_DIR, PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
+import { ALL_PRESETS, PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-const PROFILE = process.argv[2] || 'web';
+// --discord：只装 Discord 那套（dc-chat / dc-learner preset + dc-agent-presets bundle），
+// 不碰 profile 里既有的 MCP，也不写 QQ 的 state/mode.json。
+const DISCORD_ONLY = process.argv.includes('--discord');
+const PROFILE = process.argv.slice(2).find((arg) => !arg.startsWith('--')) || 'web';
 
 // A profile is a directory name, never a path (same boundary as DSH itself).
 if (PROFILE === '.' || PROFILE === '..' || PROFILE === 'node_modules'
@@ -83,7 +88,7 @@ function backupBeforeOverwrite(file, keep = 5) {
 //          ① 把 qq-agent-presets bundle 注册进 profile（link: 依赖 + bundles + junction）；
 //          ② 从仓库权威源（dsh/agent-presets/<preset>/）重新生成 patch 文件。
 //        旧目录不再写入、也不删除（见 reportLegacyPresetDir）。
-const BUNDLE_NAMES = ['qq-mode-console', 'qq-agent-presets'];
+const BUNDLE_NAMES = DISCORD_ONLY ? ['dc-agent-presets'] : ['qq-mode-console', 'qq-agent-presets'];
 
 /** 从仓库源重新生成 bundle 里的 patch 文件（人格正文/工具面改了就必须重跑）。 */
 function regeneratePresetPatches() {
@@ -91,7 +96,7 @@ function regeneratePresetPatches() {
   for (const { file, changed } of results) {
     log(`preset patch ${changed ? '已生成' : '已是最新'}: ${path.relative(REPO_ROOT, file)}`);
   }
-  for (const name of PRESETS) {
+  for (const name of ALL_PRESETS) {
     const file = patchFileFor(name);
     if (!fs.existsSync(file)) fatal(`preset patch 未生成：${file}`);
   }
@@ -122,19 +127,33 @@ function yamlSingleQuote(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
 }
 
-// 由桥接托管的 MCP 条目 id：脚本对这三个 id 拥有所有权，可安全地按 id 增删。
+/**
+ * 由桥接托管的 MCP 条目 id。
+ *
+ * Discord 装 web-search-safe（只读搜索）与 mcp-discord（发讯息）；SnowLuma 的两个是
+ * QQ 专用，装进 Discord profile 只会多出一堆连不上的工具。
+ */
 const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
+const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord'];
+const managedMcpIds = () => (DISCORD_ONLY ? DISCORD_MCP_IDS : MANAGED_MCP_IDS);
 
 function mcpEntries() {
   const node = process.execPath;
   const servers = {
-    'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
-    'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
+    ...(DISCORD_ONLY ? {
+      // 模型要自己決定什麼時候發訊息：工具打回橋接的 loopback 發送 API。
+      'mcp-discord': { serverName: 'discord', script: path.join(REPO_ROOT, 'src', 'mcp-discord.js') },
+    } : {
+      'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
+      'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
+    }),
     'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
   };
+  const managed = managedMcpIds();
   let out = '# === qq-bridge MCP BEGIN ===\n';
   out += '# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';
   for (const [id, s] of Object.entries(servers)) {
+    if (!managed.includes(id)) continue;
     out += `- insert:\n`;
     out += `    - id: ${id}\n`;
     out += `      name: '@deepseek-ai/dsh-mcp-client'\n`;
@@ -168,6 +187,7 @@ function prepareCordisPatch() {
   catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
   if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
   let removed = 0;
+  const managed = managedMcpIds();
   const kept = [];
   for (const operation of doc) {
     if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
@@ -176,7 +196,7 @@ function prepareCordisPatch() {
     if (!Object.hasOwn(operation, 'insert')) { kept.push(operation); continue; }
     if (!Array.isArray(operation.insert)) fatal(`insert must be an array in ${patchFile}; file unchanged`);
     const entries = operation.insert.filter((entry) => {
-      if (!MANAGED_MCP_IDS.includes(entry?.id)) return true;
+      if (!managed.includes(entry?.id)) return true;
       removed++;
       return false;
     });
@@ -200,7 +220,7 @@ function patchCordis({ patchFile, original, text, removed }) {
   } finally {
     fs.rmSync(temporary, { force: true });
   }
-  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
+  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${removed} 条，写入 ${managedMcpIds().length} 条）`);
 }
 
 /**
@@ -263,7 +283,7 @@ function ensureDirLink(linkPath, targetDir, label) {
  * （qq-agent-presets/qq-tool-restrict.mjs），缺了它 preset 会整条挂载失败。
  */
 function ensureBundle(name) {
-  const repoDir = name === 'qq-agent-presets' ? BUNDLE_DIR : path.join(REPO_ROOT, 'plugins', name);
+  const repoDir = path.join(REPO_ROOT, 'plugins', name);
   const linkDir = ensureDirLink(path.join(DSH_HOME, 'plugins', name), repoDir, `bundle ${name} link`);
   ensureDirLink(path.join(DSH_HOME, 'profiles', PROFILE, 'node_modules', name), linkDir, `bundle ${name} node_modules link`);
   return linkDir;
@@ -352,13 +372,18 @@ function autoInstallProfileBundles() {
 }
 
 // Validate the existing YAML before changing any presets or configuration.
+// Discord-only 模式只挂 web-search-safe（SearXNG/DeepSeek）；SnowLuma 的两个 server 不装。
+// QQ 模式照旧挂三个。两种模式都会重写这段受管理的 MCP 区块。
+if (DISCORD_ONLY) log('--discord：只挂 web-search-safe MCP（不装 SnowLuma）');
 const cordisPatch = prepareCordisPatch();
-regeneratePresetPatches();
 patchCordis(cordisPatch);
+regeneratePresetPatches();
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);
-reportLegacyPresetDir();
-ensureLocalModeFile();
+if (!DISCORD_ONLY) reportLegacyPresetDir();
+if (!DISCORD_ONLY) ensureLocalModeFile();
 autoInstallProfileBundles();
-log('Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
+log(DISCORD_ONLY
+  ? 'Done. Restart DSH (or reload the profile) so the dc-chat / dc-learner presets take effect.'
+  : 'Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
