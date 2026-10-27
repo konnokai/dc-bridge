@@ -54,6 +54,7 @@ import {
   SLANG_STATUS,
   buildExtractionPrompt,
   buildSlangHint,
+  buildStyleHint,
   confirmSlang,
   deleteSlang,
   loadSlangFile,
@@ -61,6 +62,7 @@ import {
   rejectSlang,
   saveSlangFile,
   slangStats,
+  styleLabels,
   updateSlang,
   upsertCandidates,
 } from './core/discord-slang.mjs';
@@ -1479,14 +1481,20 @@ async function main() {
       });
     }
 
-    // 已確認的黑話：只有管理員在控制台按過「確認」的才會進來；同一會話沒變就不重複帶。
+    // 已確認的黑話與頻道風格：只有管理員在控制台按過「確認」的才會進來；同一會話沒變就不重複帶。
     let slangHint = '';
+    let styleHint = '';
     if (cfg.discord.slang.enabled && guild) {
       if (!slangShown.has(key)) slangShown.set(key, new Map());
       slangHint = buildSlangHint(slangStore, {
         guildId: job.guildId,
         max: cfg.discord.slang.injectMax,
         maxChars: cfg.discord.slang.maxChars,
+        shown: slangShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+      });
+      styleHint = buildStyleHint(slangStore, {
+        channelId: job.channel.id,
         shown: slangShown.get(key),
         refreshMs: MEMORY_REFRESH_MS,
       });
@@ -1497,7 +1505,7 @@ async function main() {
     const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
     const time = formatTimeContext({ messageAt: job.entries[0].at });
     return {
-      text: [context, slangHint, memory, batch, time].filter(Boolean).join('\n'),
+      text: [context, slangHint, styleHint, memory, batch, time].filter(Boolean).join('\n'),
       images,
     };
   }
@@ -1658,7 +1666,7 @@ async function main() {
   }
 
   /** 學習會話：建一個獨立 session、只收文字、結束就歸檔（不進 reverse，不會送回 Discord）。 */
-  async function runSlangExtraction(samples) {
+  async function runSlangExtraction(samples, labels) {
     const conf = cfg.discord.slang;
     await requirePreset(conf.learnerPreset);
 
@@ -1716,7 +1724,7 @@ async function main() {
       const accepted = await api.sessions.prompt({
         sessionId,
         mode: 'queue',
-        content: [{ type: 'text', text: buildExtractionPrompt(samples) }],
+        content: [{ type: 'text', text: buildExtractionPrompt(samples, { styleLabels: labels }) }],
       });
       if (!accepted.result?.ok) {
         const error = accepted.result?.error;
@@ -1764,7 +1772,7 @@ async function main() {
         const samples = window.slice(-Math.max(conf.extractMinMessages, 40));
         let items;
         try {
-          items = await runSlangExtraction(samples);
+          items = await runSlangExtraction(samples, styleLabels(slangStore, job.channelId));
         } catch (error) {
           // 失敗也吃冷卻：避免 DSH 出問題時每則訊息都重試、燒 token。
           slangLastRunAt = Date.now();
@@ -1773,7 +1781,7 @@ async function main() {
         }
         slangLastRunAt = Date.now();
 
-        const stats = upsertCandidates(slangStore, { guildId: job.guildId, items, samples });
+        const stats = upsertCandidates(slangStore, { guildId: job.guildId, channelId: job.channelId, items, samples });
         const processed = new Set(samples.map((sample) => sample.id));
         const rest = (slangWindows.get(job.channelId) ?? []).filter((sample) => !processed.has(sample.id));
         if (rest.length > 0) slangWindows.set(job.channelId, rest);
@@ -2251,7 +2259,10 @@ async function main() {
             return {
               entries: [...slangStore.entries].sort((a, b) => rank(a) - rank(b)
                 || (b.seen || 0) - (a.seen || 0)
-                || String(b.updatedAt).localeCompare(String(a.updatedAt))),
+                || String(b.updatedAt).localeCompare(String(a.updatedAt)))
+                .map((entry) => (entry.kind === 'style'
+                  ? { ...entry, channelName: client.channels.cache.get(entry.channelId)?.name ?? entry.channelId }
+                  : entry)),
               stats: slangStats(slangStore),
               learning: {
                 enabled: cfg.discord.slang.enabled,

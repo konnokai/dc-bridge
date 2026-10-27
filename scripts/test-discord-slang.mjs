@@ -8,6 +8,7 @@ import {
   SLANG_STATUS,
   buildExtractionPrompt,
   buildSlangHint,
+  buildStyleHint,
   confirmSlang,
   createSlangStore,
   deleteSlang,
@@ -18,6 +19,7 @@ import {
   rejectSlang,
   saveSlangFile,
   slangStats,
+  styleLabels,
   updateSlang,
   upsertCandidates,
 } from '../src/core/discord-slang.mjs';
@@ -211,6 +213,77 @@ console.log('## 4. 檔案讀寫、壞檔與上限');
     ok(pruned.dropped === 8, '超過上限會裁剪');
     ok(big.entries.filter((entry) => entry.status === SLANG_STATUS.CANDIDATE).length === 3, '候選名額受 maxCandidates 限制');
     ok(big.entries.some((entry) => entry.status === SLANG_STATUS.CONFIRMED), '已確認的優先保留');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log('## 5. 頻道風格');
+{
+  const OTHER_CHANNEL = '444444444444444444';
+  const parsed = parseExtractionJson(JSON.stringify([
+    { term: '難繃', meaning: '受不了' },
+    { kind: 'style', term: '回覆長度', meaning: '大家都一兩句話' },
+    { kind: 'style', term: '語氣', meaning: '很愛互虧' },
+    { kind: 'style', term: '第三條', meaning: '超過上限' },
+  ]), { max: 5 });
+  ok(parsed.filter((item) => item.kind === 'slang').length === 1, '黑話與風格分開解析');
+  ok(parsed.filter((item) => item.kind === 'style').length === 2, '風格一次最多 2 條');
+
+  const store = createSlangStore();
+  const stats = upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: parsed, samples: SAMPLES, now: NOW });
+  ok(stats.added === 3, '黑話和風格都寫進詞庫');
+  const style = store.entries.find((entry) => entry.term === '回覆長度');
+  ok(style.kind === 'style' && style.channelId === CHANNEL && style.status === SLANG_STATUS.CANDIDATE, '風格按頻道存、預設是候選');
+  ok(store.entries.find((entry) => entry.term === '難繃').kind === 'slang', '黑話標成 slang');
+
+  upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: [{ kind: 'style', term: '回覆長度', meaning: '換句話說' }], now: NOW + 1 });
+  ok(store.entries.filter((entry) => entry.term === '回覆長度').length === 1 && style.seen === 2, '同頻道同標籤只累加次數');
+  upsertCandidates(store, { guildId: GUILD, channelId: OTHER_CHANNEL, items: [{ kind: 'style', term: '回覆長度', meaning: '都寫長文' }], now: NOW + 2 });
+  ok(store.entries.filter((entry) => entry.term === '回覆長度').length === 2, '不同頻道分開存');
+
+  ok(buildStyleHint(store, { channelId: CHANNEL }) === '', '風格候選不會注入');
+  confirmSlang(store, style.id, {}, NOW + 3);
+  const hint = buildStyleHint(store, { channelId: CHANNEL });
+  ok(hint.includes('【這個頻道的風格】') && hint.includes('回覆長度：大家都一兩句話'), '確認後注入這個頻道的風格');
+  ok(buildStyleHint(store, { channelId: OTHER_CHANNEL }) === '', '別的頻道看不到');
+  ok(!buildSlangHint(store, { guildId: GUILD }).includes('回覆長度'), '風格不會混進黑話區塊');
+  ok(!hint.includes('難繃'), '黑話不會混進風格區塊');
+
+  for (let i = 0; i < 8; i += 1) {
+    upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: [{ kind: 'style', term: `觀察${i}`, meaning: '這是一段為了測字數上限而寫得比較長一點的描述文字，大概三十個字左右吧' }], now: NOW + 10 + i });
+    confirmSlang(store, store.entries.at(-1).id, {}, NOW + 20 + i);
+  }
+  const full = buildStyleHint(store, { channelId: CHANNEL });
+  ok(full.split('\n').length - 1 <= 5, '每個頻道最多注入 5 條');
+  ok(full.length <= 300, '風格區塊不超過 300 字');
+
+  confirmSlang(store, store.entries.find((entry) => entry.term === '難繃').id, {}, NOW + 30);
+  ok(!buildStyleHint(store, { channelId: CHANNEL }).includes('難繃'), '已確認的黑話也不會混進風格區塊');
+  const shown = new Map();
+  ok(buildStyleHint(store, { channelId: CHANNEL, shown, now: NOW, refreshMs: 60_000 }) !== '', '同一會話第一次會帶');
+  ok(buildStyleHint(store, { channelId: CHANNEL, shown, now: NOW + 1000, refreshMs: 60_000 }) === '', '沒變就不重複帶');
+  ok(buildSlangHint(store, { guildId: GUILD, shown, now: NOW + 1000, refreshMs: 60_000 }) !== '', '風格和黑話各自記錄有沒有帶過');
+
+  const lang = store.entries.find((entry) => entry.term === '語氣');
+  rejectSlang(store, lang.id, NOW + 100);
+  upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: [{ kind: 'style', term: '語氣', meaning: '想復活' }], now: NOW + 101 });
+  ok(lang.status === SLANG_STATUS.REJECTED && lang.meaning === '很愛互虧', '已拒絕的風格不會復活');
+
+  const labels = styleLabels(store, CHANNEL);
+  ok(labels.includes('回覆長度') && labels.includes('語氣') && !labels.includes('難繃'), '列出這個頻道已有的風格標籤（含已拒絕）');
+  const prompt = buildExtractionPrompt(SAMPLES, { styleLabels: labels });
+  ok(prompt.includes('"kind":"style"') && prompt.includes('回覆長度'), 'prompt 要求風格並列出已有標籤');
+  ok(!buildExtractionPrompt(SAMPLES).includes('已經記下的'), '沒有既有標籤時不列');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-style-'));
+  try {
+    const file = path.join(dir, 'discord-slang.json');
+    saveSlangFile(file, store);
+    const loaded = loadSlangFile(file).store.entries.find((entry) => entry.term === '回覆長度' && entry.channelId === CHANNEL);
+    ok(loaded?.kind === 'style' && loaded.status === SLANG_STATUS.CONFIRMED, '存檔後風格欄位讀得回來');
+    fs.writeFileSync(file, JSON.stringify({ version: 1, entries: [{ id: 'old', guildId: GUILD, term: '舊詞', meaning: '沒有 kind' }] }));
+    ok(loadSlangFile(file).store.entries[0].kind === 'slang', '舊檔沒有 kind 的詞條當成黑話');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

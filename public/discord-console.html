@@ -208,7 +208,7 @@
 
   <div class="tab-panel" role="tabpanel" id="tab-slang" aria-labelledby="tabbtn-slang" hidden>
   <section class="card">
-    <h2>黑話詞庫 <span id="slang-count" class="muted"></span></h2>
+    <h2>黑話與頻道風格 <span id="slang-count" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
       <span id="slang-learning" class="muted"></span>
     </div>
@@ -678,7 +678,9 @@
       ? (learning.running ? '學習中…' : `佇列 ${learning.queued ?? 0}｜今天 ${learning.today ?? 0}/${learning.maxPerDay ?? 0}`)
       : '黑話學習已關閉（config.json 的 discord.slang.enabled）';
     $('slang-rows').replaceChildren(...(slangEntries.length ? slangEntries.map((entry) => el('tr', {},
-      el('td', {}, el('strong', {}, entry.term)),
+      el('td', {},
+        entry.kind === 'style' ? el('div', { className: 'muted' }, '頻道風格 #' + (entry.channelName || entry.channelId)) : null,
+        el('strong', {}, entry.term)),
       el('td', {}, entry.meaning),
       el('td', { className: 'muted' }, entry.usage || '—'),
       el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
@@ -872,11 +874,12 @@
         if (!confirm('刪除「' + entry.term + '」？')) return;
         await api('/api/slang/delete', { method: 'POST', body: JSON.stringify({ id: entry.id }) });
       } else if (action === 'edit') {
-        const term = prompt('詞', entry.term);
+        const style = entry.kind === 'style';
+        const term = prompt(style ? '標籤' : '詞', entry.term);
         if (term === null) return;
-        const meaning = prompt('意思', entry.meaning);
+        const meaning = prompt(style ? '描述' : '意思', entry.meaning);
         if (meaning === null) return;
-        const usage = prompt('什麼時候用（可留空）', entry.usage ?? '');
+        const usage = style ? '' : prompt('什麼時候用（可留空）', entry.usage ?? '');
         if (usage === null) return;
         await api('/api/slang/update', {
           method: 'POST',
