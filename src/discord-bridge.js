@@ -26,6 +26,7 @@ import {
   parseApprovalAnswer,
   questionAnswersFor,
   saveSessions,
+  sessionTitleFor,
   shouldHandleGuildMessage,
   splitDiscordMessage,
   stripBotMention,
@@ -552,6 +553,7 @@ async function main() {
         try { await withTimeout(api.workspace.archiveSession({ sessionId }), 15_000, 'archiveSession'); } catch { /* 已經沒了 */ }
         throw new Error('會話建立期間已重置，本次投遞取消');
       }
+      await renameSession(sessionId, key);
       // 新版事件流要顯式 follow，否則收不到 turn 事件（也就永遠不會有回覆）。
       api.events.follow(sessionId);
       sessions[key] = sessionId;
@@ -617,6 +619,25 @@ async function main() {
   }
 
   // ── Discord 送出 ─────────────────────────────────────────────────────────
+
+  /** 在第一批送進去之前設好標題；失敗只記日誌，標題不值得擋住投遞。 */
+  async function renameSession(sessionId, key) {
+    let title = 'Discord 黑話學習';
+    try {
+      if (key) {
+        const channel = await resolveChannel(key).catch(() => null);
+        const user = channel?.recipient;
+        title = sessionTitleFor(key, {
+          channelName: channel?.name,
+          guildName: channel?.guild?.name,
+          userName: user?.globalName || user?.username,
+        });
+      }
+      unwrap(await api.sessions.rename({ sessionId, title }), 'session.rename');
+    } catch (error) {
+      log(`會話改名失敗（${title}）：${error?.message ?? error}`);
+    }
+  }
 
   async function resolveChannel(key) {
     if (channelCache.has(key)) return channelCache.get(key);
@@ -1581,6 +1602,7 @@ async function main() {
     }), 'session.create');
     const sessionId = created.sessionId;
     rememberLearnerSession(sessionId);
+    await renameSession(sessionId);
 
     try {
       // 抽取不需要深度推理；模型不支援 low 時沿用預設，不讓整個學習失敗。

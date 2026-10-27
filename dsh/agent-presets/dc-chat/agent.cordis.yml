@@ -163,6 +163,9 @@
   config:
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
+      # 預設 0.8 在 100 萬窗口要到約 55 萬才壓；群聊疊太長，最前面的人格規則容易被忽略，約 20 萬就壓
+      config:
+        thresholdRatio: 0.2
 
     - id: command-compact
       name: '@deepseek-ai/dsh-command-compact'

@@ -18,6 +18,7 @@ import {
   invitePermissionsBitfield,
   isConversationAllowed,
   isTransientDshError,
+  sessionTitleFor,
   loadSessions,
   normalizeDiscordConfig,
   parseApprovalAnswer,
@@ -168,6 +169,11 @@ console.log('## 3. 會話鍵與 @ 判斷');
   const big = '1234567890123456789';
   ok(conversationKeyFor({ guildId: null, channelId: 'dm', userId: big }) === `dm:${big}`, '19 位 snowflake 不會掉精度');
   throws(() => conversationKeyFor({ guildId: GUILD }), /channelId/, '頻道缺 channelId 要拋錯');
+
+  ok(sessionTitleFor(`ch:${CHANNEL}`, { channelName: '閒聊', guildName: '魚缸' }) === 'Discord #閒聊｜魚缸', '頻道標題 = #頻道名｜伺服器名');
+  ok(sessionTitleFor(`ch:${CHANNEL}`) === `Discord #${CHANNEL}`, '頻道名查不到 → 用 channel id');
+  ok(sessionTitleFor(`dm:${USER}`, { userName: 'Sora' }) === 'Discord 私聊｜Sora', '私聊標題 = 私聊｜使用者名');
+  ok(sessionTitleFor(`dm:${USER}`) === `Discord 私聊｜${USER}`, '使用者名查不到 → 用 user id');
 
   ok(shouldHandleGuildMessage({ mentionedUserIds: [BOT] }, BOT, true), '@bot → 處理');
   ok(shouldHandleGuildMessage({ mentionedUserIds: [], repliedUserId: BOT }, BOT, true), '回覆 bot → 處理');

@@ -209,6 +209,13 @@ export function conversationKeyFor({ guildId, channelId, userId }) {
   return `dm:${String(userId)}`;
 }
 
+/** DSH 會話標題。用固定格式鎖住標題，DSH 才不會拿第一則 prompt 叫模型生摘要；名字查不到就用 ID。 */
+export function sessionTitleFor(key, { guildName, channelName, userName } = {}) {
+  const id = key.slice(key.indexOf(':') + 1);
+  if (key.startsWith('dm:')) return `Discord 私聊｜${userName || id}`;
+  return `Discord #${channelName || id}${guildName ? `｜${guildName}` : ''}`;
+}
+
 /**
  * 這則訊息所在的會話是否被允許。
  *
