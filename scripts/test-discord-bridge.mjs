@@ -336,6 +336,13 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(persona.length > 500, `persona 有實質內容（${persona.length} 字）`);
   ok(/Discord/.test(persona), 'persona 是 Discord 版，不是 QQ 版');
   ok(!/qq_send|mcp__snowluma/.test(persona), 'persona 不引用 QQ 工具');
+  // 「10 條最多 1 條」寫成上限後，實際 473 則訊息一個表情都沒帶；改成描述什麼時候用，不叫它邊講邊數。
+  const emojiRule = persona.split('\n').find((line) => line.includes('表情是補語氣用的')) ?? '';
+  ok(emojiRule && !/\d/.test(emojiRule) && !/emoji：10 條最多 1 條/.test(persona), '訊息表情寫成什麼時候用，不給數字上限');
+  ok(/【範例/.test(persona) && (persona.match(/✗/g) ?? []).length >= 5, 'persona 有 5 組以上正反例');
+  ok((persona.match(/不要裝死/g) ?? []).length <= 1, '「被叫到要回」不在好幾段重複');
+  ok(/管理員.{0,10}直接要求.{0,30}優先/.test(persona) && /不能壓過.{0,4}安全邊界/.test(persona), '管理員要求優先於頻道秩序規則，但不壓過安全邊界');
+  ok(/不要解釋自己為什麼這樣回/.test(persona), '不解釋自己的說話方式');
 
   const guardPath = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-tool-restrict.mjs');
   const mod = await import(pathToFileURL(guardPath).href);
