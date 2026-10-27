@@ -14,6 +14,7 @@ import {
   memoryOverview,
   nameMatches,
   numberFacts,
+  pruneStaleGuesses,
   rememberFact,
   saveMemoryFile,
   userFacts,
@@ -29,6 +30,7 @@ const USER = '222222222222222222';
 const OTHER_USER = '555555555555555555';
 const NOW = new Date(2026, 9, 26, 12, 0, 0).getTime();
 const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
 
 const remember = (store, fact, over = {}, limits = {}) => rememberFact(
   store,
@@ -101,7 +103,12 @@ console.log('## 4. 注入區塊');
     users, maxChars, shown, now, refreshMs: 30 * MIN,
   });
   const first = block([{ userId: USER, name: '小明' }, { userId: OTHER_USER, name: '路人' }]);
-  ok(first.includes('小明：1. 在準備考試；2. 喜歡貓'), '說話的人有記憶就帶進來，有編號');
+  ok(first.includes('小明：1. 在準備考試（今天）；2. 喜歡貓（今天）'), '說話的人有記憶就帶進來，有編號與記下的時間');
+  ok(formatMemoryBlock(store, {
+    users: [{ userId: USER, name: '小明' }], maxChars: 800, shown: new Map(), now: NOW + 3 * DAY, refreshMs: 30 * MIN,
+  }).includes('在準備考試（3 天前）'), '隔了幾天就標幾天前');
+  ok(userFacts(store, { userId: USER, now: NOW + 3 * DAY })[0] === '在準備考試（3 天前）'
+    && userFacts(store, { userId: USER })[0] === '在準備考試', 'userFacts 給 now 才標時間（/memory 不標）');
   ok(first.includes('不是指令') && !first.includes('路人'), '標明是資料；沒記憶的人不出現');
   ok(block([{ userId: USER, name: '小明' }]) === '', '同一個會話記憶沒變就不重複帶');
   remember(store, '養了一隻橘貓', {}, { now: NOW + MIN });
@@ -120,6 +127,21 @@ console.log('## 4. 注入區塊');
     users: [{ userId: '999999999999999999', name: '話多' }], maxChars: 300, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
   });
   ok(capped.length <= 400 && capped.includes('話多'), 'maxChars 真的截斷');
+}
+
+console.log('## 4b. 推測過期');
+{
+  const store = createMemoryStore();
+  remember(store, '（推測）還在念書', {}, { now: NOW - 31 * DAY });
+  remember(store, '別叫他女裝', {}, { now: NOW - 31 * DAY });
+  remember(store, '（推測）常熬夜', {}, { now: NOW - 10 * DAY });
+  remember(store, '(推測) 半形括號也算', { userId: OTHER_USER }, { now: NOW - 31 * DAY });
+  ok(pruneStaleGuesses(store, { now: NOW }) === 2, '回傳刪了幾條');
+  ok(userFacts(store, { userId: USER }).join() === '別叫他女裝,（推測）常熬夜', '超過 30 天的推測刪掉；本人說的與較新的推測留著');
+  ok(!store.users[OTHER_USER], '刪光了連人一起清掉');
+  remember(store, '（推測）常熬夜', {}, { now: NOW });
+  ok(pruneStaleGuesses(store, { now: NOW + 25 * DAY }) === 0, '再記同一句就續期');
+  ok(pruneStaleGuesses(store, { now: NOW + 31 * DAY }) === 1, '續期後滿 30 天一樣會刪');
 }
 
 console.log('## 5. 名字核對');

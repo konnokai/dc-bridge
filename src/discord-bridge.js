@@ -44,6 +44,7 @@ import {
   memoryOverview,
   nameMatches,
   numberFacts,
+  pruneStaleGuesses,
   rememberFact,
   saveMemoryFile,
   userFacts,
@@ -873,7 +874,7 @@ async function main() {
         member?.premiumSince ? `從 ${date(member.premiumSince)} 開始加成這個伺服器` : '',
         mutedUntil && mutedUntil > new Date() ? `禁言中，到 ${shortTime(mutedUntil)}` : '',
       ];
-      const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { userId: target.author?.id }) : [];
+      const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { userId: target.author?.id, now: Date.now() }) : [];
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
       // 頭像抓不到不算失敗：文字照回，少一張圖而已。
       let avatar = null;
@@ -1436,6 +1437,7 @@ async function main() {
         }
       }
       if (!memoryShown.has(key)) memoryShown.set(key, new Map());
+      if (pruneStaleGuesses(memoryStore) > 0) markMemoryDirty();
       memory = formatMemoryBlock(memoryStore, {
         users: [...speakers.values()],
         maxChars: cfg.discord.memory.maxChars,

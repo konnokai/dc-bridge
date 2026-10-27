@@ -38,9 +38,36 @@ export function createMemoryStore() {
 
 const entryOf = (store, userId) => store?.users?.[String(userId ?? '')] ?? null;
 
-/** 某個人目前記著的事（舊→新）。 */
-export function userFacts(store, { userId } = {}) {
-  return (entryOf(store, userId)?.facts ?? []).map((fact) => fact.text);
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const MEMORY_GUESS_TTL_MS = 30 * DAY_MS;
+const GUESS_RE = /^[（(]推測[)）]/;
+
+/** 「在準備考試（3 天前）」：給模型判斷這條可能過期了沒。 */
+function withAge(fact, now) {
+  if (!fact.at) return fact.text;
+  const days = Math.floor((now - fact.at) / DAY_MS);
+  return `${fact.text}（${days < 1 ? '今天' : `${days} 天前`}）`;
+}
+
+/** 某個人目前記著的事（舊→新）。給 now 就在每條後面標記下的時間。 */
+export function userFacts(store, { userId, now } = {}) {
+  return (entryOf(store, userId)?.facts ?? []).map((fact) => (now ? withAge(fact, now) : fact.text));
+}
+
+/**
+ * 刪掉超過 30 天沒再確認的推測（「（推測）」開頭的那條）；本人說的不會過期。
+ * 不改 updatedAt：那是「最後一次記東西」的時間，給淘汰與控制台排序用。
+ * @returns {number} 刪了幾條
+ */
+export function pruneStaleGuesses(store, { now = Date.now(), ttlMs = MEMORY_GUESS_TTL_MS } = {}) {
+  let removed = 0;
+  for (const [userId, entry] of Object.entries(store?.users ?? {})) {
+    const kept = entry.facts.filter((fact) => !(GUESS_RE.test(fact.text) && now - fact.at > ttlMs));
+    removed += entry.facts.length - kept.length;
+    entry.facts = kept;
+    if (kept.length === 0) delete store.users[userId];
+  }
+  return removed;
 }
 
 const nameKey = (value) => defang(String(value ?? '')).replace(/\s+/g, '').toLowerCase();
@@ -151,7 +178,7 @@ export function formatMemoryBlock(store, { users = [], maxChars = 800, shown, no
     if (!entry || entry.facts.length === 0) continue;
     const last = shown.get(userId);
     if (last && last.updatedAt === entry.updatedAt && now - last.at < refreshMs) continue;
-    let line = `${cleanName(name) || entry.name || '某人'}：${numberFacts(entry.facts.map((item) => item.text))}`;
+    let line = `${cleanName(name) || entry.name || '某人'}：${numberFacts(entry.facts.map((item) => withAge(item, now)))}`;
     if (used + line.length > maxChars) {
       if (lines.length > 0) break;
       line = `${line.slice(0, Math.max(20, maxChars - 1))}…`;
