@@ -60,6 +60,7 @@ const DISCORD_TOOLS = [
   'mcp__discord__send_sticker',
   'mcp__discord__add_reaction',
   'mcp__discord__search_emojis',
+  'mcp__discord__search_stickers',
   'mcp__discord__read_history',
   'mcp__discord__user_info',
   'mcp__discord__server_info',

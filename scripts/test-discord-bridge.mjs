@@ -38,12 +38,14 @@ import {
   describeSkipped,
   fetchDiscordImage,
   prepareImageBlock,
+  stickerImages,
+  stickerLabel,
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from '../src/core/discord-context.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
-import { formatEmojiLine, queryTokens, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
+import { formatEmojiLine, matchStickers, queryTokens, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
   AGENT_MAX_CONTENT,
   REACT_PER_TURN_LIMIT,
@@ -73,7 +75,7 @@ const USER = '222222222222222222';
 const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
-const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'read_history', 'user_info', 'server_info', 'remember_user', 'forget_user_fact']
+const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'search_stickers', 'read_history', 'user_info', 'server_info', 'remember_user', 'forget_user_fact']
   .map((name) => `mcp__discord__${name}`);
 
 console.log('## 1. 設定收斂');
@@ -324,7 +326,7 @@ console.log('## 7. dc-chat preset 與守衛');
   for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
-  ok(true, '白名單放行無害模型側工具、只讀搜尋與 9 個 Discord 工具');
+  ok(true, '白名單放行無害模型側工具、只讀搜尋與 10 個 Discord 工具');
   for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
@@ -938,7 +940,7 @@ console.log('## 7e. Discord MCP 發送工具');
     await client.connect(transport);
     const { tools } = await client.listTools();
     ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
-      'MCP 註冊的工具剛好就是白名單裡那 9 個');
+      'MCP 註冊的工具剛好就是白名單裡那 10 個');
     ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '每個工具都要 token');
     const sendTool = tools.find((t) => t.name === 'send_message');
     ok(['token', 'content'].every((name) => sendTool.inputSchema?.required?.includes(name))
@@ -954,6 +956,7 @@ console.log('## 7e. Discord MCP 發送工具');
       send_sticker: ['/send', { sticker: 'wave' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       search_emojis: ['/emojis', { query: '笑' }],
+      search_stickers: ['/stickers', { query: '貓' }],
       read_history: ['/history', { limit: 5 }],
       user_info: ['/user', { message: '#k7f3ab' }],
       server_info: ['/server', {}],
@@ -1020,6 +1023,19 @@ console.log('## 8. 附件（圖片）');
   ok(capped.skipped.some((s) => s.reason.includes('最多')), '超過張數的附件有說明');
 
   ok(describeSkipped([{ name: 'a.png', reason: '太大' }]).includes('a.png（太大）'), '跳過原因會寫給模型看');
+
+  // 貼圖：Map 模擬 discord.js 的 message.stickers（Collection 就是 Map）。format 1=PNG、3=Lottie、4=GIF。
+  const stickers = new Map([
+    ['1', { id: '1', name: '貓貓震驚', format: 1, url: 'https://cdn.discordapp.com/stickers/1.png' }],
+    ['2', { id: '2', name: 'dance', format: 4, url: 'https://media.discordapp.net/stickers/2.gif' }],
+    ['3', { id: '3', name: 'wave', format: 3, url: 'https://cdn.discordapp.com/stickers/3.json' }],
+  ]);
+  ok(stickerLabel(stickers) === '[貼圖：貓貓震驚][貼圖：dance][貼圖：wave]', '貼圖寫成 [貼圖：名稱]');
+  ok(stickerLabel(undefined) === '' && stickerLabel(new Map()) === '', '沒有貼圖回空字串');
+  ok(stickerLabel(new Map([['x', { name: '換\n行' }]])) ==='[貼圖：換 行]', '貼圖名稱不能換行');
+  const stickerMedia = collectImageAttachments(stickerImages(stickers), limits);
+  ok(stickerMedia.accepted.map((a) => a.mime).join() === 'image/png,image/gif', 'png、gif 貼圖當圖片送進模型');
+  ok(stickerMedia.skipped.length === 0, 'Lottie 不送圖也不算跳過（名稱已經在文字裡）');
 
   await assert.rejects(() => fetchDiscordImage('https://evil.example.com/x.png', limits), /非 Discord CDN/);
   await assert.rejects(() => fetchDiscordImage('http://cdn.discordapp.com/x.png', limits), /非 Discord CDN/);
@@ -1296,6 +1312,18 @@ console.log('## 11. 表情目錄與代換');
 
   ok(queryTokens('這也太好笑了 12:30').has('好笑'), '中文 bigram');
   ok(queryTokens('KEKW').has('kekw'), 'ASCII 轉小寫');
+
+  const serverStickers = [
+    { name: '貓貓震驚', description: '嚇一跳', tags: '驚訝' },
+    { name: 'dance', description: '', tags: '開心' },
+  ];
+  const found = matchStickers(serverStickers, '驚訝');
+  ok(found.matched && found.stickers.map((s) => s.name).join() === '貓貓震驚', '貼圖用名稱、說明、tags 比對');
+  ok(matchStickers(serverStickers, 'DANCE').stickers.length === 1, '貼圖比對不分大小寫');
+  const none = matchStickers(serverStickers, '完全無關');
+  ok(!none.matched && none.stickers.length === 2, '沒有符合的就列出全部，不回「沒找到」');
+  ok(matchStickers(serverStickers, '').matched && matchStickers(serverStickers, '').stickers.length === 2, 'query 留空列出全部');
+  ok(matchStickers(Array.from({ length: 50 }, (_, i) => ({ name: `s${i}` })), '').stickers.length === 30, '最多 30 張');
 
   const picked = retrieveEmojis(catalogs, { guildId: '111', text: '這也太好笑了', k: 3, maxChars: 1000 });
   ok(picked[0].guildId === '111', '當前伺服器優先');

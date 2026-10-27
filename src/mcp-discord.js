@@ -100,10 +100,10 @@ tool(
 
 tool(
   'send_sticker',
-  '送一張這個伺服器的貼圖（名稱先用 search_emojis 查）。私聊與別的伺服器的貼圖送不了。',
+  '送一張這個伺服器的貼圖（名稱先用 search_stickers 查）。私聊與別的伺服器的貼圖送不了。',
   {
     token: sessionToken,
-    sticker: z.string().describe('貼圖名稱（search_emojis 回傳的「貼圖」那段）'),
+    sticker: z.string().describe('貼圖名稱（search_stickers 回傳的）'),
     content: z.string().optional().describe('跟貼圖一起送的文字，可省略'),
     reply_to: messageRef('要回覆的那則訊息').optional(),
   },
@@ -125,12 +125,24 @@ tool(
 
 tool(
   'search_emojis',
-  '用關鍵字查這個伺服器能用的自訂表情與貼圖。query 留空就列出這個伺服器的。',
+  '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {
     token: sessionToken,
     query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),
   },
   '/emojis',
+  (result) => String(result.text ?? ''),
+  10_000,
+);
+
+tool(
+  'search_stickers',
+  '用關鍵字查這個伺服器的貼圖（send_sticker 用的名稱）。沒有符合的或 query 留空，就列出全部。',
+  {
+    token: sessionToken,
+    query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),
+  },
+  '/stickers',
   (result) => String(result.text ?? ''),
   10_000,
 );

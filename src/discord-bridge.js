@@ -38,7 +38,7 @@ import {
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { formatEmojiLine, loadCatalogs, queryTokens, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { formatEmojiLine, loadCatalogs, matchStickers, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -74,6 +74,8 @@ import {
   describeSkipped,
   fetchDiscordImage,
   prepareImageBlock,
+  stickerImages,
+  stickerLabel,
 } from './core/discord-media.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
@@ -728,7 +730,7 @@ async function main() {
       const wanted = sticker.trim().toLowerCase();
       const found = (await guildStickers(await resolveChannel(key))).find((s) => s.name.toLowerCase() === wanted);
       // 貼圖只能送所屬伺服器的；私聊與別服的都送不了。
-      if (!found) throw toolError(`這個伺服器沒有貼圖「${sticker}」：先用 search_emojis 查貼圖名稱`, 404);
+      if (!found) throw toolError(`這個伺服器沒有貼圖「${sticker}」：先用 search_stickers 查貼圖名稱`, 404);
       stickerId = found.id;
     }
     await sendLong(key, content, { replyTo: replyMessage?.id ?? null, stickerId });
@@ -774,6 +776,7 @@ async function main() {
   });
 
   const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+  const withStickers = (message) => [message.content, stickerLabel(message.stickers)].filter(Boolean).join(' ');
   const authorName = (message) => message.member?.displayName ?? message.author?.displayName ?? message.author?.username ?? '未知';
   // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
   const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -831,14 +834,24 @@ async function main() {
           maxChars: cfg.discord.emoji.maxChars,
         })
         : [];
-      const tokens = [...queryTokens(query)];
-      const stickers = (await guildStickers(channel))
-        .filter((s) => tokens.length === 0 || tokens.some((t) => `${s.name} ${s.description ?? ''} ${s.tags ?? ''}`.toLowerCase().includes(t)))
-        .slice(0, 10);
-      const lines = [];
-      if (emojis.length) lines.push('表情（在 content 裡寫 :名稱:）：', ...emojis.map((e) => flat(formatEmojiLine(e), 200)));
-      if (stickers.length) lines.push('貼圖（用 send_sticker 的 name）：', ...stickers.map((s) => flat(`${s.name}：${s.description || s.tags || ''}`, 200)));
-      return { text: lines.length ? lines.join('\n') : '沒有找到。換個短一點的關鍵字，或 query 留空列出這個伺服器的。' };
+      return {
+        text: emojis.length
+          ? ['表情（在 content 裡寫 :名稱:）：', ...emojis.map((e) => flat(formatEmojiLine(e), 200))].join('\n')
+          : '沒有找到。換個短一點的關鍵字，或 query 留空列出這個伺服器的。',
+      };
+    },
+    async stickers(body) {
+      const { channel } = await agentSender.resolve(body.token);
+      if (!channel.guild) return { text: '私聊沒有伺服器貼圖。' };
+      const { stickers, matched } = matchStickers(await guildStickers(channel), textArg(body.query, 200));
+      if (!stickers.length) return { text: '這個伺服器沒有貼圖。' };
+      return {
+        text: [
+          matched ? '' : '沒有符合的，下面是這個伺服器的全部貼圖：',
+          '貼圖（send_sticker 的 sticker 填冒號前的名稱）：',
+          ...stickers.map((s) => flat(`${s.name}：${s.description || s.tags || ''}`, 200)),
+        ].filter(Boolean).join('\n'),
+      };
     },
     async history(body) {
       const { key, channel } = await agentSender.resolve(body.token);
@@ -851,9 +864,8 @@ async function main() {
       let used = 0;
       // 從新往舊裝，超過字數上限就停，再倒回舊→新。
       for (const message of fetched.values()) {
-        const text = flat(message.content, 300)
-          || (message.attachments?.size ? '[圖片]' : '')
-          || (message.stickers?.size ? '[貼圖]' : '[沒有文字]');
+        const text = flat(withStickers(message), 300)
+          || (message.attachments?.size ? '[圖片]' : '[沒有文字]');
         const self = message.author?.id === client.user.id ? '（你）' : '';
         const line = `#${messageRefs.register(key, message.id)} ${shortTime(message.createdAt)} ${flat(authorName(message), 40)}${self}：${text}`;
         if (used + line.length > HISTORY_MAX_CHARS) break;
@@ -1467,7 +1479,7 @@ async function main() {
         if (referenced) {
           quote = formatQuote({
             author: referenced.member?.displayName ?? referenced.author?.displayName ?? referenced.author?.username,
-            content: referenced.content,
+            content: withStickers(referenced),
             hasImage: referenced.attachments?.size > 0,
           });
         }
@@ -1509,7 +1521,7 @@ async function main() {
           history.reverse().map((entry) => ({
             ref: messageRefs.register(key, entry.id),
             author: entry.member?.displayName ?? entry.author?.displayName ?? entry.author?.username,
-            content: entry.content,
+            content: withStickers(entry),
             bot: entry.author?.id === client.user.id,
             hasImage: entry.attachments?.size > 0,
           })),
@@ -1886,10 +1898,11 @@ async function main() {
       if (requireMentionInGuild()) return;
     }
 
+    const stickers = stickerLabel(message.stickers);
     const media = cfg.discord.media.enabled
-      ? collectImageAttachments(message.attachments, cfg.discord.media)
+      ? collectImageAttachments([...(message.attachments?.values() ?? []), ...stickerImages(message.stickers)], cfg.discord.media)
       : { accepted: [], skipped: [] };
-    if (!text && media.accepted.length === 0) {
+    if (!text && !stickers && media.accepted.length === 0) {
       if (direct && message.attachments?.size) {
         const reason = media.skipped[0]?.reason ?? '附件沒有送進模型';
         await sendLong(key, `附件沒有送進模型：${reason}`);
@@ -1954,7 +1967,7 @@ async function main() {
       guildId,
       userId: message.author.id,
       author,
-      text,
+      text: [text, stickers].filter(Boolean).join(' '),
       direct,
       isOwner,
       media,

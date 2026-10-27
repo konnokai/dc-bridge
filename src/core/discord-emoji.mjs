@@ -66,6 +66,20 @@ export function queryTokens(text) {
   return tokens;
 }
 
+/**
+ * 挑貼圖：名稱、說明、tags 命中任一關鍵字就算。query 留空、或一張都沒命中，就回全部（matched=false）：
+ * 一個伺服器的貼圖不多，列全部比讓模型以為沒有貼圖好。
+ */
+export function matchStickers(stickers, query, max = 30) {
+  const tokens = [...queryTokens(query)];
+  const hit = stickers.filter((s) => {
+    const hay = `${s.name} ${s.description ?? ''} ${s.tags ?? ''}`.toLowerCase();
+    return tokens.some((t) => hay.includes(t));
+  });
+  const matched = tokens.length === 0 || hit.length > 0;
+  return { stickers: (tokens.length && matched ? hit : stickers).slice(0, max), matched };
+}
+
 function haystackOf(entry) {
   return [
     entry.name,

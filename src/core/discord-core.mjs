@@ -280,6 +280,7 @@ const PROGRESS_LABELS = {
   'mcp__discord__user_info': ['👤 查看群友資料'],
   'mcp__discord__server_info': ['🏠 查看伺服器資訊'],
   'mcp__discord__search_emojis': ['😀 找表情'],
+  'mcp__discord__search_stickers': ['🖼️ 找貼圖'],
   'mcp__discord__remember_user': ['📝 記下群友的事'],
   'mcp__discord__forget_user_fact': ['🗑️ 刪掉一條記憶'],
 };

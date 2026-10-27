@@ -355,7 +355,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 2. **模型自己查**：prompt 不附表情清單。模型想用表情時呼叫 `mcp__discord__search_emojis`
    用關鍵字查：當前伺服器 +6 分、名稱命中 +4、中文 bigram 關鍵字命中 +2，只回命中關鍵字的，
    最多 `emoji.maxCandidates` 個、受 `emoji.maxChars` 限制；query 留空就列當前伺服器的。
-   同一個工具也會列出當前伺服器符合的貼圖（`send_sticker` 用）。
+   貼圖另外用 `mcp__discord__search_stickers` 查：比對名稱、說明、tags，最多 30 張；
+   query 留空或沒有符合的就列出全部（一個伺服器的貼圖不多，列全部比回「沒找到」好）。
+   以前兩種混在同一個工具裡，模型想找貼圖卻常只看到表情。
 
 3. **模型輸出 `:名稱:`**，橋接在送出前換成 `<:名稱:id>`（動畫用 `<a:…>`）。同名時
    當前伺服器優先；找不到就保留原文。這樣 prompt 不用塞長長的 ID，也不會抄錯。
@@ -483,7 +485,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖
 - `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
-- `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情與貼圖（見「表情目錄」）
+- `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
+- `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
 - `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字
 - `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、全域名稱、使用者名稱、身分組（含最高身分組顏色）、
   加入時間、帳號建立時間、加成起始日、禁言到期時間，以及記憶；另外附上頭像圖片（有伺服器專屬頭像就用那張，128px，
@@ -553,6 +556,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   私聊不加，DSH 會話本身就有上下文。
 - **圖片**：批次裡每則訊息的圖片依序編號，那一行會標 `[圖1]`、`[圖2]`，圖片本體跟著送進模型；
   整批最多 `media.maxCount` 張。
+- **貼圖**：群友送的貼圖寫成 `[貼圖：名稱]`；png/apng/gif 貼圖的圖也當成圖片送進模型（跟附件一起算 `[圖N]`、
+  一起受 `media.maxCount` 限制）。Lottie 貼圖是向量動畫，模型看不了，只給名稱。
+  頻道上下文、引用、`read_history` 裡的貼圖也寫成 `[貼圖：名稱]`（只有名稱，不送圖）。
 - **時間感**：每次 prompt 在【發送】行之前是現在時間（含星期與時區）；這一批第一則超過 15 分鐘時會標
   「這則是 X 前發的」，模型才不會把排隊很久的舊訊息當成剛發生。
 - **群友記憶**：開啟 `memory.enabled` 後，這一批說話的人（最多 5 位）被記下的事，會放在黑話與頻道風格之後、
@@ -606,9 +612,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
 - **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、9 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、10 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去），加上只讀的
-  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 9 個 Discord 工具全部拿掉。
+  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 10 個 Discord 工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。
