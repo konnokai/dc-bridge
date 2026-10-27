@@ -8,7 +8,7 @@ import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
-import { PermissionFlagsBits } from 'discord.js';
+import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
 import {
   COMPACT_NOTICE,
   DISCORD_MAX_CHARS,
@@ -16,12 +16,15 @@ import {
   INVITE_SCOPES,
   adminLinks,
   buildInviteUrl,
+  canResetConversation,
   conversationKeyFor,
   describeToolCall,
   formatProgress,
   invitePermissionsBitfield,
   isConversationAllowed,
   isTransientDshError,
+  matchesTerms,
+  searchTerms,
   sessionTitleFor,
   shouldAutoCompact,
   withDeniedUser,
@@ -51,6 +54,8 @@ import {
   AGENT_MAX_CONTENT,
   REACT_PER_TURN_LIMIT,
   SEND_PER_TURN_LIMIT,
+  DELETE_PER_TURN_LIMIT,
+  SEARCH_PER_TURN_LIMIT,
   createAgentSender,
   createMessageRefs,
   messageRefOf,
@@ -76,8 +81,12 @@ const USER = '222222222222222222';
 const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
-const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'search_stickers', 'read_history', 'user_info', 'server_info', 'remember_user', 'forget_user_fact']
-  .map((name) => `mcp__discord__${name}`);
+const DISCORD_TOOL_NAMES = [
+  'send_message', 'send_sticker', 'add_reaction', 'edit_message', 'delete_message', 'create_poll',
+  'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
+  'user_info', 'server_info', 'remember_user', 'forget_user_fact',
+].map((name) => `mcp__discord__${name}`);
+const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|edit_message|delete_message|create_poll/;
 
 console.log('## 1. 設定收斂');
 {
@@ -100,16 +109,27 @@ console.log('## 1. 設定收斂');
     ok(!shouldAutoCompact({ ...at, tokens: undefined, lastAt: 0 }), '還沒有 usage → 不壓');
   }
   {
+    const perms = (...flags) => new PermissionsBitField(flags);
+    ok(canResetConversation({ isOwner: true, guildId: null, permissions: null }), '/reset：bot 擁有者在私聊也能用');
+    ok(canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.ManageGuild) }), '/reset：有「管理伺服器」權限的人能用');
+    ok(canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.Administrator) }), '/reset：Administrator 也算');
+    ok(!canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels) }),
+      '/reset：只有管理訊息、管理頻道不算');
+    ok(!canResetConversation({ isOwner: false, guildId: GUILD, permissions: null }), '/reset：拿不到權限就不給');
+    ok(!canResetConversation({ isOwner: false, guildId: null, permissions: perms(PermissionFlagsBits.Administrator) }), '/reset：私聊只有擁有者能用');
+  }
+  {
     const call = (name, args) => describeToolCall(name, JSON.stringify(args));
     ok(call('mcp__web-search-safe__web_search', { query: 'Weiss Schwarz 星塔旅人 デッキ' }) === '🔍 搜尋：Weiss Schwarz 星塔旅人 デッキ', '搜尋顯示關鍵字');
     ok(call('mcp__web-search-safe__web_fetch', { url: 'https://www.ws-cardlist.com/?p=26311' }) === '🌐 讀取網頁：www.ws-cardlist.com', '讀網頁只顯示網域');
     ok(describeToolCall('mcp__web-search-safe__web_fetch', '{壞掉') === '🌐 讀取網頁', '參數壞掉就不帶細節');
     ok(call('mcp__web-search-safe__web_search', { query: '換\n行 @everyone `x`' }) === '🔍 搜尋：換 行 @everyone x', '關鍵字壓成一行、去掉反引號');
     ok(call('mcp__web-search-safe__web_search', { query: '長'.repeat(200) }).length <= 90, '關鍵字太長會截斷');
-    for (const name of ['send_message', 'send_sticker', 'add_reaction']) {
-      ok(describeToolCall(`mcp__discord__${name}`, '{}') === null, `${name} 不列進度（本身就看得到）`);
+    for (const name of DISCORD_TOOL_NAMES.filter((n) => VISIBLE_TOOLS.test(n))) {
+      ok(describeToolCall(name, '{}') === null, `${name} 不列進度（本身就看得到）`);
     }
-    const others = DISCORD_TOOL_NAMES.filter((name) => !/send_message|send_sticker|add_reaction/.test(name));
+    ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
+    const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
     ok(others.every((name) => !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
 
@@ -329,7 +349,7 @@ console.log('## 7. dc-chat preset 與守衛');
   for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
-  ok(true, '白名單放行無害模型側工具、只讀搜尋與 10 個 Discord 工具');
+  ok(true, `白名單放行無害模型側工具、只讀搜尋與 ${DISCORD_TOOL_NAMES.length} 個 Discord 工具`);
   for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
@@ -373,7 +393,7 @@ console.log('## 7b. 邀請連結');
   ok(params.get('client_id') === USER, '帶正確的 client_id');
   ok(params.get('scope') === 'bot applications.commands', 'scope 含 bot 與 applications.commands');
   ok(params.get('permissions') === invitePermissionsBitfield().toString(), 'permissions 與權限清單一致');
-  ok(invitePermissionsBitfield().toString() === '274878237760', '目前功能權限總和固定（274878237760）');
+  ok(invitePermissionsBitfield().toString() === '563224831659072', '目前功能權限總和固定（563224831659072）');
 
   for (const permission of INVITE_PERMISSIONS) {
     ok(BigInt(PermissionFlagsBits[permission.key]) === permission.bit,
@@ -382,6 +402,7 @@ console.log('## 7b. 邀請連結');
   const keys = INVITE_PERMISSIONS.map((permission) => permission.key);
   ok(keys.includes('AddReactions') && keys.includes('UseExternalEmojis'), '包含 reactions 與外部表情');
   ok(keys.includes('SendMessagesInThreads'), '包含討論串傳送訊息');
+  ok(keys.includes('SendPolls'), '包含建立投票（create_poll）');
   ok(!keys.includes('Administrator') && !keys.includes('ManageGuild') && !keys.includes('AttachFiles'),
     '不要求 Administrator / ManageGuild / AttachFiles');
   ok(INVITE_SCOPES.join(' ') === 'bot applications.commands', 'scope 清單固定');
@@ -708,6 +729,102 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   ok(sender.finishTurn('ch:100').sent === 0, '事件流重連時清掉回合計數');
 }
 
+console.log('## 7d2a. 改、收回、投票、搜尋（只動自己送的）');
+{
+  const sessions = { 'ch:100': 'sess-a', 'ch:300': 'sess-c' };
+  const reverse = new Map([['sess-a', 'ch:100'], ['sess-c', 'ch:300']]);
+  const refs = createMessageRefs();
+  const edits = [];
+  const deletes = [];
+  const polls = [];
+  let nextId = 9000;
+  let failDelete = false;
+  const sender = createAgentSender({
+    sessions,
+    reverse,
+    refs,
+    resolveChannel: async (key) => ({ id: key.split(':')[1], name: `頻道${key}`, guildId: GUILD }),
+    isAllowed: () => true,
+    secrets: () => ['SECRET-DISCORD-TOKEN'],
+    // 太長的內容切成兩則：兩則都要回編號。
+    deliver: async (key, { content }) => (content.length > 10 ? [String(nextId++), String(nextId++)] : [String(nextId++)]),
+    deliverEdit: async (key, { id, content }) => { edits.push({ key, id, content }); },
+    deliverDelete: async (key, { id }) => {
+      if (failDelete) throw Object.assign(new Error('訊息已經不存在'), { statusCode: 404 });
+      deletes.push({ key, id });
+    },
+    deliverPoll: async (key, poll) => { polls.push({ key, ...poll }); return String(nextId++); },
+  });
+  const tokenA = sender.tokenFor('sess-a');
+  const tokenC = sender.tokenFor('sess-c');
+  const rejects = async (promise, re, label) => {
+    try { await promise; ok(false, `${label}（應該要拒絕）`); }
+    catch (error) { ok(re.test(String(error?.message ?? error)), label); }
+  };
+
+  const sent = await sender.send({ token: tokenA, content: '短' });
+  ok(sent.refs.length === 1 && refs.lookup('ch:100', sent.refs[0]) === '9000', 'send 回傳送出那則的 #編號，查得回 Discord id');
+  const long = await sender.send({ token: tokenA, content: '這一則比十個字還要長很多' });
+  ok(long.refs.length === 2, '切成兩則就回兩個編號');
+
+  await sender.edit({ token: tokenA, message: `#${sent.refs[0]}`, content: '改過的' });
+  ok(edits.at(-1)?.id === '9000' && edits.at(-1)?.content === '改過的', '可以改自己用工具送出的訊息');
+  const stranger = refs.register('ch:100', '5555');
+  await rejects(sender.edit({ token: tokenA, message: `#${stranger}`, content: 'x' }), /只能改/, '別人或橋接自己發的訊息不能改');
+  await rejects(sender.remove({ token: tokenA, message: `#${stranger}` }), /只能收回/, '別人或橋接自己發的訊息不能收回');
+  await rejects(sender.edit({ token: tokenA, message: '#nope99', content: 'x' }), /找不到/, '不認得的編號回找不到');
+  await rejects(sender.edit({ token: tokenA, message: `#${sent.refs[0]}`, content: '  ' }), /空的/, '不能改成空的');
+  await rejects(sender.edit({ token: tokenA, message: `#${sent.refs[0]}`, content: '偷 SECRET-DISCORD-TOKEN' }), /敏感資訊/, '改的內容一樣過敏感資訊閘門');
+  // 另一個頻道的令牌拿不到這個頻道的編號表。
+  await rejects(sender.edit({ token: tokenC, message: `#${sent.refs[0]}`, content: 'x' }), /找不到/, '別的頻道的令牌改不了這個頻道的訊息');
+
+  sender.startTurn('ch:100');
+  const mine = await Promise.all(Array.from({ length: 3 }, (_, i) => sender.send({ token: tokenA, content: `${i}` })));
+  const removeBurst = await Promise.allSettled(mine.map((r) => sender.remove({ token: tokenA, message: r.refs[0] })));
+  ok(removeBurst.filter((r) => r.status === 'fulfilled').length === DELETE_PER_TURN_LIMIT, `一輪最多收回 ${DELETE_PER_TURN_LIMIT} 則`);
+  await rejects(sender.edit({ token: tokenA, message: deletes[0] ? `#${refs.register('ch:100', deletes[0].id)}` : '#x', content: 'x' }),
+    /只能改/, '收回之後就不能再改');
+  const removedTurn = sender.finishTurn('ch:100');
+  ok(removedTurn.removed === DELETE_PER_TURN_LIMIT && removedTurn.sent === 3, '回合結束回傳收回幾則（只收回不算沒回應）');
+
+  sender.startTurn('ch:100');
+  const goneRef = refs.register('ch:100', 'gone');
+  await rejects(sender.remove({ token: tokenA, message: `#${goneRef}` }), /只能收回/, '沒送過的 id 就算存在也不能收回');
+  const failing = await sender.send({ token: tokenA, content: 'f' });
+  failDelete = true;
+  await rejects(sender.remove({ token: tokenA, message: failing.refs[0] }), /不存在/, '收回失敗回錯誤');
+  failDelete = false;
+  await sender.remove({ token: tokenA, message: failing.refs[0] });
+  ok(deletes.at(-1)?.id === refs.lookup('ch:100', failing.refs[0]), '失敗的那次不佔名額，可以再收一次');
+
+  sender.startTurn('ch:100');
+  const poll = await sender.poll({ token: tokenA, question: ' 晚餐吃什麼 ', answers: ['拉麵', ' 拉麵 ', '', '咖哩'], hours: 999, multi: 'yes' });
+  ok(polls.at(-1)?.question === '晚餐吃什麼' && polls.at(-1)?.answers.join() === '拉麵,咖哩', '投票：題目去空白、選項去重複與空的');
+  ok(polls.at(-1)?.hours === 168 && polls.at(-1)?.multi === true, '投票：時間上限 168 小時，multi 轉成布林');
+  ok(poll.refs.length === 1, '投票回傳 #編號');
+  await sender.edit({ token: tokenA, message: poll.refs[0], content: '改投票' }).then(
+    () => ok(true, '投票也是自己送的（Discord 會拒絕改投票，這由 deliverEdit 回錯誤）'),
+    () => ok(false, '投票是自己送的訊息'),
+  );
+  await rejects(sender.poll({ token: tokenA, question: '只有一個', answers: ['A', 'A'] }), /2~10/, '去重複後少於 2 個選項就拒絕');
+  await rejects(sender.poll({ token: tokenA, question: '', answers: ['A', 'B'] }), /題目/, '沒有題目就拒絕');
+  await rejects(sender.poll({ token: tokenA, question: 'q'.repeat(301), answers: ['A', 'B'] }), /300/, '題目超過 300 字拒絕');
+  await rejects(sender.poll({ token: tokenA, question: 'q', answers: ['A', 'b'.repeat(56)] }), /55/, '選項超過 55 字拒絕');
+  await rejects(sender.poll({ token: tokenA, question: 'q', answers: Array.from({ length: 11 }, (_, i) => `${i}`) }), /2~10/, '超過 10 個選項拒絕');
+  await rejects(sender.poll({ token: tokenA, question: 'q', answers: ['A', 'SECRET-DISCORD-TOKEN'] }), /敏感資訊/, '投票選項也過敏感資訊閘門');
+  const pollTurn = sender.finishTurn('ch:100');
+  ok(pollTurn.sent === 2, '投票與修改都佔「一輪 5 則」的名額');
+
+  sender.startTurn('ch:100');
+  const scanKey = async ({ key }) => key;
+  await rejects(sender.search(tokenA, async () => { throw new Error('query 和 from 至少要給一個'); }), /至少/, '搜尋參數錯回錯誤');
+  const searches = await Promise.allSettled(Array.from({ length: SEARCH_PER_TURN_LIMIT + 1 }, () => sender.search(tokenA, scanKey)));
+  ok(searches.filter((r) => r.status === 'fulfilled').length === SEARCH_PER_TURN_LIMIT, `一輪最多搜尋 ${SEARCH_PER_TURN_LIMIT} 次（參數錯的那次不佔名額）`);
+  ok(searches.find((r) => r.status === 'fulfilled')?.value === 'ch:100', '搜尋拿到令牌自己的頻道');
+  sender.startTurn('ch:100');
+  ok(await sender.search(tokenA, scanKey) === 'ch:100', '新的一輪搜尋次數歸零');
+}
+
 console.log('## 7d2b. 訊息編號（#ref）');
 {
   const refs = createMessageRefs({ perKey: 3 });
@@ -917,6 +1034,8 @@ console.log('## 7e. Discord MCP 發送工具');
         channel: '測試頻道',
         text: `來自 ${req.url}`,
         ...(req.url === '/user' ? { avatar: { data: 'iVBORw0KGgo=', mimeType: 'image/png' } } : {}),
+        ...(req.url === '/view' ? { images: [{ data: 'AAAA', mimeType: 'image/png' }, { data: 'BBBB', mimeType: 'image/jpeg' }] } : {}),
+        ...(['/send', '/poll'].includes(req.url) ? { refs: ['k7f3ab'] } : {}),
       }));
     });
   });
@@ -943,7 +1062,7 @@ console.log('## 7e. Discord MCP 發送工具');
     await client.connect(transport);
     const { tools } = await client.listTools();
     ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
-      'MCP 註冊的工具剛好就是白名單裡那 10 個');
+      `MCP 註冊的工具剛好就是白名單裡那 ${DISCORD_TOOL_NAMES.length} 個`);
     ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '每個工具都要 token');
     const sendTool = tools.find((t) => t.name === 'send_message');
     ok(['token', 'content'].every((name) => sendTool.inputSchema?.required?.includes(name))
@@ -963,6 +1082,11 @@ console.log('## 7e. Discord MCP 發送工具');
       read_history: ['/history', { limit: 5 }],
       user_info: ['/user', { message: '#k7f3ab' }],
       server_info: ['/server', {}],
+      edit_message: ['/edit', { message: '#k7f3ab', content: '改' }],
+      delete_message: ['/delete', { message: '#k7f3ab' }],
+      create_poll: ['/poll', { question: '吃什麼', answers: ['拉麵', '咖哩'] }],
+      search_history: ['/search', { query: '期末考' }],
+      view_message: ['/view', { message: '#k7f3ab' }],
       remember_user: ['/remember', { message: '#k7f3ab', name: '小明', fact: '在準備考試' }],
       forget_user_fact: ['/forget-fact', { message: '#k7f3ab', number: 1 }],
     };
@@ -977,6 +1101,16 @@ console.log('## 7e. Discord MCP 發送工具');
     ok(String(userResult.content?.[0]?.text) === '來自 /user'
       && userResult.content?.[1]?.type === 'image' && userResult.content[1].mimeType === 'image/png'
       && userResult.content[1].data === 'iVBORw0KGgo=', 'user_info 把橋接回的頭像當成 MCP 圖片交給模型');
+    const viewed = await client.callTool({ name: 'view_message', arguments: { token: 't', message: '#k7f3ab' } });
+    ok(String(viewed.content?.[0]?.text) === '來自 /view' && viewed.content.length === 3
+      && viewed.content[1].type === 'image' && viewed.content[2].mimeType === 'image/jpeg', 'view_message 把橋接回的圖片全部交給模型');
+    const sentResult = await client.callTool({ name: 'send_message', arguments: { token: 't', content: '嗨' } });
+    ok(String(sentResult.content?.[0]?.text).includes('#k7f3ab'), 'send_message 的結果帶送出那則的 #編號');
+    const pollResult = await client.callTool({ name: 'create_poll', arguments: { token: 't', question: 'q', answers: ['a', 'b'] } });
+    ok(String(pollResult.content?.[0]?.text).includes('#k7f3ab'), 'create_poll 的結果帶投票那則的 #編號');
+    const pollTool = tools.find((t) => t.name === 'create_poll');
+    ok(['question', 'answers'].every((name) => pollTool.inputSchema?.required?.includes(name))
+      && !pollTool.inputSchema?.required?.includes('hours'), 'create_poll：question / answers 必填，hours 可省略');
     const remembered = await client.callTool({ name: 'remember_user', arguments: { token: 't', message: '#k7f3ab', name: '小明', fact: '喜歡貓' } });
     ok(String(remembered.content?.[0]?.text) === '來自 /remember', '記憶工具把橋接回的最新清單交給模型');
     const rememberTool = tools.find((t) => t.name === 'remember_user');
@@ -1245,15 +1379,27 @@ console.log('## 10. 引用、上下文、出站閘門');
 
   let fetches = 0;
   const cachedRef = { id: 'r1', content: 'API' };
-  const replyTo = (id) => ({
-    reference: { messageId: id },
-    channel: { messages: { cache: new Map([['r1', cachedRef]]) } },
-    fetchReference: async () => { fetches += 1; return { id, content: 'fetched' }; },
+  const replyTo = (id, reference = {}) => ({
+    channelId: 'c1',
+    reference: { messageId: id, channelId: 'c1', type: 0, ...reference },
+    channel: {
+      messages: {
+        cache: new Map([['r1', cachedRef]]),
+        fetch: async (wanted) => { fetches += 1; return { id: wanted, content: 'fetched' }; },
+      },
+    },
   });
   ok(await referencedMessage(replyTo('r1'), false) === cachedRef, '沒叫 bot 的回覆：快取有就帶引用');
   ok(await referencedMessage(replyTo('r2'), false) === null && fetches === 0, '沒叫 bot 的回覆：快取沒有就不抓 API');
   ok((await referencedMessage(replyTo('r2'), true))?.content === 'fetched' && fetches === 1, '★ 的回覆：快取沒有才抓 API');
   ok(await referencedMessage({ channel: {} }, true) === null, '不是回覆 → null');
+  ok(await referencedMessage(replyTo('r1', { channelId: 'other' }), true) === null && fetches === 1,
+    '引用別的頻道（可能不在白名單）→ 不帶，也不抓');
+  ok(await referencedMessage(replyTo('r1', { type: 1 }), true) === null && fetches === 1, '轉發不是回覆 → 不帶');
+  ok(searchTerms('  期末考  ＡＢＣ ').join('|') === '期末考|abc', '搜尋詞：去空白、全形轉半形、轉小寫');
+  ok(matchesTerms('明天ABC期末考', searchTerms('abc 期末考')), '每個詞都出現才算符合（不分大小寫）');
+  ok(!matchesTerms('明天期末考', searchTerms('abc 期末考')), '少一個詞就不符合');
+  ok(!matchesTerms('什麼都有', []), '沒有搜尋詞不算符合');
 
   const ctx = formatRecentContext([
     { author: 'A', content: '第一句' },

@@ -1,7 +1,7 @@
 // Discord 附件（圖片）→ DSH 的 base64 圖像區塊。
 //
 // 兩件事都在這裡把關：
-//   1. 只抓 Discord 的 CDN（`cdn.discordapp.com` / `media.discordapp.net`），
+//   1. 只抓 Discord 自己的主機（DISCORD_IMAGE_HOSTS），
 //      不因為訊息裡有 URL 就替模型去抓任意網址（那是 SSRF）。
 //   2. 太大／解析度太高的圖先在本地縮小再送出；縮不動就明確回報，
 //      不送注定被 DSH 丟掉的位元組。
@@ -11,7 +11,8 @@
 import { normalizeImageForModel, sniffImage } from '../media-normalize.js';
 
 /** 允許抓圖的 host（精確比對，子網域不算）。 */
-export const DISCORD_IMAGE_HOSTS = Object.freeze(['cdn.discordapp.com', 'media.discordapp.net']);
+// images-ext-*：Discord 替連結預覽代抓的外部圖片。原站由 Discord 去抓，橋接只連 Discord 的主機。
+export const DISCORD_IMAGE_HOSTS = Object.freeze(['cdn.discordapp.com', 'media.discordapp.net', 'images-ext-1.discordapp.net', 'images-ext-2.discordapp.net']);
 
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
 const EXT_MIME = new Map([

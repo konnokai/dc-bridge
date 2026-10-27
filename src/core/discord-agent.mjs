@@ -23,6 +23,19 @@ export const SEND_PER_TURN_LIMIT = 5;
 /** reaction 一輪最多 3 個：真人不會一口氣對一串訊息按表情。 */
 export const REACT_PER_TURN_LIMIT = 3;
 
+/** 收回一輪最多 2 則：被 prompt injection 也洗不掉自己一整串發言。 */
+export const DELETE_PER_TURN_LIMIT = 2;
+
+/** search_history 一輪最多 2 次：每次往回掃最多 500 則，連搜會一直打 Discord API。 */
+export const SEARCH_PER_TURN_LIMIT = 2;
+
+/** 每個頻道記住最近幾則「模型自己用工具送出的」訊息；改和收回只認這些。 */
+const OWNED_PER_KEY = 200;
+
+const POLL_QUESTION_MAX = 300;
+const POLL_ANSWER_MAX = 55;
+const POLL_HOURS_MAX = 168;
+
 const statusError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
 // 會話令牌要讓模型照抄：base64url 大小寫混雜，模型會把 W 抄成 V。
@@ -92,8 +105,12 @@ export function createMessageRefs({ perKey = MESSAGE_REFS_PER_KEY } = {}) {
  * @param options.isAllowed       (key, channel) => boolean
  * @param options.secrets         () => 已知令牌清單（會話令牌另外自動加入）
  * @param options.blockSensitive  () => boolean
- * @param options.deliver         async (key, { content, replyTo, sticker }) => void
+ * @param options.refs            createMessageRefs()：送出的訊息登記成 #編號，改／收回時查回 id
+ * @param options.deliver         async (key, { content, replyTo, sticker }) => 送出的 Discord 訊息 id 陣列
  * @param options.deliverReaction async (key, { message, emoji }) => void
+ * @param options.deliverEdit     async (key, { id, content }) => void
+ * @param options.deliverDelete   async (key, { id }) => void
+ * @param options.deliverPoll     async (key, { question, answers, hours, multi }) => 投票訊息的 id
  */
 export function createAgentSender({
   sessions,
@@ -102,16 +119,22 @@ export function createAgentSender({
   isAllowed,
   secrets = () => [],
   blockSensitive = () => true,
+  refs = createMessageRefs(),
   deliver,
   deliverReaction = async () => {},
+  deliverEdit = async () => {},
+  deliverDelete = async () => {},
+  deliverPoll = async () => '',
   limit = SEND_PER_TURN_LIMIT,
   reactLimit = REACT_PER_TURN_LIMIT,
 }) {
   const tokens = new Map(); // sessionId -> 會話令牌（只在記憶體，橋接重啟就換）
   const chains = new Map(); // key -> 串行化（同一輪的多個 tool call 不搶順序）
   const sentCounts = new Map(); // key -> 這一輪已經送出幾則
-  const reactCounts = new Map(); // key -> 這一輪已經按了幾個 reaction
+  const usedCounts = new Map(); // key -> { react, remove, search }：這一輪各用了幾次
   const attempted = new Set(); // key -> 這一輪有沒有試過呼叫發送工具
+  const owned = new Map(); // key -> Set(訊息 id)：模型自己用工具送出的，插入順序就是新舊順序
+  const usedLimits = { react: reactLimit, remove: DELETE_PER_TURN_LIMIT, search: SEARCH_PER_TURN_LIMIT };
 
   function tokenFor(sessionId) {
     let value = tokens.get(sessionId);
@@ -153,17 +176,14 @@ export function createAgentSender({
     return { sessionId, key, kind, channel };
   }
 
-  async function send({ token, content = '', replyTo = '', sticker = '' }) {
-    if (typeof content !== 'string' || content.length > AGENT_MAX_CONTENT) {
-      throw statusError(`content 超過 ${AGENT_MAX_CONTENT} 字`, 400);
-    }
-    if (!content.trim() && !sticker) throw statusError('content 是空的', 400);
-    const { sessionId, key, kind, channel } = await resolve(token);
-
-    // 用存著的令牌比對：模型傳來的可能是大寫版，拿它比對會漏掉內容裡的小寫原文。
-    const hit = blockSensitive() ? findSensitive(content, [...secrets(), tokens.get(sessionId)]) : null;
+  /** 用存著的令牌比對：模型傳來的可能是大寫版，拿它比對會漏掉內容裡的小寫原文。 */
+  function checkSensitive(sessionId, text) {
+    const hit = blockSensitive() ? findSensitive(text, [...secrets(), tokens.get(sessionId)]) : null;
     if (hit) throw statusError(`內容命中敏感資訊閘門（${hit}），已攔截`, 400);
+  }
 
+  /** 會出現在頻道裡的動作（送出、投票、修改）排同一條隊，共用「一輪 5 則」。 */
+  function visible(key, sessionId, action) {
     const previous = chains.get(key) ?? Promise.resolve();
     const next = previous.catch(() => {}).then(async () => {
       // 排隊期間可能被 /reset：已經排隊的訊息不能送進新會話。
@@ -172,50 +192,134 @@ export function createAgentSender({
       if ((sentCounts.get(key) ?? 0) >= limit) {
         throw statusError(`這一輪已經送出 ${limit} 則，不再送出`, 429);
       }
-      await deliver(key, { content, replyTo, sticker });
+      const result = await action();
       sentCounts.set(key, (sentCounts.get(key) ?? 0) + 1);
+      return result;
     });
     chains.set(key, next);
     const cleanup = () => { if (chains.get(key) === next) chains.delete(key); };
     next.then(cleanup, cleanup);
-    await next;
-    return { key, channel: kind === 'dm' ? '私聊' : (channel?.name ?? key) };
+    return next;
+  }
+
+  /** 送出的訊息記成「自己的」並登記 #編號，回傳編號給模型。 */
+  function own(key, ids) {
+    let set = owned.get(key);
+    if (!set) { set = new Set(); owned.set(key, set); }
+    const out = [];
+    for (const id of (Array.isArray(ids) ? ids : [ids]).map(String).filter(Boolean)) {
+      set.add(id);
+      while (set.size > OWNED_PER_KEY) set.delete(set.values().next().value);
+      out.push(refs.register(key, id));
+    }
+    return out;
+  }
+
+  /** #編號 → 自己送出的訊息 id；查不到或不是自己的就拒絕。 */
+  function ownedId(key, message, verb) {
+    const id = refs.lookup(key, message);
+    if (!id) throw statusError(`找不到訊息 ${message}：用你送出後回傳的 #編號`, 404);
+    if (!owned.get(key)?.has(id)) throw statusError(`只能${verb}你自己用工具送出的訊息（送出後回傳的那個 #編號）`, 403);
+    return id;
+  }
+
+  /** 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。 */
+  async function withQuota(key, kind, label, action) {
+    const counts = usedCounts.get(key) ?? { react: 0, remove: 0, search: 0 };
+    usedCounts.set(key, counts);
+    if (counts[kind] >= usedLimits[kind]) throw statusError(`這一輪已經${label} ${usedLimits[kind]} 次，不能再${label}`, 429);
+    counts[kind] += 1;
+    try {
+      return await action();
+    } catch (error) {
+      counts[kind] -= 1;
+      throw error;
+    }
+  }
+
+  const channelName = (kind, channel, key) => (kind === 'dm' ? '私聊' : (channel?.name ?? key));
+
+  async function send({ token, content = '', replyTo = '', sticker = '' }) {
+    if (typeof content !== 'string' || content.length > AGENT_MAX_CONTENT) {
+      throw statusError(`content 超過 ${AGENT_MAX_CONTENT} 字`, 400);
+    }
+    if (!content.trim() && !sticker) throw statusError('content 是空的', 400);
+    const { sessionId, key, kind, channel } = await resolve(token);
+    checkSensitive(sessionId, content);
+    const ids = await visible(key, sessionId, () => deliver(key, { content, replyTo, sticker }));
+    return { key, channel: channelName(kind, channel, key), refs: own(key, ids ?? []) };
+  }
+
+  async function edit({ token, message, content = '' }) {
+    if (typeof content !== 'string' || content.length > AGENT_MAX_CONTENT) {
+      throw statusError(`content 超過 ${AGENT_MAX_CONTENT} 字`, 400);
+    }
+    if (!content.trim()) throw statusError('content 是空的：要收回就用 delete_message', 400);
+    const { sessionId, key } = await resolve(token);
+    const id = ownedId(key, message, '改');
+    checkSensitive(sessionId, content);
+    await visible(key, sessionId, () => deliverEdit(key, { id, content }));
+    return { key };
+  }
+
+  async function remove({ token, message }) {
+    const { key } = await resolve(token);
+    const id = ownedId(key, message, '收回');
+    await withQuota(key, 'remove', '收回', () => deliverDelete(key, { id }));
+    owned.get(key)?.delete(id);
+    return { key };
+  }
+
+  async function poll({ token, question, answers, hours, multi }) {
+    const text = String(question ?? '').trim();
+    if (!text) throw statusError('投票要有題目', 400);
+    if (text.length > POLL_QUESTION_MAX) throw statusError(`題目最多 ${POLL_QUESTION_MAX} 字`, 400);
+    const options = [...new Set((Array.isArray(answers) ? answers : []).map((a) => String(a ?? '').trim()).filter(Boolean))];
+    if (options.some((a) => a.length > POLL_ANSWER_MAX)) throw statusError(`每個選項最多 ${POLL_ANSWER_MAX} 字`, 400);
+    if (options.length < 2 || options.length > 10) throw statusError('選項要 2~10 個（重複的與空的不算）', 400);
+    const duration = Math.min(POLL_HOURS_MAX, Math.max(1, Math.round(Number(hours) || 24)));
+    const { sessionId, key, kind, channel } = await resolve(token);
+    checkSensitive(sessionId, [text, ...options].join('\n'));
+    const id = await visible(key, sessionId, () => deliverPoll(key, { question: text, answers: options, hours: duration, multi: Boolean(multi) }));
+    return { key, channel: channelName(kind, channel, key), refs: own(key, id) };
   }
 
   async function react({ token, message, emoji }) {
     const { key } = await resolve(token);
-    // 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。
-    const used = reactCounts.get(key) ?? 0;
-    if (used >= reactLimit) throw statusError(`這一輪已經按了 ${reactLimit} 個 reaction，不再按`, 429);
-    reactCounts.set(key, used + 1);
-    try {
-      await deliverReaction(key, { message, emoji });
-    } catch (error) {
-      reactCounts.set(key, (reactCounts.get(key) ?? 1) - 1);
-      throw error;
-    }
+    await withQuota(key, 'react', '按 reaction', () => deliverReaction(key, { message, emoji }));
     return { key };
   }
 
-  const clearKey = (key) => { sentCounts.delete(key); reactCounts.delete(key); attempted.delete(key); };
+  /** search_history 的門：跟唯讀工具一樣過 resolve，整個搜尋佔一次名額；參數錯或 Discord 出錯就退回名額。 */
+  async function search(token, scan) {
+    const resolved = await resolve(token);
+    return withQuota(resolved.key, 'search', '搜尋', () => scan(resolved));
+  }
+
+  const clearKey = (key) => { sentCounts.delete(key); usedCounts.delete(key); attempted.delete(key); };
 
   return {
     tokenFor,
     resolve,
     send,
+    edit,
+    remove,
+    poll,
     react,
+    search,
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },
     startTurn: clearKey,
     noteAttempt: (key) => { attempted.add(key); },
-    /** 回合結束：回傳這一輪送了幾則、按了幾個 reaction、有沒有試過呼叫工具，並歸零。 */
+    /** 回合結束：回傳這一輪送了幾則、按了幾個 reaction、收回幾則、有沒有試過呼叫工具，並歸零。 */
     finishTurn: (key) => {
-      const result = { sent: sentCounts.get(key) ?? 0, reacted: reactCounts.get(key) ?? 0, attempted: attempted.has(key) };
+      const used = usedCounts.get(key);
+      const result = { sent: sentCounts.get(key) ?? 0, reacted: used?.react ?? 0, removed: used?.remove ?? 0, attempted: attempted.has(key) };
       clearKey(key);
       return result;
     },
     /** 事件流重連：舊回合的 turn/start 可能永遠不會再來，計數不能帶到下一輪。 */
-    clearTurns: () => { sentCounts.clear(); reactCounts.clear(); attempted.clear(); },
+    clearTurns: () => { sentCounts.clear(); usedCounts.clear(); attempted.clear(); },
   };
 }
 

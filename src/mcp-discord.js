@@ -70,6 +70,9 @@ const server = new McpServer({ name: 'discord', version: '0.2.1-r1' });
 const sessionToken = z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）');
 const messageRef = (what) => z.string().describe(`${what}：訊息前面的 #編號（例如 #k7f3ab），只能用這個頻道出現過的`);
 
+/** 送出結果帶上 #編號：edit_message／delete_message 只認這些。 */
+const sentRefs = (result) => (result.refs?.length ? `（${result.refs.map((ref) => `#${ref}`).join('、')}）` : '');
+
 /**
  * 每個工具都是：post 到橋接 → 成功回文字，失敗回 isError（模型才不會以為做成了）。
  * success 也可以回 content 陣列（文字加圖片）。
@@ -95,7 +98,7 @@ tool(
     reply_to: messageRef('要用 Discord「回覆」功能接的那則訊息').optional(),
   },
   '/send',
-  (result) => `已送出到 ${result.channel ?? 'Discord'}`,
+  (result) => `已送出到 ${result.channel ?? 'Discord'}${sentRefs(result)}`,
 );
 
 tool(
@@ -108,7 +111,44 @@ tool(
     reply_to: messageRef('要回覆的那則訊息').optional(),
   },
   '/send',
-  (result) => `已送出貼圖到 ${result.channel ?? 'Discord'}`,
+  (result) => `已送出貼圖到 ${result.channel ?? 'Discord'}${sentRefs(result)}`,
+);
+
+tool(
+  'edit_message',
+  '改你自己送出的一則訊息（打錯字、說錯話）。只能改你用 send_message／send_sticker／create_poll 送出、回傳過 #編號的訊息；投票不能改。',
+  {
+    token: sessionToken,
+    message: messageRef('要改的那則（你送出後回傳的編號）'),
+    content: z.string().describe('改成的完整內容（一則放得下；:名稱: 會換成伺服器表情）'),
+  },
+  '/edit',
+  () => '已修改',
+);
+
+tool(
+  'delete_message',
+  '收回你自己送出的一則訊息。只能收回你用工具送出、回傳過 #編號的訊息；一輪最多 2 則。',
+  {
+    token: sessionToken,
+    message: messageRef('要收回的那則（你送出後回傳的編號）'),
+  },
+  '/delete',
+  () => '已收回',
+);
+
+tool(
+  'create_poll',
+  '在這個頻道發一個 Discord 投票。大家在討論要選哪個、要約時間時才用，很少用。',
+  {
+    token: sessionToken,
+    question: z.string().max(300).describe('投票題目，最多 300 字'),
+    answers: z.array(z.string().max(55)).min(2).max(10).describe('選項，2~10 個，每個最多 55 字'),
+    hours: z.number().int().min(1).max(168).optional().describe('投票開多久（小時），預設 24，最多 168'),
+    multi: z.boolean().optional().describe('可不可以複選，預設不行'),
+  },
+  '/poll',
+  (result) => `已發出投票到 ${result.channel ?? 'Discord'}${sentRefs(result)}`,
 );
 
 tool(
@@ -157,6 +197,35 @@ tool(
   },
   '/history',
   (result) => String(result.text ?? ''),
+);
+
+tool(
+  'search_history',
+  '在這個頻道最近 500 則裡找訊息：query 的每個詞都要出現；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。一輪最多 2 次。',
+  {
+    token: sessionToken,
+    query: z.string().optional().describe('關鍵字，用空白分開，每個都要出現'),
+    from: messageRef('只找這則的發言者說過的').optional(),
+    limit: z.number().int().min(1).max(20).optional().describe('最多回幾則，預設 10，最多 20'),
+  },
+  '/search',
+  (result) => String(result.text ?? ''),
+  60_000,
+);
+
+tool(
+  'view_message',
+  '看這個頻道一則訊息的完整內容：全文、附件、連結預覽、投票票數、回覆的是哪一則、reaction，並附上圖片（附件、貼圖、連結預覽的圖）。只寫 [圖片] 或被問「剛剛那張圖」時用。',
+  {
+    token: sessionToken,
+    message: messageRef('要看的那則訊息'),
+  },
+  '/view',
+  (result) => [
+    { type: 'text', text: String(result.text ?? '') },
+    ...(result.images ?? []).map((image) => ({ type: 'image', data: image.data, mimeType: image.mimeType })),
+  ],
+  60_000,
 );
 
 tool(

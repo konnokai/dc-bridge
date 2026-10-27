@@ -29,6 +29,7 @@ export const INVITE_PERMISSIONS = Object.freeze([
   { key: 'ReadMessageHistory', label: '讀取訊息歷史', bit: 1n << 16n },
   { key: 'AddReactions', label: '新增反應', bit: 1n << 6n },
   { key: 'UseExternalEmojis', label: '使用外部表情', bit: 1n << 18n },
+  { key: 'SendPolls', label: '建立投票', bit: 1n << 49n },
 ]);
 
 export function invitePermissionsBitfield() {
@@ -262,6 +263,17 @@ export function shouldAutoCompact({ tokens, threshold, lastAt, now, cooldownMs }
   return threshold > 0 && Number.isFinite(tokens) && tokens > threshold && now - lastAt >= cooldownMs;
 }
 
+const MANAGE_GUILD = 1n << 5n;
+
+/**
+ * `/reset` 誰能用：bot 擁有者，或那個伺服器裡有「管理伺服器」權限的人（discord.js 的 has() 會把 Administrator 算進去）。
+ * bot 開放給別人管的伺服器時，那邊的管理員要能自己清掉 bot 的上下文。私聊沒有伺服器權限可看，只給擁有者。
+ */
+export function canResetConversation({ isOwner, guildId, permissions }) {
+  if (isOwner) return true;
+  return Boolean(guildId) && Boolean(permissions?.has?.(MANAGE_GUILD));
+}
+
 /** `/blacklist`：把一個人加入或移出 deny.users，其他黑名單欄位原樣保留。 */
 export function withDeniedUser(deny, userId, denied) {
   const id = String(userId);
@@ -271,12 +283,17 @@ export function withDeniedUser(deny, userId, denied) {
 
 const PROGRESS_DETAIL_MAX = 80;
 const PROGRESS_LINES_MAX = 6;
-// 發訊息、貼圖、reaction 本身就看得到，不用再列進度。
-const PROGRESS_SILENT = new Set(['mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction']);
+// 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
+const PROGRESS_SILENT = new Set([
+  'mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
+  'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
+]);
 const PROGRESS_LABELS = {
   'mcp__web-search-safe__web_search': ['🔍 搜尋', (args) => args.query],
   'mcp__web-search-safe__web_fetch': ['🌐 讀取網頁', (args) => { try { return new URL(args.url).host; } catch { return ''; } }],
   'mcp__discord__read_history': ['📜 翻聊天紀錄'],
+  'mcp__discord__search_history': ['🔎 搜尋聊天紀錄', (args) => args.query],
+  'mcp__discord__view_message': ['🔎 看一則訊息'],
   'mcp__discord__user_info': ['👤 查看群友資料'],
   'mcp__discord__server_info': ['🏠 查看伺服器資訊'],
   'mcp__discord__search_emojis': ['😀 找表情'],
@@ -303,6 +320,20 @@ export function describeToolCall(name, args) {
 /** 進度訊息內容：Discord 的 `-#` 小字，只留最後幾步。 */
 export function formatProgress(lines) {
   return lines.slice(-PROGRESS_LINES_MAX).map((line) => `-# ${line}`).join('\n');
+}
+
+const SEARCH_TERMS_MAX = 8;
+
+/** search_history 的搜尋詞：全形轉半形、轉小寫，用空白分開。 */
+export function searchTerms(query) {
+  return String(query ?? '').normalize('NFKC').toLowerCase().split(/\s+/).filter(Boolean).slice(0, SEARCH_TERMS_MAX);
+}
+
+/** 每個詞都出現才算符合；沒有詞不算（只用 from 找人時另外判斷）。 */
+export function matchesTerms(text, terms) {
+  if (!terms.length) return false;
+  const haystack = String(text ?? '').normalize('NFKC').toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 /** DSH 壓縮上下文期間貼在頻道的提示：壓縮要十幾秒，只有「正在輸入」看不出在做什麼。 */

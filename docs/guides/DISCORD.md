@@ -39,7 +39,7 @@ npm install
 #    Privileged Gateway Intents → 勾 Message Content Intent（不想開就跳過，改設定見下）
 #    OAuth2 → URL Generator → scopes: bot + applications.commands
 #    （slash command 需要 applications.commands；只勾 bot 的話指令叫不出來）
-#    bot permissions：見下方「邀請機器人」的 6 個權限（啟動後用 /invite 或控制台產生的連結最省事）
+#    bot permissions：見下方「邀請機器人」的 7 個權限（啟動後用 /invite 或控制台產生的連結最省事）
 #    用產生的網址把 bot 邀進伺服器
 
 # 2) 填 config.json（沒有就從 config.example.json 複製）
@@ -201,7 +201,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 | 指令 | 誰能用 | 作用 |
 | --- | --- | --- |
-| `/reset`（或 `!reset`、`!new`） | 管理員 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文 |
+| `/reset`（或 `!reset`、`!new`） | 管理員，或該伺服器有「管理伺服器」權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理者只能重置自己伺服器裡、在白名單上的頻道；私聊只有管理員能用 |
 | `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
@@ -214,9 +214,13 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 `/reset`、`/status`、`/invite`、`/mention` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
 只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
 
-- **誰看得到選單**：`default_member_permissions: Administrator`，只有伺服器管理員的 `/` 選單會出現這四個指令。
-  Discord 沒辦法把指令選單只開給某一個人，所以用 Administrator 縮小範圍。
-- **誰能執行**：執行時只認 `ownerIds`。伺服器管理員看得到選單，但不在 `ownerIds` 裡就會被拒絕。
+- **誰看得到選單**：`/reset` 是 `default_member_permissions: ManageGuild`（有「管理伺服器」權限的人看得到）；
+  `/status`、`/invite`、`/console`、`/mention` 是 `Administrator`。
+  Discord 沒辦法把指令選單只開給某一個人，所以用權限縮小範圍。
+- **誰能執行**：`/reset` 認 `ownerIds`，或那個伺服器裡有「管理伺服器」權限（含 Administrator）的人。
+  bot 開放給別人管的伺服器時，那邊的管理員可以自己清掉 bot 在自己頻道的上下文，不用找 bot 擁有者。
+  其他管理指令執行時只認 `ownerIds`：它們會動到所有伺服器共用的設定（`/mention`）、
+  露出擁有者的後台與 token（`/console`）或額度（`/status`），伺服器管理員看得到選單也會被拒絕。
 
 > Discord 官方客戶端會把未註冊的 `/xxx` 當成指令輸入，可能不讓你送出。`/reset`、`/status`、`/forget`
 > 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡），`/memory` 也沒有（一般訊息的回覆
@@ -246,9 +250,11 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | 讀取訊息歷史 | 頻道上下文、reaction 的語料 |
 | 新增反應 | 偶爾加 reaction |
 | 使用外部表情 | 送其他伺服器的自訂表情 |
+| 建立投票 | `create_poll` |
 
 - scope 是 `bot applications.commands`。**`applications.commands` 不能省**，少了它 slash command 不會註冊。
-- bitfield 是 `274878237760`；不含 Administrator、Manage Guild、Manage Messages、Attach Files。
+- bitfield 是 `563224831659072`；不含 Administrator、Manage Guild、Manage Messages、Attach Files。
+- 2026-10-27 加了「建立投票」。之前邀請的 bot 沒有重開連結也通常能發（@everyone 預設有這個權限），被頻道擋掉時工具會回錯誤。
 - 已經在伺服器裡的 bot 再開一次連結，Discord 會用新權限更新它的身分組，不會重複邀請。
 - 頻道層級的權限覆蓋仍可能擋掉；邀請連結只給伺服器層級。
 
@@ -364,7 +370,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
 就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
-用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `274878237760`）。
+用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `563224831659072`）。
 貼圖（guild sticker）才是綁伺服器的：`send_sticker` 只送當前伺服器的貼圖，私聊與別服的送不了。
 
 ### 表情反應（reaction）
@@ -482,8 +488,24 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 `mcp__discord__*` 每個都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道），下面只列其他參數：
 
 - `mcp__discord__send_message`（`content`、`reply_to` 可省略）：送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。
-  有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）
-- `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖
+  有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳送出那則的 #編號（太長切成好幾則就每則一個），
+  `edit_message`／`delete_message` 要用這個編號
+- `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，一樣回傳 #編號
+- `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
+  （送出時橋接記下的，每個頻道最近 200 則，橋接重啟就清空）；進度、壓縮提示、審批、提問、錯誤、指令回覆這些橋接自己發的不能改。
+  改完要一則放得下（`maxMessageChars`），投票不能改。內容一樣過敏感資訊閘門，佔「一輪 5 則」的名額。改之前橋接把舊內容記進日誌
+- `mcp__discord__delete_message`（`message`）：收回自己送出的一則訊息，範圍跟 `edit_message` 一樣，一輪最多 2 則。刪之前舊內容記進日誌
+- `mcp__discord__view_message`（`message`）：看這個頻道一則訊息的完整內容：發言者、時間、有沒有編輯過、全文（最多 1500 字）、
+  貼圖、附件清單、連結預覽（embed 的標題、說明、網域、欄位）、投票（題目、選項、票數）、回覆的是哪一則、reaction 統計，
+  再附上圖片（附件、貼圖、連結預覽的圖，最多 `media.maxCount` 張，走同一套下載與縮圖）。
+  回覆的對象只讀同一個頻道的一般回覆；轉發只顯示轉發的文字，不讀別的頻道。連結預覽的圖只抓 Discord 代理過的網址
+- `mcp__discord__search_history`（`query`、`from`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道最近 500 則裡找訊息。
+  `query` 用空白分開的每個詞都要出現（不分大小寫、全形半形），比對文字、貼圖名稱、連結預覽標題；`from` 給某人說過的一則 #編號，只找他的。
+  Discord 的訊息搜尋 API 這裡沒用：這是往回一頁一頁掃（每頁 100 則、最多 5 頁），私聊也能用。最多回 20 則，一輪最多搜 2 次。
+  沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
+- `mcp__discord__create_poll`（`question`、`answers`、`hours`／`multi` 可省略）：在這個頻道發一個 Discord 投票。
+  題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。
+  文字過敏感資訊閘門，佔「一輪 5 則」的名額。bot 沒有「建立投票」權限時回錯誤
 - `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
@@ -529,21 +551,24 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   遇到 `/reset` 也會被擋下來，不會送進新的會話。
 - **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
   模型不會誤以為已送出。
-- **一輪最多 5 則**（訊息與貼圖合計），**reaction 最多 3 個**，**記憶寫入最多 3 次**；同一會話的訊息照順序送，超過 2000 字由橋接切段。
-- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。只按了 reaction 不算。
+- **一輪最多 5 則**（訊息、貼圖、投票、修改合計），**reaction 最多 3 個**，**收回最多 2 則**，**搜尋最多 2 次**，**記憶寫入最多 3 次**；
+  同一會話的訊息照順序送，超過 2000 字由橋接切段。
+- **改和收回只認自己送的**：模型被 prompt injection 也改不了審批提示（例如改成「回通過繼續」騙管理員），也刪不掉別人的訊息。
+  不用 discord.js 的 `deletable`：bot 有 Manage Messages 時它對別人的訊息也是 true。
+- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。只按了 reaction 或只收回訊息不算。
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與
-`/send`、`/react`、`/emojis`、`/history`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
+`/send`、`/react`、`/edit`、`/delete`、`/poll`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
 ## 行為細節
 
-- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_sticker` 時送出；回合文字不會自動貼出。不做逐字串流。
+- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_sticker`／`create_poll` 時送出；回合文字不會自動貼出。不做逐字串流。
 - **進度訊息**：模型在一個回合裡第一次用工具時（不管有沒有人叫 bot），橋接會在頻道貼一則灰色小字（`-#`）的進度，
-  回合結束就刪掉。每呼叫一個工具加一行，例如「🔍 搜尋：關鍵字」、「🌐 讀取網頁：網域」、「📜 翻聊天紀錄」。
-  只在思考、沒用工具時不貼（「正在輸入」就夠了）。發訊息、貼圖、reaction 不列（那本身就看得到）。
+  回合結束就刪掉。每呼叫一個工具加一行，例如「🔍 搜尋：關鍵字」、「🌐 讀取網頁：網域」、「📜 翻聊天紀錄」、「🔎 搜尋聊天紀錄：關鍵字」。
+  只在思考、沒用工具時不貼（「正在輸入」就夠了）。發訊息、貼圖、reaction、投票、修改、收回不列（那本身就看得到）。
   模型已經回覆後不再新貼進度。不顯示模型的思考原文（可能有群友記憶、人設）；
   每行一樣過敏感資訊閘門，命中就只寫「🔧 使用工具」。訊息是靜音的、不解析 @，不會吵到人。
   橋接在回合中途掛掉時，那則進度會留在頻道裡，要手動刪。
@@ -554,6 +579,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **引用**：訊息回覆了某則訊息時，被引用的作者與原文會以 `[引用 某人：原文]` 接在那一行後面。
   被引用的那則先從 discord.js 的訊息快取找（bot 開著時收到的訊息都在裡面，不打 API）；
   快取沒有時只有 ★ 的訊息才另外抓，沒叫 bot 的就不帶引用（自由參與時每則都抓會撞 rate limit）。
+  只認同一個頻道的一般回覆：轉發和別頻道的引用不帶（那個頻道可能不在白名單裡）。
 - **頻道上下文**：會用 `channel.messages.fetch` 抓這一批第一則之前的 `context.messages` 則訊息放進
   prompt。預設模式每一批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶（橋接重啟或
   `/reset` 後再帶一次）。這需要 bot 的 **Read Message History** 權限；不需要 Message Content 意圖。
