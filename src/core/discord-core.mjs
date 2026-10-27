@@ -88,6 +88,7 @@ export function normalizeDiscordConfig(raw) {
     ackMessage: typeof src.ackMessage === 'string' ? src.ackMessage : '',
     maxMessageChars: clamp(src.maxMessageChars, DISCORD_MAX_CHARS, 200, DISCORD_MAX_CHARS),
     questionTimeoutMs: clamp(src.questionTimeoutMs, 5 * 60 * 1000, 10_000, 60 * 60 * 1000),
+    autoCompactTokens: src.autoCompactTokens === 0 ? 0 : clamp(src.autoCompactTokens, 80_000, 10_000, 1_000_000),
     typing: src.typing !== false,
     sendDelayMs: clamp(src.sendDelayMs, 300, 0, 5000),
     sessionDir: typeof src.sessionDir === 'string' ? src.sessionDir.trim() : '',
@@ -241,6 +242,14 @@ export function isConversationAllowed(cfg, { guildId, channelId, parentId = null
 
   if (cfg.allow.users.includes(String(userId))) return true;
   return cfg.allow.users.length === 0 && cfg.allowAllWhenEmpty;
+}
+
+/**
+ * 一輪結束時要不要替會話送 /compact。這是 DSH 自動壓縮沒觸發時的備援。
+ * 冷卻時間防止壓完還是很大（例如保留的原文本來就長）時每輪都壓。
+ */
+export function shouldAutoCompact({ tokens, threshold, lastAt, now, cooldownMs }) {
+  return threshold > 0 && Number.isFinite(tokens) && tokens > threshold && now - lastAt >= cooldownMs;
 }
 
 /** `/blacklist`：把一個人加入或移出 deny.users，其他黑名單欄位原樣保留。 */

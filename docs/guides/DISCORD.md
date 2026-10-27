@@ -92,6 +92,7 @@ pm2 logs dc-bridge
 | `ackMessage` | 收到訊息後的立即回覆，預設空字串（關閉） |
 | `maxMessageChars` | 單則訊息上限，200 ~ 2000，預設 2000 |
 | `questionTimeoutMs` | 等提問／審批回答的時間，預設 300000（5 分鐘） |
+| `autoCompactTokens` | 一輪結束時 context（上一次請求的 totalTokens）超過這個數，橋接就替會話送 `/compact`，預設 80000；`0` = 關閉。同一會話 10 分鐘內最多送一次 |
 | `typing` | 送出「正在輸入」提示，預設 `true` |
 | `sendDelayMs` | 連續送出的間隔，預設 300 毫秒 |
 | `sessionDir` | 會話工作目錄，預設 `<repo>/state/discord-agents` |
@@ -551,12 +552,16 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   `Discord #頻道名｜伺服器名` 或 `Discord 私聊｜使用者名`（名字查不到就用 ID）；黑話學習的會話是 `Discord 黑話學習`。
   使用者設的標題會鎖住，DSH 不會再用模型生摘要標題，每個新會話也少一次模型請求。
   改名失敗只記日誌，不影響投遞。之前建的會話不會自動改名。
-- **上下文壓縮**：dc-chat preset 把 `compaction-basic` 的 `thresholdRatio` 設成 `0.2`。
-  deepseek-v4.1-flash 的窗口是 100 萬 token，所以上下文到約 20 萬就把較舊的聊天換成摘要，
-  保留最近一段原文（預設約 10 萬）。預設 0.8 要到約 55 萬才壓，群聊一直疊上去，最前面的人格規則容易被忽略。
-  這是窗口比例，換成窗口較小的模型時門檻會跟著變小。人格規則在 system prompt，不會被壓縮掉。
-  **已知問題**：2026-10-27 部署後，上下文超過 25 萬仍沒有自動壓縮（會話紀錄沒有 `compaction/*` 事件），原因還沒查到。
-  要馬上壓縮，可以在 DSH web 打開那個會話，趁它沒在跑的時候輸入 `/compact`。
+- **上下文壓縮**：context 越長，首字回應越慢（實測 8k 約 2.5 秒、64k 約 14 秒、166k 約 22 秒；
+  prefix cache 有命中，慢在長 context 本身）。所以壓在約 8 萬：
+  - dc-chat preset 把 `compaction-basic` 設成 `thresholdRatio: 0.08`（100 萬窗口 × 0.08 ≈ 8 萬）、
+    `retainTokens: 10000`（壓完保留最近一段原文，其餘換成摘要）。不設 `retainTokens` 時預設保留約 16 萬，比門檻還大，壓了也不會變小。
+  - `retainTokens` 是 DSH 的估算值，中文聊天的實際 token 大約是 2.5 倍。曾設 30000：壓完實際還有 8.1 萬，
+    卡在門檻上面，每一輪都觸發一次「summary is not smaller」的失敗壓縮（每次多約 10 秒）。所以要留足空間。
+  - 橋接另外補一層：一輪結束時，`assistant/message` 的 `usage.totalTokens` 超過 `autoCompactTokens`（預設 80000），
+    就先壓住下一批，替會話送 `/compact`，壓完再放行。日誌會記「自動壓縮」那一行與 DSH 回的結果。
+    2026-10-27 改成 0.08 後，DSH 自己的自動壓縮有觸發（之前 0.2 時沒看到），這層是 DSH 沒壓時的備援。
+  - 人格規則在 system prompt，不會被壓縮掉；群友記憶與最近頻道訊息每批都會重新帶，壓掉的是較舊的聊天細節。
 
 ## 安全邊界
 

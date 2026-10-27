@@ -173,9 +173,11 @@
   config:
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
-      # 預設 0.8 在 100 萬窗口要到約 55 萬才壓；群聊疊太長，最前面的人格規則容易被忽略，約 20 萬就壓
+      # context 越長首字越慢，約 8 萬就壓；retainTokens 要比門檻小，預設的 0.16 比例約 16 萬，壓了等於沒壓。
+      # retainTokens 是 DSH 的估算值，中文實際約 2.5 倍：設 30000 時壓完還有 8.1 萬，卡在門檻上每輪都壓失敗
       config:
-        thresholdRatio: 0.2
+        thresholdRatio: 0.08
+        retainTokens: 10000
 
     - id: command-compact
       name: '@deepseek-ai/dsh-command-compact'

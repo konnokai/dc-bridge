@@ -27,6 +27,7 @@ import {
   questionAnswersFor,
   saveSessions,
   sessionTitleFor,
+  shouldAutoCompact,
   shouldHandleGuildMessage,
   withDeniedUser,
   splitDiscordMessage,
@@ -95,6 +96,7 @@ const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重
 const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
 const MEMORY_WRITES_PER_TURN = 3; // 記憶會留存、又是群友文字推動的，一輪寫幾次要有上限
 const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一次（DSH 可能已經壓縮掉了）
+const AUTO_COMPACT_COOLDOWN_MS = 10 * 60 * 1000; // 同一會話兩次自動壓縮的最短間隔
 
 /**
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
@@ -1101,6 +1103,24 @@ async function main() {
     }
   }
 
+  const contextTokens = new Map(); // sessionId -> 上一次請求的 totalTokens
+  const compactedAt = new Map(); // sessionId -> 上次自動壓縮的時間
+
+  async function autoCompact(key, sessionId) {
+    compactedAt.set(sessionId, Date.now());
+    log(`自動壓縮 ${key}（context ${contextTokens.get(sessionId)} token，門檻 ${cfg.discord.autoCompactTokens}）`);
+    try {
+      const accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: '/compact' }] });
+      const result = accepted.result;
+      log(`自動壓縮結果 ${key}：${result?.ok ? (result.value?.command?.text ?? '（沒有回覆）') : (result?.error?.message ?? '失敗')}`);
+    } catch (error) {
+      log(`自動壓縮失敗 ${key}：${error?.message ?? error}`);
+    } finally {
+      contextTokens.delete(sessionId);
+      turnGate.release(key);
+    }
+  }
+
   async function handleSessionEvent(frame) {
     const event = frame.event;
     if (!event?.type) return;
@@ -1130,8 +1150,21 @@ async function main() {
       agentSender.startTurn(key);
       memoryWrites.delete(key);
     }
+    const usageTokens = event.type === 'assistant/message' ? event.data?.usage?.totalTokens : undefined;
+    if (Number.isFinite(usageTokens)) contextTokens.set(frame.sessionId, usageTokens);
     // 任何 turn/end 都放行下一批，包括沒對到 turn/start 的那種；不然頻道要卡到保險計時器。
-    if (event.type === 'turn/end') turnGate.release(key);
+    // context 太大時先壓縮再放行：/compact 要會話閒著才跑得動。
+    if (event.type === 'turn/end') {
+      const compact = shouldAutoCompact({
+        tokens: contextTokens.get(frame.sessionId),
+        threshold: cfg.discord.autoCompactTokens,
+        lastAt: compactedAt.get(frame.sessionId) ?? 0,
+        now: Date.now(),
+        cooldownMs: AUTO_COMPACT_COOLDOWN_MS,
+      });
+      if (compact) void autoCompact(key, frame.sessionId);
+      else turnGate.release(key);
+    }
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');

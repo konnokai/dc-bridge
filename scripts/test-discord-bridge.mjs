@@ -19,6 +19,7 @@ import {
   isConversationAllowed,
   isTransientDshError,
   sessionTitleFor,
+  shouldAutoCompact,
   withDeniedUser,
   loadSessions,
   normalizeDiscordConfig,
@@ -81,6 +82,17 @@ console.log('## 1. 設定收斂');
   ok(cfg.messageContentIntent === true, '預設申請 Message Content 意圖');
   ok(cfg.maxMessageChars === DISCORD_MAX_CHARS, '單則上限預設 2000');
   ok(cfg.questionTimeoutMs === 300_000, '提問等待預設 5 分鐘');
+  ok(cfg.autoCompactTokens === 80_000, '自動壓縮門檻預設 8 萬');
+  ok(normalizeDiscordConfig({ autoCompactTokens: 0 }).autoCompactTokens === 0, 'autoCompactTokens: 0 = 關閉');
+  ok(normalizeDiscordConfig({ autoCompactTokens: 5 }).autoCompactTokens === 10_000, 'autoCompactTokens 太小拉到下限 1 萬');
+  {
+    const at = { threshold: 80_000, cooldownMs: 600_000, now: 1_000_000 };
+    ok(shouldAutoCompact({ ...at, tokens: 90_000, lastAt: 0 }), '超過門檻 → 壓縮');
+    ok(!shouldAutoCompact({ ...at, tokens: 70_000, lastAt: 0 }), '沒超過 → 不壓');
+    ok(!shouldAutoCompact({ ...at, tokens: 90_000, lastAt: 900_000 }), '10 分鐘內壓過 → 不再送');
+    ok(!shouldAutoCompact({ ...at, threshold: 0, tokens: 900_000, lastAt: 0 }), '門檻 0 → 關閉');
+    ok(!shouldAutoCompact({ ...at, tokens: undefined, lastAt: 0 }), '還沒有 usage → 不壓');
+  }
   ok(cfg.memory.enabled === false, '群友記憶預設關閉');
   ok(cfg.memory.maxFacts === 20 && cfg.memory.maxChars === 800, '記憶上限預設值');
   const mem = normalizeDiscordConfig({ memory: { enabled: true, maxFacts: 999, maxChars: 1 } }).memory;

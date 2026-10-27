@@ -30,6 +30,7 @@
     "ackMessage": "",
     "maxMessageChars": 2000,
     "questionTimeoutMs": 300000,
+    "autoCompactTokens": 80000,
     "typing": true,
     "sendDelayMs": 300,
     "sessionDir": "",
