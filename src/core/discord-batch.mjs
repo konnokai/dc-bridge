@@ -13,6 +13,15 @@ const clean = (value) => String(value ?? '')
 // 群友寫在暱稱或內文裡的同樣字樣要改掉，不然就能冒充。
 export const defang = (value) => String(value ?? '').replace(/【管理員】/g, '[管理員]').replace(/★/g, '☆');
 
+// 有人故意把暱稱設成看不見的字，trim() 去不掉，畫面上卻是空白：U+17B5、U+3164、點字空白 U+2800、
+// Discord 常見的 U+1CBC、只有組合符號（\p{M}）沒有本字的名字。組合符號只在判斷時拿掉，泰文這類名字本字還在。
+const INVISIBLE = /[\s\p{Default_Ignorable_Code_Point}\p{M}\p{C}\u2800\u1cbc\u{1d159}]/gu;
+export const stripInvisible = (value) => String(value ?? '').replace(INVISIBLE, '');
+export const isVisible = (value) => typeof value === 'string' && stripInvisible(value) !== '';
+
+/** 依序取第一個看得到的名字（伺服器暱稱 → 顯示名稱 → 使用者名稱）；全都看不到回空字串。 */
+export const visibleName = (...names) => names.find(isVisible) ?? '';
+
 /**
  * 建立批次器。
  *

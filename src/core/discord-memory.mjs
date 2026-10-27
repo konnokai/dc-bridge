@@ -8,7 +8,7 @@
 // 這裡只做純資料處理（不 import discord.js），方便離線測試；Discord 權限判斷在橋接裡。
 import fs from 'node:fs';
 import path from 'node:path';
-import { defang } from './discord-batch.mjs';
+import { defang, isVisible, stripInvisible } from './discord-batch.mjs';
 
 export const MEMORY_VERSION = 3;
 export const MEMORY_MAX_BYTES = 5 * 1024 * 1024;
@@ -23,7 +23,7 @@ function cleanText(value, max) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-const cleanName = (value) => cleanText(value, 32);
+const cleanName = (value) => (isVisible(value) ? cleanText(value, 32) : '');
 
 function backupCorrupt(file) {
   try {
@@ -70,7 +70,7 @@ export function pruneStaleGuesses(store, { now = Date.now(), ttlMs = MEMORY_GUES
   return removed;
 }
 
-const nameKey = (value) => defang(String(value ?? '')).replace(/\s+/g, '').toLowerCase();
+const nameKey = (value) => stripInvisible(defang(value)).toLowerCase();
 
 /**
  * 模型說的名字是不是這個人（候選：伺服器暱稱、顯示名稱、使用者名稱）。

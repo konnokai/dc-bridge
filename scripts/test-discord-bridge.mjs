@@ -61,7 +61,7 @@ import {
   messageRefOf,
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
-import { createBatcher, createTurnGate, formatBatch } from '../src/core/discord-batch.mjs';
+import { createBatcher, createTurnGate, formatBatch, visibleName } from '../src/core/discord-batch.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
@@ -975,6 +975,13 @@ console.log('## 7d3. 批次');
   gate.submit('g:3', job([31]));
   gate.releaseAll();
   ok(ids(delivered.at(-1).job) === '31', '事件流斷線時全部放行');
+
+  // 群友的暱稱可能只有看不見的字元（實際遇到 U+17B5），prompt 裡變成「：內容」，模型叫不出名字。
+  ok(visibleName('឵', 'ㅤ', 'real_user') === 'real_user', '只有看不見字元的名字跳過，改用下一個');
+  ok(visibleName('⠀ ', null, undefined, 'x') === 'x', '點字空白和空白也算看不見');
+  ok(visibleName('᲼', '́́', '\u{1d159}', 'x') === 'x', 'Discord 常見的空白暱稱字、只有組合符號的名字也算看不見');
+  ok(visibleName('สมชาย') === 'สมชาย', '泰文這類帶組合符號的正常名字還是看得到');
+  ok(visibleName('阿華', 'ahua') === '阿華' && visibleName('', null) === '', '看得到就用第一個；全都看不到回空字串');
 
   const guild = formatBatch([
     { author: '阿華', text: '今天好熱', direct: false },

@@ -83,7 +83,7 @@ import {
 } from './core/discord-media.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, createTurnGate, defang, formatBatch } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch, isVisible, visibleName } from './core/discord-batch.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -661,7 +661,7 @@ async function main() {
         title = sessionTitleFor(key, {
           channelName: channel?.name,
           guildName: channel?.guild?.name,
-          userName: user?.globalName || user?.username,
+          userName: visibleName(user?.globalName, user?.username),
         });
       }
       unwrap(await api.sessions.rename({ sessionId, title }), 'session.rename');
@@ -833,7 +833,8 @@ async function main() {
 
   const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
   const withStickers = (message) => [message.content, stickerLabel(message.stickers)].filter(Boolean).join(' ');
-  const authorName = (message) => message.member?.displayName ?? message.author?.displayName ?? message.author?.username ?? '未知';
+  const authorName = (message, member = message.member) =>
+    visibleName(member?.displayName, message.author?.displayName, message.author?.username) || '未知';
   // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
   const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
   const shortTime = (date) => (date ? date.toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
@@ -864,7 +865,7 @@ async function main() {
     if (target.author?.bot) throw toolError('不記 bot', 400);
     // REST 抓回來的訊息不一定帶 member，prompt 顯示的是伺服器暱稱，要另外抓。
     const member = target.member ?? await target.guild?.members.fetch(target.author.id).catch(() => null);
-    const shown = member?.displayName ?? authorName(target);
+    const shown = authorName(target, member);
     if (name !== null && !nameMatches(name, [member?.displayName, target.author?.displayName, target.author?.username])) {
       throw toolError(`${ref} 是「${flat(shown, 40)}」說的，不是「${flat(name, 40)}」。要記「${flat(name, 40)}」的事，message 給他自己說的那則 #編號`, 400);
     }
@@ -1053,8 +1054,8 @@ async function main() {
       const date = (value) => value.toISOString().slice(0, 10);
       const mutedUntil = member?.communicationDisabledUntil;
       const lines = [
-        `顯示名稱：${flat(authorName(target), 40)}`,
-        target.author?.globalName ? `全域名稱：${flat(target.author.globalName, 40)}` : '',
+        `顯示名稱：${flat(authorName(target, member), 40)}`,
+        isVisible(target.author?.globalName) ? `全域名稱：${flat(target.author.globalName, 40)}` : '',
         `使用者名稱：${flat(target.author?.username, 40)}${target.author?.bot ? '（bot）' : ''}`,
         ownerIds.has(target.author?.id) ? '這個人是管理員（bot 擁有者）' : '',
         member ? `身分組：${roles.length ? roles.join('、') : '沒有'}` : '',
@@ -1090,7 +1091,7 @@ async function main() {
         `伺服器：${flat(guild.name, 100)}`,
         guild.description ? `簡介：${flat(guild.description, 300)}` : '',
         `建立：${date(guild.createdAt)}`,
-        owner ? `擁有者：${flat(owner.displayName, 40)}` : '',
+        owner ? `擁有者：${flat(visibleName(owner.displayName, owner.user?.displayName, owner.user?.username), 40)}` : '',
         `成員數：${guild.memberCount ?? '不明'}`,
         `加成：等級 ${guild.premiumTier ?? 0}（${guild.premiumSubscriptionCount ?? 0} 個加成）`,
         `頻道 ${guild.channels.cache.size} 個、身分組 ${guild.roles.cache.size} 個、自訂表情 ${guild.emojis.cache.size} 個、貼圖 ${guild.stickers.cache.size} 張`,
@@ -1673,7 +1674,7 @@ async function main() {
         const referenced = await referencedMessage(entry.message, entry.direct);
         if (referenced) {
           quote = formatQuote({
-            author: referenced.member?.displayName ?? referenced.author?.displayName ?? referenced.author?.username,
+            author: authorName(referenced),
             content: withStickers(referenced),
             hasImage: referenced.attachments?.size > 0,
           });
@@ -1715,7 +1716,7 @@ async function main() {
         context = formatRecentContext(
           history.reverse().map((entry) => ({
             ref: messageRefs.register(key, entry.id),
-            author: entry.member?.displayName ?? entry.author?.displayName ?? entry.author?.username,
+            author: authorName(entry),
             content: withStickers(entry),
             bot: entry.author?.id === client.user.id,
             hasImage: entry.attachments?.size > 0,
@@ -1911,7 +1912,7 @@ async function main() {
       id: message.id,
       channelId,
       userId: message.author?.id ?? '',
-      author: message.member?.displayName ?? message.author?.displayName ?? message.author?.username ?? '',
+      author: authorName(message),
       text: truncateText(value, 300),
       at: Number(message.createdTimestamp) || Date.now(),
     });
@@ -2107,7 +2108,7 @@ async function main() {
     }
 
     const isOwner = ownerIds.has(message.author.id);
-    const author = message.member?.displayName ?? message.author.displayName ?? message.author.username;
+    const author = authorName(message);
     log(`收到 ${key}${guildId ? ` guild=${guildId}` : ''} user=${message.author.id}${direct ? '' : '（沒叫 bot）'}`);
 
     if (direct) {

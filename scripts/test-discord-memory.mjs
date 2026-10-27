@@ -155,6 +155,17 @@ console.log('## 5. 名字核對');
   ok(!nameMatches('', names) && !nameMatches('   ', names), '空的對不上');
   ok(!nameMatches('Sora', [null, undefined, '']), '沒有候選名字就對不上');
   ok(nameMatches('站長', ['★【管理員】站長']), '候選名字裡的標記先改寫再比');
+  // 實際遇到的暱稱：只有一個 U+17B5（高棉文的不發音母音），trim() 去不掉，畫面上是空白。
+  ok(!nameMatches('឵', ['឵', 'real_user']), '只有看不見字元的名字不算名字');
+  ok(nameMatches('real_user', ['឵', 'real_user']), '改用使用者名稱就對得上');
+  ok(nameMatches('Sora', ['So​ra']) && nameMatches('AB', ['A឵B']), '名字中間夾看不見的字，模型漏寫也對得上');
+
+  const store = { version: 3, users: {} };
+  rememberFact(store, { userId: '9', name: '឵', fact: '住在美國' });
+  ok(store.users['9'].name === '', '看不見的名字不存');
+  rememberFact(store, { userId: '9', name: 'real_user', fact: '住在美國' });
+  rememberFact(store, { userId: '9', name: 'ㅤ ⠀', fact: '夜貓子' });
+  ok(store.users['9'].name === 'real_user', '之後補上的名字不會被看不見的名字蓋掉');
 }
 
 console.log('## 5b. 列出記憶（/memory 與控制台）');
@@ -188,6 +199,10 @@ console.log('## 6. 檔案讀寫與損壞容錯');
   saveMemoryFile(file, store);
   const loaded = loadMemoryFile(file);
   ok(loaded.warning === null && userFacts(loaded.store, { userId: USER }).join() === '在準備考試', '寫入後讀回一致');
+
+  fs.writeFileSync(file, JSON.stringify({ version: 3, users: { 9: { name: '឵', updatedAt: 1, facts: [{ text: '住在美國', at: 1 }] } } }));
+  const blank = memoryOverview(loadMemoryFile(file).store)[0];
+  ok(blank.name === '' && blank.facts.join() === '住在美國', '舊資料裡看不見的名字讀成沒有名字，記憶本身留著');
   const mode = fs.statSync(file).mode & 0o777;
   ok(process.platform === 'win32' || mode === 0o600, '記憶檔權限 600（非 Windows）');
 
