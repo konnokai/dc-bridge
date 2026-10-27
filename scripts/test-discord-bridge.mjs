@@ -47,7 +47,7 @@ import {
   messageRefOf,
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
-import { createBatcher, formatBatch } from '../src/core/discord-batch.mjs';
+import { createBatcher, createTurnGate, formatBatch } from '../src/core/discord-batch.mjs';
 import { createUsageTracker, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
@@ -678,6 +678,62 @@ console.log('## 7d3. 批次');
   batcher.drop('ch:3');
   advance(20_000);
   ok(!flushed.some((f) => f.key === 'ch:3'), 'drop（/reset）後那批不送');
+
+  // 回合閘門：同一會話一次只送一批進 DSH，回合沒結束前新到的批次合成一筆。
+  const delivered = [];
+  const stuck = [];
+  const gate = createTurnGate({
+    maxEntries: 4,
+    releaseMs: 60_000,
+    deliver: (key, job) => delivered.push({ key, job }),
+    onStuck: (key) => stuck.push(key),
+    setTimer: (fn, ms) => { const t = { fn, at: clock + ms, live: true }; timers.push(t); return t; },
+    clearTimer: (t) => { if (t) t.live = false; },
+  });
+  const job = (ids, { epoch = 0, direct = [] } = {}) => ({
+    epoch,
+    entries: ids.map((id) => ({ id, at: id, direct: direct.includes(id) })),
+    direct: direct.length > 0,
+  });
+  const ids = (j) => j.entries.map((e) => e.id).join();
+  gate.submit('g:1', job([1]));
+  gate.submit('g:1', job([2]));
+  gate.submit('g:1', job([3]));
+  ok(delivered.length === 1 && ids(delivered[0].job) === '1', '回合進行中，後到的批次不送進 DSH');
+  gate.release('g:1');
+  ok(delivered.length === 2 && ids(delivered[1].job) === '2,3', '回合結束後，壓住的批次合成一筆送出');
+  gate.release('g:1');
+  ok(delivered.length === 2, '沒有壓住的批次就不送');
+  gate.submit('g:1', job([4]));
+  ok(delivered.length === 3, '閒著時直接送');
+
+  gate.submit('g:1', job([5, 6], { direct: [5] }));
+  gate.submit('g:1', job([7, 8, 9, 10]));
+  gate.release('g:1');
+  const merged = delivered[3].job;
+  ok(ids(merged) === '5,8,9,10', '超過上限丟最舊的閒聊，★ 那則留著');
+  ok(merged.direct === true && merged.dropped === 2, '合併後重算 direct，記下略過幾則');
+
+  gate.submit('g:1', job([11]));
+  gate.submit('g:1', job([12], { epoch: 1 }));
+  gate.release('g:1');
+  ok(ids(delivered.at(-1).job) === '12', '代次不同（/reset 過）只留新的那批');
+
+  gate.submit('g:1', job([13]));
+  gate.drop('g:1');
+  gate.release('g:1');
+  gate.submit('g:1', job([14]));
+  ok(ids(delivered.at(-1).job) === '14', 'drop 清掉壓住的批次，也解除忙碌');
+
+  gate.submit('g:2', job([20]));
+  gate.submit('g:2', job([21]));
+  advance(60_000);
+  ok(stuck.includes('g:2') && ids(delivered.at(-1).job) === '21', '等不到回合結束，保險計時器到了就放行');
+
+  gate.submit('g:3', job([30]));
+  gate.submit('g:3', job([31]));
+  gate.releaseAll();
+  ok(ids(delivered.at(-1).job) === '31', '事件流斷線時全部放行');
 
   const guild = formatBatch([
     { author: '阿華', text: '今天好熱', direct: false },

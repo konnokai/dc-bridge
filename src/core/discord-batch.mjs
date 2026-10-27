@@ -69,6 +69,78 @@ export function createBatcher({
   return { add, drop };
 }
 
+/** 兩批合成一批。超過上限先丟最舊的閒聊；★（有人叫 bot）那幾則一定留著。 */
+function mergeJobs(held, job, maxEntries) {
+  // 代次不同表示中間 /reset 過，舊的那批屬於舊對話。
+  if (!held || held.epoch !== job.epoch) return job;
+  const all = [...held.entries, ...job.entries].sort((a, b) => a.at - b.at);
+  let extra = all.length - maxEntries;
+  const entries = all.filter((entry) => entry.direct || extra-- <= 0);
+  return {
+    ...job,
+    entries,
+    direct: entries.some((entry) => entry.direct),
+    dropped: (held.dropped ?? 0) + (job.dropped ?? 0) + all.length - entries.length,
+  };
+}
+
+/**
+ * 回合閘門：同一個會話一次只讓一批進 DSH。
+ *
+ * 為什麼要有：DSH 的 queue 模式每個回合只接一則排隊訊息。群組聊得比模型回得快時
+ * （回合 12~35 秒、每 10 秒一批），DSH 的佇列只會越排越長，模型永遠在回很久以前的話。
+ * 改成回合還沒結束就先壓在這裡、合成一筆，回合結束再送，DSH 那邊最多排一則。
+ *
+ * @param options.deliver    (key, job) => void，真的送進 DSH
+ * @param options.maxEntries 壓住的那批最多幾則
+ * @param options.releaseMs  等不到回合結束時，最久壓多久就放行
+ * @param options.onStuck    (key) => void，保險計時器觸發時呼叫（記日誌用）
+ */
+export function createTurnGate({
+  deliver,
+  maxEntries,
+  releaseMs,
+  onStuck = () => {},
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+}) {
+  const busy = new Map(); // key -> 保險計時器
+  const held = new Map(); // key -> 回合進行中先壓住的那批
+
+  function submit(key, job) {
+    if (busy.has(key)) {
+      held.set(key, mergeJobs(held.get(key), job, maxEntries));
+      return;
+    }
+    const timer = setTimer(() => { onStuck(key); release(key); }, releaseMs);
+    timer?.unref?.();
+    busy.set(key, timer);
+    deliver(key, job);
+  }
+
+  /** 回合結束（或確定不會有回合）：放行壓住的那批。 */
+  function release(key) {
+    if (!busy.has(key)) return;
+    clearTimer(busy.get(key));
+    busy.delete(key);
+    const next = held.get(key);
+    if (!next) return;
+    held.delete(key);
+    submit(key, next);
+  }
+
+  /** /reset：壓住的批次屬於舊對話，連同忙碌狀態一起清掉。 */
+  function drop(key) {
+    clearTimer(busy.get(key));
+    busy.delete(key);
+    held.delete(key);
+  }
+
+  const releaseAll = () => { for (const key of [...busy.keys()]) release(key); };
+
+  return { submit, release, drop, releaseAll };
+}
+
 /**
  * 一批訊息 → prompt 裡的【新訊息】區塊。
  * 頻道：每行 `暱稱：內容`，叫 bot 的加 ★；私聊：只有內文（DSH 會話本身就是一對一）。

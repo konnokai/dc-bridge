@@ -63,7 +63,7 @@ import {
 } from './core/discord-media.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, defang, formatBatch } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch } from './core/discord-batch.mjs';
 import { createUsageTracker, usageReport } from './core/discord-usage.mjs';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -80,6 +80,8 @@ const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
 const TYPING_MAX_MS = 10 * 60 * 1000; // 回合卡住時不要讓「正在輸入」亮一輩子
+const TURN_RELEASE_MS = 5 * 60 * 1000; // 等不到 turn/end 時，最久把下一批壓這麼久
+const HELD_MAX = 50; // 回合進行中壓住的訊息最多幾則（★ 那幾則不算在內，一定留著）
 const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重啟就沒了）
 
 /**
@@ -344,7 +346,7 @@ async function main() {
   const collectors = new Map(); // sessionId -> turn collector
   const modelApplied = new Set(); // 本程序內已 selectModel 過的會話
   const sessionPromises = new Map(); // key -> 建立中的會話（防併發重複建立）
-  const promptChains = new Map(); // key -> 串行化的投遞鏈
+  const promptChains = new Map(); // key -> 串行化的投遞鏈（閘門可能在上一批還沒送完時就放行）
   const epochs = new Map(); // key -> 重置代次（擋掉「重置後又把舊投遞寫回去」）
   const pending = new Map(); // key -> 掛起的提問／審批
   const typingTimers = new Map(); // key -> interval
@@ -555,6 +557,7 @@ async function main() {
     epochs.set(key, epochOf(key) + 1);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
     batcher.drop(key);
+    turnGate.drop(key);
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
     primedKeys.delete(key);
@@ -988,6 +991,8 @@ async function main() {
 
     // 新的一輪開始：清掉上一輪的發送紀錄。
     if (event.type === 'turn/start') agentSender.startTurn(key);
+    // 任何 turn/end 都放行下一批，包括沒對到 turn/start 的那種；不然頻道要卡到保險計時器。
+    if (event.type === 'turn/end') turnGate.release(key);
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
@@ -1094,6 +1099,8 @@ async function main() {
         // 回合 ↔ 批次的對應也不可信了；之後的回合退回 defaultDirect。
         pendingDirect.clear();
         turnDirect.clear();
+        // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
+        turnGate.releaseAll();
         for (const key of [...typingTimers.keys()]) stopTyping(key);
         // 學習會話也一樣：事件流斷了就不會再有回合結束，直接失敗（下次冷卻後再學）。
         for (const waiter of [...learnerWaiters.values()]) {
@@ -1158,22 +1165,34 @@ async function main() {
     log(`DSH 恢復，重新投遞 ${count} 條排隊訊息`);
   }
 
+  // 同一會話一次只送一批：回合還沒結束，新到的批次先壓在橋接合成一筆（見 createTurnGate）。
+  const turnGate = createTurnGate({
+    maxEntries: HELD_MAX,
+    releaseMs: TURN_RELEASE_MS,
+    onStuck: (key) => log(`等不到回合結束，先放行下一批 (${key})`),
+    deliver: (key, job) => {
+      const previous = promptChains.get(key) ?? Promise.resolve();
+      const next = previous
+        .then(() => deliverPrompt(key, job))
+        .then((turnQueued) => { if (!turnQueued) turnGate.release(key); })
+        .catch(async (error) => {
+          turnGate.release(key);
+          stopTyping(key);
+          if (isTransientDshError(error)) {
+            enqueueOffline(key, job);
+            return;
+          }
+          log(`投遞失敗 (${key})：${error?.message ?? error}`);
+          if (job.direct) await sendLong(key, `⚠️ 無法送出給 DSH：${error?.message ?? error}`).catch(() => {});
+        });
+      promptChains.set(key, next);
+      const cleanup = () => { if (promptChains.get(key) === next) promptChains.delete(key); };
+      next.then(cleanup, cleanup);
+    },
+  });
+
   function enqueuePrompt(key, job) {
-    const previous = promptChains.get(key) ?? Promise.resolve();
-    const next = previous
-      .then(() => deliverPrompt(key, job))
-      .catch(async (error) => {
-        stopTyping(key);
-        if (isTransientDshError(error)) {
-          enqueueOffline(key, job);
-          return;
-        }
-        log(`投遞失敗 (${key})：${error?.message ?? error}`);
-        if (job.direct) await sendLong(key, `⚠️ 無法送出給 DSH：${error?.message ?? error}`).catch(() => {});
-      });
-    promptChains.set(key, next);
-    const cleanup = () => { if (promptChains.get(key) === next) promptChains.delete(key); };
-    next.then(cleanup, cleanup);
+    turnGate.submit(key, job);
   }
 
   // 沒開 Message Content 意圖時，Discord 只會把 @bot 的訊息內容送來，所以強制走 @ 模式。
@@ -1302,7 +1321,9 @@ async function main() {
       });
     }
 
-    const batch = formatBatch(entries, { guild }) + describeSkipped(skipped);
+    // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
+    const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
+    const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
     const time = formatTimeContext({ messageAt: job.entries[0].at });
     return {
       text: [context, slangHint, memory, batch, time].filter(Boolean).join('\n'),
@@ -1310,23 +1331,24 @@ async function main() {
     };
   }
 
+  /** @returns 有沒有排出一個模型回合（沒有就不會有 turn/end，閘門要自己放行） */
   async function deliverPrompt(key, job) {
     const { epoch } = job;
     if (epoch !== epochOf(key)) {
       log(`排隊期間會話已重置，丟棄 (${key})`);
-      return;
+      return false;
     }
     const sessionId = await ensureSession(key);
     if (epoch !== epochOf(key)) {
       log(`投遞前會話已重置，丟棄 (${key})`);
-      return;
+      return false;
     }
     if (job.direct) startTyping(key, job.channel);
 
     const prompt = await buildBatchPrompt(key, job);
     if (epoch !== epochOf(key)) {
       log(`整理批次期間會話已重置，丟棄 (${key})`);
-      return;
+      return false;
     }
 
     // 發送提示每輪都給：令牌是模型呼叫 send_message 的唯一依據，壓縮過上下文之後也不能忘。
@@ -1364,10 +1386,11 @@ async function main() {
       unqueue();
       stopTyping(key);
       if (command.text) await sendLong(key, command.text);
-      return;
+      return false;
     }
-    if (job.direct && cfg.discord.ackMessage) await sendLong(key, cfg.discord.ackMessage);
-    log(`已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}）`);
+    log(`已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}${job.dropped ? `，略過 ${job.dropped} 則` : ''}）`);
+    if (job.direct && cfg.discord.ackMessage) await sendLong(key, cfg.discord.ackMessage).catch(() => {});
+    return true;
   }
 
   async function maybeReact(message, key, text) {
