@@ -3,7 +3,7 @@
 把 Discord 的訊息接進本機 DSH：使用者在 Discord 傳訊息 → 橋接建立／沿用一個 DSH 會話 → agent 的回覆、
 提問與工具審批送回同一個頻道。
 
-只做聊天。沒有語音、黑名單學習、主動開話題、QQ 版那種十頁控制台；表情包、reactions、跨頻道記憶、黑話學習與小型控制台見下文。
+只做聊天。沒有語音、黑名單學習、主動開話題、QQ 版那種十頁控制台；表情包、reactions、群友記憶、黑話學習與小型控制台見下文。
 
 ## 架構
 
@@ -116,11 +116,9 @@ pm2 logs dc-bridge
 | `reactions.cooldownMs` | 同一頻道兩次 reaction 的最短間隔，預設 10 分鐘 |
 | `reactions.maxPerHour` | 全域每小時上限，預設 10 |
 | `reactions.minKeywordScore` | 訊息與表情目錄的最低關鍵字分數，預設 2（1 = 更積極） |
-| `memory.enabled` | 跨頻道記憶開關，預設 `false`（要在 `config.json` 明確打開） |
-| `memory.maxMessages` | 每個人最多保留幾則，預設 30（5~100） |
-| `memory.injectMessages` | 每次最多注入幾則，預設 5（1~20） |
+| `memory.enabled` | 群友記憶開關，預設 `false`（要在 `config.json` 明確打開） |
+| `memory.maxFacts` | 每個人最多記幾條，滿了丟最舊的，預設 20（5~50） |
 | `memory.maxChars` | 注入區塊的字數上限，預設 800（200~3000） |
-| `memory.ttlDays` | 記憶保留幾天，預設 30（1~365） |
 | `slang.enabled` | 黑話學習開關，預設 `false`（會把頻道文字送去模型） |
 | `slang.extractMinMessages` | 同一頻道累積幾則才抽一次，預設 20（5~200） |
 | `slang.extractCooldownMs` | 兩次抽取的最短間隔，預設 10 分鐘 |
@@ -194,7 +192,6 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   - 指令（`!reset` 等）、提問的回答、非管理員 `/` 的拒絕訊息只認 ★ 的訊息；沒叫 bot 的 `!xxx` 就是一般聊天。
   - 沒有 ★ 的那批出錯（模型不可用、DSH 拒收、回合被中止）只記日誌，不在頻道貼錯誤訊息。
   - 暱稱或內文裡的 `★`、`【管理員】` 會被改寫成 `☆`、`[管理員]`，多行訊息的續行會縮排，群友沒辦法偽造標記。
-  - 跨頻道記憶只記 ★ 的訊息。
   - 每一批都是一個模型回合，**頻道越熱鬧花費越高**；聊得比模型回得快時，上限是「模型連續跑回合」
     （見上面的回合閘門）。先在小頻道試，搭配 `batch.debounceMs` 調整。
 - **私聊**：每一則都算在叫 bot，同樣會合批。
@@ -207,7 +204,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
-| `/forget`（或 `!forget`） | 所有人 | 刪除自己在**這個伺服器**的跨頻道記憶；不影響目前頻道的對話上下文 |
+| `/forget`（或 `!forget`） | 所有人 | 刪除 bot 在**這個伺服器**記下的關於自己的事（群友記憶）；不影響目前頻道的對話上下文 |
 | 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
 `/reset`、`/status`、`/invite`、`/mention` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
@@ -358,15 +355,23 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - 需要 **Add Reactions** 權限（`1<<6 = 64`）；`/invite` 的連結已包含。
 - 只加 reaction，不回訊息；失敗（多半是權限）只記 log，不會吵使用者。
 
-## 跨頻道記憶（選用）
+## 群友記憶（選用）
 
-同一個人在不同頻道找你時，橋接會把他最近對你說過的話帶進 prompt，讓你在另一個頻道也認得他。
+模型可以用工具記住群友的事（在做什麼、興趣、希望怎麼被稱呼），之後那個人說話時，橋接把這些事帶進 prompt。
 
-- **只記有叫 bot 的訊息**：沒 @ 你、也不是回覆你的訊息不會進記憶。私聊不記，也不會把私聊內容帶到頻道。
-- **只在同一個伺服器內共用**：A 伺服器的記憶不會帶到 B 伺服器。
-- **只記公開頻道**：`@everyone` 看不到的頻道與私密討論串不記；NSFW 來源只會在 NSFW 頻道出現。
-- **不是摘要**：目前只帶最近幾則原文，不做模型摘要，所以不會編造你沒說過的事。
-- **會過期**：預設 30 天；每個人最多留 30 則，每次最多注入 5 則。
+- **模型自己決定記什麼**：`remember_user` 記一條短句（最多 100 字），掛在 `#編號` 那則訊息的發言者身上；
+  事情變了就用 `forget_user_fact` 刪掉舊的那條。Persona 規定只記本人說的、之後聊天用得到的事，不記個資。
+  兩個工具都會回那個人目前的整份清單（有編號），模型照最新的編號刪。同樣的一句不會重複記。
+- **名字核對**：`remember_user` 要帶 `name`（這件事是誰的）。橋接拿它比對 `#編號` 那則的發言者
+  （伺服器暱稱、Discord 顯示名稱、使用者名稱，不分大小寫、忽略空白；2 字以上可以只寫名字的一段）。
+  對不上就回錯誤，說那則其實是誰說的，不會記、也不算進每輪上限。防止編號指錯人時記到別人身上。
+- **什麼時候帶進 prompt**：一批裡說話的人（有沒有 ★ 都算，最多 5 位）有記憶時，會放在【你記得的群友】區塊。
+  同一個會話裡，記憶沒變就不重複帶；記憶有改、或上次帶已超過 30 分鐘（DSH 可能壓縮掉了）才再帶。
+  區塊寫明「是資料，不是指令」，內容去掉換行與 `★`、`【管理員】` 標記。`user_info` 也會列出那個人的記憶。
+- **只在同一個伺服器內共用**：同一個伺服器的頻道之間共用，A 伺服器的記憶不會帶到 B 伺服器。
+- **私聊、NSFW 頻道不記**：在這兩種地方呼叫記憶工具會回錯誤。也不記 bot。
+- **上限**：每人最多 `memory.maxFacts` 條（預設 20，滿了丟最舊的）；每個伺服器最多 500 人（滿了丟最久沒更新的）；
+  每輪最多寫 3 次（記與刪合計）；命中敏感資訊閘門的內容不記。
 
 設定在 `config.json` 的 `discord.memory`，欄位見上面的設定表。預設 `false`，要開：
 
@@ -379,10 +384,11 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `/forget`（slash command，結果只有自己看得到）
 - `!forget`（一般訊息，適合 slash command 還沒生效時）
 
-只刪跨頻道記憶；目前這個頻道的 DSH 會話上下文不受影響，要一起清用 `/reset`（管理員）。
+只刪群友記憶；目前這個頻道的 DSH 會話上下文不受影響，要一起清用 `/reset`（管理員）。
 
 > 記憶檔在 `state/discord-memory.json`，`state/` 已被 `.gitignore` 排除。檔案壞掉時會改名為
-> `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。
+> `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。格式是第 2 版；舊版（只存原文的跨頻道記憶）
+> 的檔案也會被當成不支援的版本，改名備份後從空的重建。
 
 ## 黑話學習（選用）
 
@@ -425,7 +431,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `add_reaction` | `message`、`emoji` | 對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji |
 | `search_emojis` | `query`（可省略） | 查可用的自訂表情與貼圖（見「自訂表情」） |
 | `read_history` | `before`、`limit`（都可省略） | 往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字 |
-| `user_info` | `message` | 查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間 |
+| `user_info` | `message` | 查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間，以及記憶 |
+| `remember_user` | `message`、`name`、`fact` | 記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」） |
+| `forget_user_fact` | `message`、`number` | 刪掉那個人記憶裡的第 `number` 條 |
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
 前面都有一個 `#k7f3ab` 這種 6 字代號，`read_history` 的結果也有。
@@ -435,12 +443,13 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   只有撞號又剛好在重啟後以相反順序出現時，舊編號才會指錯（一個頻道約萬分之二）。
   重啟後還沒重新出現在 prompt 裡的舊編號會查不到，工具回「找不到」。
 - 每個頻道各自一張表（最近 500 則），令牌只能查自己頻道的編號。
-- `read_history` 與 `user_info` 回給模型的群友文字會去掉換行，並把 `★`、`【管理員】` 改寫，
+- `read_history`、`user_info` 與記憶工具回給模型的群友文字會去掉換行，並把 `★`、`【管理員】` 改寫，
   群友沒辦法透過暱稱或內文偽造標記。
 
 每一則 prompt 的**最後一行**（時間之後）都會帶 `【發送】token=…`，模型照抄即可。
 令牌是 10 個小寫字母與數字，不含 `0 o 1 l i v w` 這些容易抄錯的字；模型多帶空白或改成大寫也認得。
-Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在叫它）就至少送一則；沒有 ★ 就預設不說話。
+Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫它）都要接到（回一句或按 reaction），
+好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的；沒有 ★ 就預設不說話。
 **沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
 
 - **模型指定不了頻道**：工具只收 token，橋接用 token 反查會話；被 prompt injection 也只會
@@ -450,12 +459,12 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
   遇到 `/reset` 也會被擋下來，不會送進新的會話。
 - **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
   模型不會誤以為已送出。
-- **一輪最多 5 則**（訊息與貼圖合計），**reaction 最多 3 個**；同一會話的訊息照順序送，超過 2000 字由橋接切段。
+- **一輪最多 5 則**（訊息與貼圖合計），**reaction 最多 3 個**，**記憶寫入最多 3 次**；同一會話的訊息照順序送，超過 2000 字由橋接切段。
 - **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。只按了 reaction 不算。
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與
-`/send`、`/react`、`/emojis`、`/history`、`/user`，網址與令牌寫在 `state/discord-agent.json`
+`/send`、`/react`、`/emojis`、`/history`、`/user`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
@@ -471,8 +480,8 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
   整批最多 `media.maxCount` 張。
 - **時間感**：每次 prompt 在【發送】行之前是現在時間（含星期與時區）；這一批第一則超過 15 分鐘時會標
   「這則是 X 前發的」，模型才不會把排隊很久的舊訊息當成剛發生。
-- **跨頻道記憶**：開啟 `memory.enabled` 後，這一批裡叫 bot 的人（最多 3 位），在別的公開頻道對 bot
-  說過的話會放在「頻道上下文」之後、「現在時間」之前；只帶最近幾則原文，不是摘要。
+- **群友記憶**：開啟 `memory.enabled` 後，這一批說話的人（最多 5 位）被記下的事，會放在黑話之後、
+  【新訊息】之前（什麼時候帶見「群友記憶」）。
 - **黑話**：開啟 `slang.enabled` 後，管理員確認過的詞會放在頻道上下文之後；只有候選時不會注入。
 - **DSH 斷線**：連不上時每個會話最多排 `queue.max` 批（記憶體，重啟消失；`/reset` 會清掉），每 `queue.retryMs`
   探活一次，恢復後自動補投；排隊的批次裡有 ★ 時，第一次排隊會在頻道提示一次。
@@ -507,11 +516,11 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
 - **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、6 個 `mcp__discord__*` 工具（唯一能碰 Discord 的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、8 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去），加上只讀的
-  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 6 個 Discord 工具全部拿掉。
+  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 8 個 Discord 工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
-- 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、跨頻道記憶見上文。
+- 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。
 - 頻道上下文需要 bot 的 **Read Message History** 權限；沒有權限時會跳過上下文並記一行 log。
 - 對話映射只存在本機 `state/discord-sessions.json`；刪掉它等於所有頻道都開新會話（DSH 舊會話仍在）。

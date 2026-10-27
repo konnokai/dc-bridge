@@ -67,7 +67,7 @@ const USER = '222222222222222222';
 const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
-const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'read_history', 'user_info']
+const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'read_history', 'user_info', 'remember_user', 'forget_user_fact']
   .map((name) => `mcp__discord__${name}`);
 
 console.log('## 1. 設定收斂');
@@ -79,11 +79,12 @@ console.log('## 1. 設定收斂');
   ok(cfg.messageContentIntent === true, '預設申請 Message Content 意圖');
   ok(cfg.maxMessageChars === DISCORD_MAX_CHARS, '單則上限預設 2000');
   ok(cfg.questionTimeoutMs === 300_000, '提問等待預設 5 分鐘');
-  ok(cfg.memory.enabled === false, '跨頻道記憶預設關閉');
-  ok(cfg.memory.maxMessages === 30 && cfg.memory.injectMessages === 5, '記憶上限預設值');
-  const mem = normalizeDiscordConfig({ memory: { enabled: true, maxMessages: 1, injectMessages: 99, maxChars: 1, ttlDays: 9999 } }).memory;
+  ok(cfg.memory.enabled === false, '群友記憶預設關閉');
+  ok(cfg.memory.maxFacts === 20 && cfg.memory.maxChars === 800, '記憶上限預設值');
+  const mem = normalizeDiscordConfig({ memory: { enabled: true, maxFacts: 999, maxChars: 1 } }).memory;
   ok(mem.enabled === true, 'memory.enabled 可開');
-  ok(mem.maxMessages === 5 && mem.injectMessages === 20 && mem.maxChars === 200 && mem.ttlDays === 365, '記憶數字欄位收斂');
+  ok(mem.maxFacts === 50 && mem.maxChars === 200, '記憶數字欄位收斂');
+  ok(!('maxMessages' in cfg.memory) && !('ttlDays' in cfg.memory), '舊的原文記憶欄位已移除');
 
   ok(cfg.slang.enabled === false, '黑話學習預設關閉');
   ok(cfg.slang.extractMinMessages === 20 && cfg.slang.injectMax === 8 && cfg.slang.maxPerDay === 40, '黑話預設值');
@@ -123,7 +124,8 @@ console.log('## 1b. 範例設定可以直接用');
   ok(cfg.agentPreset === 'dc-chat', 'config.example.json 的 discord.agentPreset = dc-chat');
   ok(cfg.token === '', '範例不帶 token');
   ok(cfg.ownerIds.length === 0 && cfg.allow.guilds.length === 0, '範例白名單是空的（要求使用者自己填）');
-  ok(cfg.memory.enabled === false, '範例的跨頻道記憶預設關閉');
+  ok(cfg.memory.enabled === false, '範例的群友記憶預設關閉');
+  ok(!('maxMessages' in example.discord.memory), '範例沒有舊的原文記憶欄位');
   ok(cfg.slang.enabled === false, '範例的黑話學習預設關閉');
 }
 
@@ -260,7 +262,7 @@ console.log('## 7. dc-chat preset 與守衛');
   for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
-  ok(true, '白名單放行無害模型側工具、只讀搜尋與 6 個 Discord 工具');
+  ok(true, '白名單放行無害模型側工具、只讀搜尋與 8 個 Discord 工具');
   for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
@@ -821,7 +823,7 @@ console.log('## 7e. Discord MCP 發送工具');
     await client.connect(transport);
     const { tools } = await client.listTools();
     ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
-      'MCP 註冊的工具剛好就是白名單裡那 6 個');
+      'MCP 註冊的工具剛好就是白名單裡那 8 個');
     ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '每個工具都要 token');
     const sendTool = tools.find((t) => t.name === 'send_message');
     ok(['token', 'content'].every((name) => sendTool.inputSchema?.required?.includes(name))
@@ -839,6 +841,8 @@ console.log('## 7e. Discord MCP 發送工具');
       search_emojis: ['/emojis', { query: '笑' }],
       read_history: ['/history', { limit: 5 }],
       user_info: ['/user', { message: '#k7f3ab' }],
+      remember_user: ['/remember', { message: '#k7f3ab', name: '小明', fact: '在準備考試' }],
+      forget_user_fact: ['/forget-fact', { message: '#k7f3ab', number: 1 }],
     };
     for (const [name, [route, args]] of Object.entries(routes)) {
       const before = received.length;
@@ -847,6 +851,10 @@ console.log('## 7e. Discord MCP 發送工具');
     }
     const searched = await client.callTool({ name: 'search_emojis', arguments: { token: 't' } });
     ok(String(searched.content?.[0]?.text) === '來自 /emojis', '唯讀工具把橋接回的 text 原樣交給模型');
+    const remembered = await client.callTool({ name: 'remember_user', arguments: { token: 't', message: '#k7f3ab', name: '小明', fact: '喜歡貓' } });
+    ok(String(remembered.content?.[0]?.text) === '來自 /remember', '記憶工具把橋接回的最新清單交給模型');
+    const rememberTool = tools.find((t) => t.name === 'remember_user');
+    ok(['message', 'name', 'fact'].every((name) => rememberTool.inputSchema?.required?.includes(name)), 'remember_user：message / name / fact 必填');
     const failed = await client.callTool({
       name: 'send_message',
       arguments: { token: 'bad', content: '嗨' },

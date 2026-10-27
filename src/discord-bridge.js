@@ -34,12 +34,15 @@ import { formatQuote, formatRecentContext, formatTimeContext } from './core/disc
 import { findSensitive } from './core/discord-security.mjs';
 import { formatEmojiLine, loadCatalogs, queryTokens, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
+  forgetFact,
   forgetUser,
-  formatUserMemory,
+  formatMemoryBlock,
   loadMemoryFile,
-  pruneMemory,
-  recordUserMessage,
+  nameMatches,
+  numberFacts,
+  rememberFact,
   saveMemoryFile,
+  userFacts,
 } from './core/discord-memory.mjs';
 import {
   SLANG_STATUS,
@@ -83,6 +86,9 @@ const TYPING_MAX_MS = 10 * 60 * 1000; // 回合卡住時不要讓「正在輸入
 const TURN_RELEASE_MS = 5 * 60 * 1000; // 等不到 turn/end 時，最久把下一批壓這麼久
 const HELD_MAX = 50; // 回合進行中壓住的訊息最多幾則（★ 那幾則不算在內，一定留著）
 const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重啟就沒了）
+const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
+const MEMORY_WRITES_PER_TURN = 3; // 記憶會留存、又是群友文字推動的，一輪寫幾次要有上限
+const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一次（DSH 可能已經壓縮掉了）
 
 /**
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
@@ -116,7 +122,7 @@ const slashCommandData = [
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('forget')
-    .setDescription('刪除你在這個伺服器的跨頻道記憶')
+    .setDescription('刪除 bot 在這個伺服器記下的關於你的事')
     .setDMPermission(false),
 ].map((command) => command.toJSON());
 
@@ -224,7 +230,7 @@ async function main() {
   const { sessions } = loadSessions(SESSIONS_FILE);
   const reverse = new Map(Object.entries(sessions).map(([key, sessionId]) => [sessionId, key]));
 
-  // 跨頻道記憶：只記有叫 bot 的公開頻道訊息；私聊與私密頻道不記。
+  // 群友記憶：模型用 remember_user 記的；私聊與 NSFW 頻道不記（在工具入口擋）。
   const memoryLoaded = loadMemoryFile(MEMORY_FILE);
   const memoryStore = memoryLoaded.store;
   if (memoryLoaded.warning) log(`⚠️ 記憶檔：${memoryLoaded.warning}`);
@@ -252,13 +258,8 @@ async function main() {
     }
   }
 
-  if (cfg.discord.memory.enabled) {
-    const pruned = pruneMemory(memoryStore, { ...cfg.discord.memory, maxUsers: 200 });
-    if (pruned.usersRemoved > 0 || pruned.messagesRemoved > 0) {
-      log(`記憶整理：移除 ${pruned.usersRemoved} 人 / ${pruned.messagesRemoved} 則`);
-      markMemoryDirty();
-    }
-  }
+  const memoryShown = new Map(); // key -> Map<userId, { updatedAt, at }>：這個會話帶過誰的記憶
+  const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
   process.on('exit', () => { try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ } });
 
   // 黑話詞庫：候選靠學習會話產生，只有管理員在控制台確認過的才會注入 prompt。
@@ -561,6 +562,8 @@ async function main() {
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
     primedKeys.delete(key);
+    memoryShown.delete(key);
+    memoryWrites.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
     const entry = pending.get(key);
@@ -696,12 +699,13 @@ async function main() {
     });
   }
 
+  const agentSecrets = () => [process.env.DISCORD_TOKEN, cfg.dsh.authToken, consoleTokenValue];
   const agentSender = createAgentSender({
     sessions,
     reverse,
     resolveChannel,
     isAllowed: isChannelAllowed,
-    secrets: () => [process.env.DISCORD_TOKEN, cfg.dsh.authToken, consoleTokenValue],
+    secrets: agentSecrets,
     blockSensitive: () => cfg.discord.security.blockSensitive,
     deliver: deliverAgentMessage,
     deliverReaction,
@@ -712,6 +716,30 @@ async function main() {
   // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
   const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
   const shortTime = (date) => (date ? date.toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+
+  /**
+   * 記憶工具的共同關卡：令牌、開關、私聊／NSFW、每輪上限、#編號 → 發言者。
+   * 有 name 就核對發言者：#編號 指錯人時（例如重啟前的舊編號）不能記到別人身上。
+   */
+  async function memoryTarget(body, name = null) {
+    const { key, channel } = await agentSender.resolve(body.token);
+    if (!cfg.discord.memory.enabled) throw toolError('群友記憶沒開（config.json 的 discord.memory.enabled）', 403);
+    if (!channel.guildId) throw toolError('私聊不記群友記憶', 403);
+    if (channelIsNsfw(channel)) throw toolError('NSFW 頻道不記群友記憶', 403);
+    const used = memoryWrites.get(key) ?? 0;
+    if (used >= MEMORY_WRITES_PER_TURN) throw toolError(`一輪最多寫 ${MEMORY_WRITES_PER_TURN} 次記憶，下一輪再記`, 429);
+    const ref = textArg(body.message);
+    const target = await fetchByRef(key, ref);
+    if (target.author?.bot) throw toolError('不記 bot', 400);
+    // REST 抓回來的訊息不一定帶 member，prompt 顯示的是伺服器暱稱，要另外抓。
+    const member = target.member ?? await target.guild?.members.fetch(target.author.id).catch(() => null);
+    const shown = member?.displayName ?? authorName(target);
+    if (name !== null && !nameMatches(name, [member?.displayName, target.author?.displayName, target.author?.username])) {
+      throw toolError(`${ref} 是「${flat(shown, 40)}」說的，不是「${flat(name, 40)}」。要記「${flat(name, 40)}」的事，message 給他自己說的那則 #編號`, 400);
+    }
+    memoryWrites.set(key, used + 1);
+    return { key, target, guildId: channel.guildId, shown };
+  }
 
   const agentHandlers = {
     async send(body) {
@@ -793,7 +821,29 @@ async function main() {
         member?.joinedAt ? `加入伺服器：${member.joinedAt.toISOString().slice(0, 10)}` : '',
         target.author?.createdAt ? `帳號建立：${target.author.createdAt.toISOString().slice(0, 10)}` : '',
       ];
+      const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { guildId: target.guildId, userId: target.author?.id }) : [];
+      if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
       return { text: lines.filter(Boolean).join('\n') };
+    },
+    async remember(body) {
+      const { key, target, guildId, shown: name } = await memoryTarget(body, textArg(body.name, 40));
+      const fact = typeof body.fact === 'string' ? body.fact : '';
+      if (cfg.discord.security.blockSensitive && findSensitive(fact, [...agentSecrets(), body.token])) {
+        throw toolError('這條像是密碼、令牌或本機路徑，不能記', 400);
+      }
+      const facts = rememberFact(memoryStore, { guildId, userId: target.author.id, name, fact }, { maxFacts: cfg.discord.memory.maxFacts });
+      if (!facts) throw toolError('fact 是空的', 400);
+      markMemoryDirty();
+      log(`MCP 記住 ${key}（${textArg(body.message)}，現在 ${facts.length} 條）`);
+      return { text: `已記住。${flat(name, 40)} 現在記著：${numberFacts(facts)}` };
+    },
+    async 'forget-fact'(body) {
+      const { key, target, guildId } = await memoryTarget(body);
+      const facts = forgetFact(memoryStore, { guildId, userId: target.author.id, number: body.number });
+      if (!facts) throw toolError(`沒有第 ${body.number} 條：用 user_info 看最新的清單`, 404);
+      markMemoryDirty();
+      log(`MCP 刪記憶 ${key}（${textArg(body.message)} 第 ${body.number} 條，剩 ${facts.length} 條）`);
+      return { text: facts.length ? `已刪除。現在記著：${numberFacts(facts)}` : '已刪除，這個人現在沒有記憶了。' };
     },
   };
 
@@ -990,7 +1040,10 @@ async function main() {
     if (!key) return;
 
     // 新的一輪開始：清掉上一輪的發送紀錄。
-    if (event.type === 'turn/start') agentSender.startTurn(key);
+    if (event.type === 'turn/start') {
+      agentSender.startTurn(key);
+      memoryWrites.delete(key);
+    }
     // 任何 turn/end 都放行下一批，包括沒對到 turn/start 的那種；不然頻道要卡到保險計時器。
     if (event.type === 'turn/end') turnGate.release(key);
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
@@ -1289,26 +1342,23 @@ async function main() {
       }
     }
 
-    // 跨頻道記憶：只帶這一批裡叫 bot 的人，最多 3 位，避免一批人多時記憶區塊爆長。
+    // 群友記憶：這一批說話的人（有沒有 ★ 都算，★ 的排前面），最多 5 位；同一會話沒變就不重複帶。
     let memory = '';
     if (cfg.discord.memory.enabled && guild) {
-      const seen = new Set();
-      const blocks = [];
-      for (const entry of job.entries) {
-        if (!entry.direct || seen.has(entry.userId) || seen.size >= 3) continue;
-        seen.add(entry.userId);
-        const block = formatUserMemory(memoryStore, {
-          guildId: job.guildId,
-          userId: entry.userId,
-          currentChannelId: job.channel.id,
-          currentNsfw: channelIsNsfw(job.channel),
-          maxMessages: cfg.discord.memory.injectMessages,
-          maxChars: cfg.discord.memory.maxChars,
-          ttlDays: cfg.discord.memory.ttlDays,
-        });
-        if (block) blocks.push(block);
+      const speakers = new Map();
+      for (const entry of [...job.entries].sort((a, b) => Number(b.direct) - Number(a.direct))) {
+        if (speakers.size < MEMORY_USERS_PER_BATCH && !speakers.has(entry.userId)) {
+          speakers.set(entry.userId, { userId: entry.userId, name: entry.author });
+        }
       }
-      memory = blocks.join('\n');
+      if (!memoryShown.has(key)) memoryShown.set(key, new Map());
+      memory = formatMemoryBlock(memoryStore, {
+        guildId: job.guildId,
+        users: [...speakers.values()],
+        maxChars: cfg.discord.memory.maxChars,
+        shown: memoryShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+      });
     }
 
     // 已確認的黑話：只有管理員在控制台按過「確認」的才會進來。
@@ -1443,13 +1493,6 @@ async function main() {
     if (!channel) return false;
     if (channel.nsfw === true) return true;
     return channel.isThread?.() ? channel.parent?.nsfw === true : false;
-  }
-
-  /** 顯示用的頻道名；討論串用討論串名稱。 */
-  function channelLabel(message) {
-    return message.channel?.name
-      || (message.channel?.isThread?.() ? message.channel.parent?.name : '')
-      || message.channelId;
   }
 
   // ── 黑話學習 ─────────────────────────────────────────────────────────────
@@ -1665,7 +1708,7 @@ async function main() {
     const repliedUserId = message.mentions?.repliedUser?.id ?? null;
     const text = stripBotMention(message.content, client.user.id);
     // 有沒有在叫 bot：私聊一律算；頻道看 @ 或回覆。自由參與時沒叫 bot 的訊息也會進批次，
-    // 但指令、提問回答、跨頻道記憶都只認叫 bot 的訊息。
+    // 但指令與提問回答都只認叫 bot 的訊息。
     const direct = !guildId
       || shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
 
@@ -1698,11 +1741,11 @@ async function main() {
       // 有時根本送不出去；`!reset` 一定送得到。
       const command = /^[!/]/.test(text) ? text.slice(1).trim().toLowerCase() : null;
       if (command === 'forget') {
-        if (!guildId) { await sendLong(key, '私聊沒有跨頻道記憶。'); return; }
+        if (!guildId) { await sendLong(key, '私聊沒有群友記憶。'); return; }
         const removed = forgetUser(memoryStore, { guildId, userId: message.author.id });
         if (removed) markMemoryDirty();
         await sendLong(key, removed
-          ? '已刪除你在這個伺服器的跨頻道記憶（目前頻道的對話上下文不受影響）。'
+          ? '已刪除我在這個伺服器記下的關於你的事（目前頻道的對話上下文不受影響）。'
           : '我這邊沒有你的記憶。');
         return;
       }
@@ -1736,21 +1779,6 @@ async function main() {
         await sendLong(key, '管理指令僅管理員可用。');
         return;
       }
-
-      // 跨頻道記憶：只記有叫 bot 的公開頻道訊息；私聊與私密頻道不記。
-      if (cfg.discord.memory.enabled && guildId && text && canShareChannel(message.channel)) {
-        const stored = recordUserMessage(memoryStore, {
-          guildId,
-          userId: message.author.id,
-          name: author,
-          channelId: message.channelId,
-          channelName: channelLabel(message),
-          text,
-          at: message.createdTimestamp,
-          nsfw: channelIsNsfw(message.channel),
-        }, { ...cfg.discord.memory, maxUsers: 200 });
-        if (stored) markMemoryDirty();
-      }
     }
 
     batcher.add(key, {
@@ -1781,7 +1809,7 @@ async function main() {
       if (removed) markMemoryDirty();
       await interaction.reply({
         content: removed
-          ? '已刪除你在這個伺服器的跨頻道記憶（目前頻道的對話上下文不受影響）。'
+          ? '已刪除我在這個伺服器記下的關於你的事（目前頻道的對話上下文不受影響）。'
           : '這個伺服器沒有你的記憶。',
         flags: MessageFlags.Ephemeral,
       });

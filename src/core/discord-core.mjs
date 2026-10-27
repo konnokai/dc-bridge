@@ -147,12 +147,10 @@ export function normalizeDiscordConfig(raw) {
       minKeywordScore: clamp(src.reactions?.minKeywordScore, 2, 1, 10),
     },
     memory: {
-      // 跨頻道記憶：同一個人在別的頻道對 bot 說過的話。預設關閉（會保存使用者文字）。
+      // 群友記憶：模型用 remember_user 記下的事。預設關閉（會保存關於使用者的文字）。
       enabled: src.memory?.enabled === true,
-      maxMessages: clamp(src.memory?.maxMessages, 30, 5, 100),
-      injectMessages: clamp(src.memory?.injectMessages, 5, 1, 20),
+      maxFacts: clamp(src.memory?.maxFacts, 20, 5, 50),
       maxChars: clamp(src.memory?.maxChars, 800, 200, 3000),
-      ttlDays: clamp(src.memory?.ttlDays, 30, 1, 365),
     },
     slang: {
       // 黑話學習：從允許的頻道收集語料，學習會話產生候選，人工確認後才注入。

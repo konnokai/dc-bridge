@@ -145,12 +145,37 @@ tool(
 
 tool(
   'user_info',
-  '查某則訊息的發言者：顯示名稱、使用者名稱、身分組、加入伺服器時間。',
+  '查某則訊息的發言者：顯示名稱、使用者名稱、身分組、加入伺服器時間，以及你記得的關於他的事。',
   {
     token: sessionToken,
     message: messageRef('那個人說過的某一則訊息'),
   },
   '/user',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'remember_user',
+  '記住某個群友的一件事（他自己說的、之後聊天用得到的）。之後他說話時會出現在【你記得的群友】。回傳他目前的整份清單。',
+  {
+    token: sessionToken,
+    message: messageRef('他說這件事的那則訊息（記憶掛在這則的發言者身上）'),
+    name: z.string().describe('這件事是誰的：他在 prompt 裡的暱稱。跟那則的發言者對不上會回錯誤'),
+    fact: z.string().describe('一句短話，最多 100 字，例如「在準備期末考」「希望大家叫他阿華」'),
+  },
+  '/remember',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'forget_user_fact',
+  '刪掉某個群友記憶裡的一條（事情變了、記錯了）。編號用最新清單的；回傳刪完的清單。',
+  {
+    token: sessionToken,
+    message: messageRef('那個人說過的某一則訊息'),
+    number: z.number().int().min(1).describe('要刪第幾條（清單裡的編號）'),
+  },
+  '/forget-fact',
   (result) => String(result.text ?? ''),
 );
 

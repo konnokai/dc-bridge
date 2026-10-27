@@ -73,10 +73,8 @@
     },
     "memory": {
       "enabled": false,
-      "maxMessages": 30,
-      "injectMessages": 5,
-      "maxChars": 800,
-      "ttlDays": 30
+      "maxFacts": 20,
+      "maxChars": 800
     },
     "slang": {
       "enabled": false,
