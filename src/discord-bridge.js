@@ -18,6 +18,8 @@ import {
   INVITE_SCOPES,
   buildInviteUrl,
   conversationKeyFor,
+  describeToolCall,
+  formatProgress,
   invitePermissionsBitfield,
   isConversationAllowed,
   isTransientDshError,
@@ -382,6 +384,7 @@ async function main() {
   const epochs = new Map(); // key -> 重置代次（擋掉「重置後又把舊投遞寫回去」）
   const pending = new Map(); // key -> 掛起的提問／審批
   const typingTimers = new Map(); // key -> interval
+  const progress = new Map(); // key -> 這個回合的進度訊息
   const channelCache = new Map(); // key -> channel
   const lastActive = new Map(); // key -> 最後活動時間（控制台顯示用）
   let lastFrameAt = 0; // 事件流最後一幀的時間（控制台顯示用）
@@ -587,6 +590,7 @@ async function main() {
 
   async function retireSession(key) {
     stopTyping(key);
+    finishProgress(key);
     epochs.set(key, epochOf(key) + 1);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
     batcher.drop(key);
@@ -984,6 +988,43 @@ async function main() {
     typingTimers.delete(key);
   }
 
+  // 進度訊息：只有「正在輸入」時看不出模型在搜尋還是卡住。每個回合第一次用工具才貼，邊做邊改，結束就刪。
+  function startProgress(key) {
+    finishProgress(key);
+    progress.set(key, { lines: [], message: null, chain: Promise.resolve(), replied: false });
+  }
+
+  function addProgress(key, line) {
+    const state = progress.get(key);
+    // 已經回覆了就不要再貼一則新的：它會出現在回覆下面，然後又消失。
+    if (!state || (state.replied && !state.message)) return;
+    state.lines = [...state.lines, line];
+    const content = formatProgress(state.lines);
+    state.chain = state.chain.then(async () => {
+      if (progress.get(key) !== state) return;
+      if (state.message) {
+        await state.message.edit({ content, allowedMentions: { parse: [] } });
+        return;
+      }
+      const channel = await resolveChannel(key);
+      state.message = await channel.send({
+        content,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.SuppressNotifications | MessageFlags.SuppressEmbeds,
+      });
+    }).catch((error) => log(`進度訊息更新失敗（${key}）：${error?.message ?? error}`));
+  }
+
+  function finishProgress(key) {
+    const state = progress.get(key);
+    if (!state) return;
+    progress.delete(key);
+    // 排在發送後面：還在送的那則送完再刪，不會留在頻道裡。
+    state.chain = state.chain
+      .then(() => state.message?.delete())
+      .catch((error) => log(`進度訊息刪除失敗（${key}）：${error?.message ?? error}`));
+  }
+
   // ── 提問與審批 ───────────────────────────────────────────────────────────
 
   async function cancelPendingEntry(entry) {
@@ -1171,6 +1212,13 @@ async function main() {
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
       if (/^mcp__discord__(send_message|send_sticker|add_reaction)$/.test(name)) agentSender.noteAttempt(key);
+      const state = progress.get(key);
+      if (state && /^mcp__discord__(send_message|send_sticker)$/.test(name)) state.replied = true;
+      const line = state ? describeToolCall(name, event.data?.arguments) : null;
+      if (line) {
+        const leaks = cfg.discord.security.blockSensitive && findSensitive(line, agentSecrets());
+        addProgress(key, leaks ? '🔧 使用工具' : line);
+      }
     }
 
     let collector = collectors.get(frame.sessionId);
@@ -1193,12 +1241,15 @@ async function main() {
       if (event.type === 'turn/start' && turnDirect.get(key)) {
         resolveChannel(key).then((channel) => startTyping(key, channel)).catch(() => {});
       }
+      // 進度不分有沒有人叫：它自己去搜尋時，通常接著就會開口。沒用工具的回合不會貼任何東西。
+      if (event.type === 'turn/start') startProgress(key);
       // 沒有對應 turn/start 的 turn/end（重連後補發）只需清掉殘留，不能當成新回覆。
       if (event.type === 'turn/end') collectors.delete(frame.sessionId);
       return;
     }
     collectors.delete(frame.sessionId);
     stopTyping(key);
+    finishProgress(key);
     lastActive.set(key, Date.now());
     const direct = turnDirect.get(key) ?? defaultDirect(key);
     turnDirect.delete(key);
@@ -1276,6 +1327,7 @@ async function main() {
         // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
         turnGate.releaseAll();
         for (const key of [...typingTimers.keys()]) stopTyping(key);
+        for (const key of [...progress.keys()]) finishProgress(key);
         // 學習會話也一樣：事件流斷了就不會再有回合結束，直接失敗（下次冷卻後再學）。
         for (const waiter of [...learnerWaiters.values()]) {
           waiter.fail(new Error('DSH 事件流中斷，學習回合取消'));

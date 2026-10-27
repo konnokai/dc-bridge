@@ -259,6 +259,41 @@ export function withDeniedUser(deny, userId, denied) {
   return { ...deny, users: denied ? [...others, id] : others };
 }
 
+const PROGRESS_DETAIL_MAX = 80;
+const PROGRESS_LINES_MAX = 6;
+// 發訊息、貼圖、reaction 本身就看得到，不用再列進度。
+const PROGRESS_SILENT = new Set(['mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction']);
+const PROGRESS_LABELS = {
+  'mcp__web-search-safe__web_search': ['🔍 搜尋', (args) => args.query],
+  'mcp__web-search-safe__web_fetch': ['🌐 讀取網頁', (args) => { try { return new URL(args.url).host; } catch { return ''; } }],
+  'mcp__discord__read_history': ['📜 翻聊天紀錄'],
+  'mcp__discord__user_info': ['👤 查看群友資料'],
+  'mcp__discord__server_info': ['🏠 查看伺服器資訊'],
+  'mcp__discord__search_emojis': ['😀 找表情'],
+  'mcp__discord__remember_user': ['📝 記下群友的事'],
+  'mcp__discord__forget_user_fact': ['🗑️ 刪掉一條記憶'],
+};
+
+/** 一次工具呼叫在 Discord 進度訊息裡的那一行；不用列的回 null。args 是 DSH 事件裡的 JSON 字串。 */
+export function describeToolCall(name, args) {
+  if (PROGRESS_SILENT.has(name)) return null;
+  const known = PROGRESS_LABELS[name];
+  if (!known) return `🔧 使用工具：${String(name).split('__').at(-1)}`;
+  const [label, pick] = known;
+  let detail = '';
+  try {
+    detail = String(pick?.(JSON.parse(args)) ?? '');
+  } catch { /* 參數壞掉就只顯示動作 */ }
+  detail = detail.replace(/[\s`]+/g, ' ').trim();
+  if (detail.length > PROGRESS_DETAIL_MAX) detail = `${detail.slice(0, PROGRESS_DETAIL_MAX)}…`;
+  return detail ? `${label}：${detail}` : label;
+}
+
+/** 進度訊息內容：Discord 的 `-#` 小字，只留最後幾步。 */
+export function formatProgress(lines) {
+  return lines.slice(-PROGRESS_LINES_MAX).map((line) => `-# ${line}`).join('\n');
+}
+
 /**
  * 頻道訊息是否在叫 bot。
  *

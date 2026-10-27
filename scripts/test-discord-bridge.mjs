@@ -15,6 +15,8 @@ import {
   INVITE_SCOPES,
   buildInviteUrl,
   conversationKeyFor,
+  describeToolCall,
+  formatProgress,
   invitePermissionsBitfield,
   isConversationAllowed,
   isTransientDshError,
@@ -92,6 +94,26 @@ console.log('## 1. 設定收斂');
     ok(!shouldAutoCompact({ ...at, tokens: 90_000, lastAt: 900_000 }), '10 分鐘內壓過 → 不再送');
     ok(!shouldAutoCompact({ ...at, threshold: 0, tokens: 900_000, lastAt: 0 }), '門檻 0 → 關閉');
     ok(!shouldAutoCompact({ ...at, tokens: undefined, lastAt: 0 }), '還沒有 usage → 不壓');
+  }
+  {
+    const call = (name, args) => describeToolCall(name, JSON.stringify(args));
+    ok(call('mcp__web-search-safe__web_search', { query: 'Weiss Schwarz 星塔旅人 デッキ' }) === '🔍 搜尋：Weiss Schwarz 星塔旅人 デッキ', '搜尋顯示關鍵字');
+    ok(call('mcp__web-search-safe__web_fetch', { url: 'https://www.ws-cardlist.com/?p=26311' }) === '🌐 讀取網頁：www.ws-cardlist.com', '讀網頁只顯示網域');
+    ok(describeToolCall('mcp__web-search-safe__web_fetch', '{壞掉') === '🌐 讀取網頁', '參數壞掉就不帶細節');
+    ok(call('mcp__web-search-safe__web_search', { query: '換\n行 @everyone `x`' }) === '🔍 搜尋：換 行 @everyone x', '關鍵字壓成一行、去掉反引號');
+    ok(call('mcp__web-search-safe__web_search', { query: '長'.repeat(200) }).length <= 90, '關鍵字太長會截斷');
+    for (const name of ['send_message', 'send_sticker', 'add_reaction']) {
+      ok(describeToolCall(`mcp__discord__${name}`, '{}') === null, `${name} 不列進度（本身就看得到）`);
+    }
+    const others = DISCORD_TOOL_NAMES.filter((name) => !/send_message|send_sticker|add_reaction/.test(name));
+    ok(others.every((name) => !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
+    ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
+
+    const text = formatProgress(['🔍 搜尋：a', '🌐 讀取網頁：b']);
+    ok(text === '-# 🔍 搜尋：a\n-# 🌐 讀取網頁：b', '進度用 -# 小字，一行一步');
+    const many = formatProgress(Array.from({ length: 20 }, (_, i) => `步驟 ${i}`));
+    ok(many.split('\n').length === 6 && many.includes('步驟 19') && !many.includes('步驟 13\n'), '只留最後 6 步');
+    ok(formatProgress([]) === '', '沒有步驟就是空字串');
   }
   ok(cfg.memory.enabled === false, '群友記憶預設關閉');
   ok(cfg.memory.maxFacts === 20 && cfg.memory.maxChars === 800, '記憶上限預設值');
