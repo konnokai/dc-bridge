@@ -36,7 +36,7 @@ import {
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
-import { formatQuote, formatRecentContext, formatTimeContext } from '../src/core/discord-context.mjs';
+import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from '../src/core/discord-context.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
 import { formatEmojiLine, queryTokens, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
@@ -1157,6 +1157,18 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(formatQuote({}) === '', '空引用回空字串');
   const longQuote = formatQuote({ author: 'a', content: 'x'.repeat(500) });
   ok(longQuote.length < 340 && longQuote.endsWith(']'), '引用過長會截斷');
+
+  let fetches = 0;
+  const cachedRef = { id: 'r1', content: 'API' };
+  const replyTo = (id) => ({
+    reference: { messageId: id },
+    channel: { messages: { cache: new Map([['r1', cachedRef]]) } },
+    fetchReference: async () => { fetches += 1; return { id, content: 'fetched' }; },
+  });
+  ok(await referencedMessage(replyTo('r1'), false) === cachedRef, '沒叫 bot 的回覆：快取有就帶引用');
+  ok(await referencedMessage(replyTo('r2'), false) === null && fetches === 0, '沒叫 bot 的回覆：快取沒有就不抓 API');
+  ok((await referencedMessage(replyTo('r2'), true))?.content === 'fetched' && fetches === 1, '★ 的回覆：快取沒有才抓 API');
+  ok(await referencedMessage({ channel: {} }, true) === null, '不是回覆 → null');
 
   const ctx = formatRecentContext([
     { author: 'A', content: '第一句' },

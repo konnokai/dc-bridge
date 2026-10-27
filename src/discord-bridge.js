@@ -31,7 +31,7 @@ import {
   splitDiscordMessage,
   stripBotMention,
 } from './core/discord-core.mjs';
-import { formatQuote, formatRecentContext, formatTimeContext } from './core/discord-context.mjs';
+import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
 import { findSensitive } from './core/discord-security.mjs';
 import { formatEmojiLine, loadCatalogs, queryTokens, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
@@ -1321,19 +1321,18 @@ async function main() {
           skipped.push({ name: item.name, reason: error?.message ?? String(error) });
         }
       }
-      // 引用只抓叫 bot 的訊息：自由參與時每則都抓，會被 Discord 的 rate limit 卡住。
       let quote = '';
-      if (entry.direct && entry.message?.reference?.messageId) {
-        try {
-          const referenced = await entry.message.fetchReference();
+      try {
+        const referenced = await referencedMessage(entry.message, entry.direct);
+        if (referenced) {
           quote = formatQuote({
             author: referenced.member?.displayName ?? referenced.author?.displayName ?? referenced.author?.username,
             content: referenced.content,
             hasImage: referenced.attachments?.size > 0,
           });
-        } catch (error) {
-          log(`讀取引用訊息失敗：${error?.message ?? error}`);
         }
+      } catch (error) {
+        log(`讀取引用訊息失敗：${error?.message ?? error}`);
       }
       entries.push({
         author: entry.author,
