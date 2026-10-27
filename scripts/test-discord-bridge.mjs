@@ -19,6 +19,7 @@ import {
   isConversationAllowed,
   isTransientDshError,
   sessionTitleFor,
+  withDeniedUser,
   loadSessions,
   normalizeDiscordConfig,
   parseApprovalAnswer,
@@ -136,6 +137,15 @@ console.log('## 2. 白名單');
   ok(isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '伺服器命中白名單 → 放行');
   ok(!isConversationAllowed(open, { guildId: '999999999999999999', channelId: CHANNEL, userId: USER }), '未列出的伺服器 → 擋');
   ok(!isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: '555555555555555555' }), '黑名單使用者優先於伺服器白名單');
+
+  // /blacklist：自己加入、移出；其他人與 guilds/channels 不受影響。
+  const joined = withDeniedUser(open.deny, USER, true);
+  ok(joined.users.includes(USER) && joined.users.includes('555555555555555555'), '/blacklist join:true 加入自己，保留原有名單');
+  ok(withDeniedUser(joined, USER, true).users.filter((id) => id === USER).length === 1, '重複加入不會重複');
+  const left = withDeniedUser(joined, USER, false);
+  ok(!left.users.includes(USER) && left.users.includes('555555555555555555'), '/blacklist join:false 只移出自己');
+  ok(left.guilds === open.deny.guilds && left.channels === open.deny.channels, '不動 deny.guilds / deny.channels');
+  ok(!isConversationAllowed({ ...open, deny: joined }, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '加入後自己的訊息被擋');
 
   const byChannel = normalizeDiscordConfig({ allow: { channels: [CHANNEL] } });
   ok(isConversationAllowed(byChannel, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '頻道白名單 → 放行');

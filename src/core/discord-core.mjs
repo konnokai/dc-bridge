@@ -243,6 +243,13 @@ export function isConversationAllowed(cfg, { guildId, channelId, parentId = null
   return cfg.allow.users.length === 0 && cfg.allowAllWhenEmpty;
 }
 
+/** `/blacklist`：把一個人加入或移出 deny.users，其他黑名單欄位原樣保留。 */
+export function withDeniedUser(deny, userId, denied) {
+  const id = String(userId);
+  const others = deny.users.filter((user) => user !== id);
+  return { ...deny, users: denied ? [...others, id] : others };
+}
+
 /**
  * 頻道訊息是否在叫 bot。
  *

@@ -28,6 +28,7 @@ import {
   saveSessions,
   sessionTitleFor,
   shouldHandleGuildMessage,
+  withDeniedUser,
   splitDiscordMessage,
   stripBotMention,
 } from './core/discord-core.mjs';
@@ -98,7 +99,7 @@ const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一�
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
  * 伺服器管理員可以改；真正的邊界是執行時的權限檢查（見 handleSlashCommand）。
  * dmPermission: false —— reset/status 只對伺服器頻道有意義，私聊請用 `!reset` / `!status`。
- * forget、memory 不設管理員權限：任何人都能看、刪自己的記憶。
+ * forget、memory、blacklist 不設管理員權限：任何人都能看、刪自己的記憶，或把自己加入／移出黑名單。
  */
 const slashCommandData = [
   new SlashCommandBuilder()
@@ -131,6 +132,13 @@ const slashCommandData = [
   new SlashCommandBuilder()
     .setName('forget')
     .setDescription('刪除 bot 在這個伺服器記下的關於你的事')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('blacklist')
+    .setDescription('把自己加入或移出 bot 的黑名單（所有伺服器共用，只能改自己）')
+    .addBooleanOption((option) => option
+      .setName('join')
+      .setDescription('true：加入，bot 不再處理你的訊息；false：移出。不填就只顯示目前狀態'))
     .setDMPermission(false),
 ].map((command) => command.toJSON());
 
@@ -1880,6 +1888,24 @@ async function main() {
           : '我沒有你的記憶。',
         flags: MessageFlags.Ephemeral,
       });
+      return;
+    }
+    if (interaction.commandName === 'blacklist') {
+      const join = interaction.options.getBoolean('join');
+      if (join !== null) {
+        try {
+          await updateConfig({ deny: withDeniedUser(cfg.discord.deny, interaction.user.id, join) });
+        } catch (error) {
+          await interaction.reply({ content: `更新失敗：${error?.message ?? error}`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        log(`slash /blacklist join=${join} user=${interaction.user.id}`);
+      }
+      const denied = cfg.discord.deny.users.includes(interaction.user.id);
+      const state = denied
+        ? '你在黑名單裡：bot 不會處理你的訊息（所有伺服器共用）。要移出用 /blacklist join:false。'
+        : '你不在黑名單裡。要加入用 /blacklist join:true。';
+      await interaction.reply({ content: `${join === null ? '' : '已更新。'}${state}`, flags: MessageFlags.Ephemeral });
       return;
     }
     // 選單用 default_member_permissions: Administrator，只是讓一般成員看不到（Discord 沒辦法

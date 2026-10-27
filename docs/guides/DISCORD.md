@@ -206,6 +206,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
 | `/forget`（或 `!forget`） | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
+| `/blacklist join:true\|false` | 所有人 | 把自己加入（`true`）或移出（`false`）`deny.users`，立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不再處理你的訊息（不回、不進批次、不學黑話）。不填 `join` 只顯示目前狀態。只能改自己，回覆只有自己看得到 |
 | 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
 `/reset`、`/status`、`/invite`、`/mention` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
