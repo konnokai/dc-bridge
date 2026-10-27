@@ -1061,7 +1061,7 @@ console.log('## 9. 控制台');
       usageTurns: (key) => (key === 'ch:1' ? { ok: true, key, turns: [] } : null),
       usageReset: () => { usageWasReset = true; },
       quota: async () => ({ ok: true, windows: [{ key: 'rolling', percent: 3 }] }),
-      memory: () => ({ enabled: true, guilds: [{ guildId: '1', users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }] }),
+      memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
       resetSession: async (key) => { resetKey = key; return true; },
       config: () => ({ allow: { guilds: [], channels: [], users: [] }, deny: { guilds: [], channels: [], users: [] }, ownerIds: [], media: {} }),
       updateConfig: async (patch) => {
@@ -1110,7 +1110,7 @@ console.log('## 9. 控制台');
   ok(quotaResponse.status === 200 && (await quotaResponse.json()).windows[0].percent === 3, '額度端點回 handler 的結果');
   ok((await fetch(`${base}/api/memory`)).status === 401, '沒有 token 讀不到群友記憶');
   const memoryResponse = await fetch(`${base}/api/memory`, { headers: authed });
-  ok(memoryResponse.status === 200 && (await memoryResponse.json()).guilds[0].users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');
+  ok(memoryResponse.status === 200 && (await memoryResponse.json()).users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');
 
   const sessions = await (await fetch(`${base}/api/sessions`, { headers: { 'x-console-token': 'test-token' } })).json();
   ok(sessions.sessions[0].key === 'ch:1', 'x-console-token 也通');

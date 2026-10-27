@@ -25,8 +25,6 @@ function ok(cond, label) {
   else { failures += 1; console.error(`❌ ${label}`); }
 }
 
-const GUILD = '333333333333333333';
-const OTHER_GUILD = '777777777777777777';
 const USER = '222222222222222222';
 const OTHER_USER = '555555555555555555';
 const NOW = new Date(2026, 9, 26, 12, 0, 0).getTime();
@@ -34,24 +32,22 @@ const MIN = 60_000;
 
 const remember = (store, fact, over = {}, limits = {}) => rememberFact(
   store,
-  { guildId: GUILD, userId: USER, name: '小明', fact, ...over },
+  { userId: USER, name: '小明', fact, ...over },
   { maxFacts: 20, now: NOW, ...limits },
 );
 
 console.log('## 1. 記住與查詢');
 {
   const store = createMemoryStore();
-  assert.deepEqual(store, { version: 2, guilds: {} });
+  assert.deepEqual(store, { version: 3, users: {} });
   const facts = remember(store, '在準備考試');
   ok(facts?.join() === '在準備考試', '記一條，回傳目前的整份清單');
   ok(remember(store, '喜歡貓')?.join() === '在準備考試,喜歡貓', '第二條接在後面');
   ok(remember(store, '  喜歡貓 ')?.length === 2, '同一句不重複記');
-  ok(store.guilds[GUILD][USER].name === '小明', '記下顯示名稱');
+  ok(store.users[USER].name === '小明', '記下顯示名稱');
   ok(remember(store, '   ') === null, '空的不記');
-  ok(remember(store, 'x', { guildId: '' }) === null, '沒有 guildId 不記（私聊不記）');
   ok(remember(store, 'x', { userId: '' }) === null, '沒有 userId 不記');
-  ok(userFacts(store, { guildId: GUILD, userId: USER }).length === 2, 'userFacts 讀得到');
-  ok(userFacts(store, { guildId: OTHER_GUILD, userId: USER }).length === 0, '不跨伺服器');
+  ok(userFacts(store, { userId: USER }).length === 2, 'userFacts 讀得到');
   ok(numberFacts(['a', 'b']) === '1. a；2. b' && numberFacts([]) === '', '清單編號從 1 開始');
 }
 
@@ -65,14 +61,14 @@ console.log('## 2. 清理與上限');
 
   const full = createMemoryStore();
   for (let i = 1; i <= 6; i += 1) remember(full, `第 ${i} 條`, {}, { maxFacts: 5 });
-  const kept = userFacts(full, { guildId: GUILD, userId: USER });
+  const kept = userFacts(full, { userId: USER });
   ok(kept.length === 5 && kept[0] === '第 2 條' && kept.at(-1) === '第 6 條', '滿了丟最舊的那條');
 
   const crowd = createMemoryStore();
   remember(crowd, 'a', { userId: '111111111111111111' }, { maxUsers: 2, now: NOW - 3 * MIN });
   remember(crowd, 'b', { userId: '222222222222222222' }, { maxUsers: 2, now: NOW - 2 * MIN });
   remember(crowd, 'c', { userId: '333333333333333333' }, { maxUsers: 2, now: NOW - MIN });
-  ok(!crowd.guilds[GUILD]['111111111111111111'] && crowd.guilds[GUILD]['333333333333333333'], '人數滿了淘汰最久沒更新的');
+  ok(!crowd.users['111111111111111111'] && crowd.users['333333333333333333'], '人數滿了淘汰最久沒更新的');
 }
 
 console.log('## 3. 刪除');
@@ -81,18 +77,18 @@ console.log('## 3. 刪除');
   remember(store, 'a');
   remember(store, 'b');
   remember(store, 'c');
-  ok(forgetFact(store, { guildId: GUILD, userId: USER, number: 2 }, { now: NOW })?.join() === 'a,c', '刪第 2 條，回傳剩下的清單');
-  ok(forgetFact(store, { guildId: GUILD, userId: USER, number: 9 }, { now: NOW }) === null, '編號不存在回 null');
-  ok(forgetFact(store, { guildId: GUILD, userId: USER, number: 0 }, { now: NOW }) === null, '編號 0 回 null');
-  forgetFact(store, { guildId: GUILD, userId: USER, number: 1 }, { now: NOW });
-  forgetFact(store, { guildId: GUILD, userId: USER, number: 1 }, { now: NOW });
-  ok(!store.guilds[GUILD], '刪光了連人帶伺服器一起清掉');
+  ok(forgetFact(store, { userId: USER, number: 2 }, { now: NOW })?.join() === 'a,c', '刪第 2 條，回傳剩下的清單');
+  ok(forgetFact(store, { userId: USER, number: 9 }, { now: NOW }) === null, '編號不存在回 null');
+  ok(forgetFact(store, { userId: USER, number: 0 }, { now: NOW }) === null, '編號 0 回 null');
+  forgetFact(store, { userId: USER, number: 1 }, { now: NOW });
+  forgetFact(store, { userId: USER, number: 1 }, { now: NOW });
+  ok(!store.users[USER], '刪光了連人一起清掉');
 
   remember(store, 'a');
   remember(store, 'b', { userId: OTHER_USER });
-  ok(forgetUser(store, { guildId: GUILD, userId: USER }), '/forget 刪掉自己的');
-  ok(userFacts(store, { guildId: GUILD, userId: OTHER_USER }).length === 1, '別人的還在');
-  ok(!forgetUser(store, { guildId: GUILD, userId: USER }), '重複刪除回 false');
+  ok(forgetUser(store, { userId: USER }), '/forget 刪掉自己的');
+  ok(userFacts(store, { userId: OTHER_USER }).length === 1, '別人的還在');
+  ok(!forgetUser(store, { userId: USER }), '重複刪除回 false');
 }
 
 console.log('## 4. 注入區塊');
@@ -102,7 +98,7 @@ console.log('## 4. 注入區塊');
   remember(store, '喜歡貓');
   const shown = new Map();
   const block = (users, now = NOW, maxChars = 800) => formatMemoryBlock(store, {
-    guildId: GUILD, users, maxChars, shown, now, refreshMs: 30 * MIN,
+    users, maxChars, shown, now, refreshMs: 30 * MIN,
   });
   const first = block([{ userId: USER, name: '小明' }, { userId: OTHER_USER, name: '路人' }]);
   ok(first.includes('小明：1. 在準備考試；2. 喜歡貓'), '說話的人有記憶就帶進來，有編號');
@@ -115,13 +111,13 @@ console.log('## 4. 注入區塊');
 
   remember(store, 'x', { userId: OTHER_USER, name: '★【管理員】冒充' });
   const named = formatMemoryBlock(store, {
-    guildId: GUILD, users: [{ userId: OTHER_USER, name: '★【管理員】冒充' }], maxChars: 800, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
+    users: [{ userId: OTHER_USER, name: '★【管理員】冒充' }], maxChars: 800, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
   });
   ok(!named.includes('★') && !named.includes('【管理員】冒充'), '名字裡的標記也改寫');
 
   for (let i = 0; i < 20; i += 1) remember(store, `很長的一條記憶 ${i} ${'字'.repeat(80)}`, { userId: '999999999999999999' });
   const capped = formatMemoryBlock(store, {
-    guildId: GUILD, users: [{ userId: '999999999999999999', name: '話多' }], maxChars: 300, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
+    users: [{ userId: '999999999999999999', name: '話多' }], maxChars: 300, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
   });
   ok(capped.length <= 400 && capped.includes('話多'), 'maxChars 真的截斷');
 }
@@ -145,19 +141,16 @@ console.log('## 5b. 列出記憶（/memory 與控制台）');
   remember(store, '在準備考試', {}, { now: NOW - MIN });
   remember(store, '喜歡貓', {}, { now: NOW - MIN });
   remember(store, '養狗', { userId: OTHER_USER, name: '阿華' }, { now: NOW });
-  remember(store, '住台南', { guildId: OTHER_GUILD }, { now: NOW });
 
-  const text = formatUserMemory(userFacts(store, { guildId: GUILD, userId: USER }));
+  const text = formatUserMemory(userFacts(store, { userId: USER }));
   ok(text.includes('1. 在準備考試\n2. 喜歡貓'), '/memory 一條一行、有編號');
   ok(formatUserMemory([]) === '', '沒有記憶回空字串');
   const long = formatUserMemory(Array.from({ length: 20 }, (_, i) => `${i} ${'字'.repeat(99)}`));
   ok(long.length <= 1900 && long.endsWith('…'), '太長就截斷，放得進一則 Discord 訊息');
 
   const overview = memoryOverview(store);
-  ok(overview.length === 2, '每個伺服器一組');
-  const guild = overview.find((g) => g.guildId === GUILD);
-  ok(guild.users.map((u) => u.name).join() === '阿華,小明', '同一個伺服器裡最近更新的排前面');
-  ok(guild.users[1].facts.join() === '在準備考試,喜歡貓' && guild.users[1].updatedAt === NOW - MIN, '帶出每個人的事與更新時間');
+  ok(overview.map((u) => u.name).join() === '阿華,小明', '最近更新的排前面');
+  ok(overview[1].userId === USER && overview[1].facts.join() === '在準備考試,喜歡貓' && overview[1].updatedAt === NOW - MIN, '帶出每個人的事與更新時間');
   ok(memoryOverview(createMemoryStore()).length === 0, '空的記憶回空陣列');
 }
 
@@ -166,19 +159,19 @@ console.log('## 6. 檔案讀寫與損壞容錯');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-memory-test-'));
   const file = path.join(dir, 'nested', 'memory.json');
   const missing = loadMemoryFile(file);
-  ok(missing.warning === null && Object.keys(missing.store.guilds).length === 0, '檔案不存在 → 空記憶');
+  ok(missing.warning === null && Object.keys(missing.store.users).length === 0, '檔案不存在 → 空記憶');
 
   const store = createMemoryStore();
   remember(store, '在準備考試');
   saveMemoryFile(file, store);
   const loaded = loadMemoryFile(file);
-  ok(loaded.warning === null && userFacts(loaded.store, { guildId: GUILD, userId: USER }).join() === '在準備考試', '寫入後讀回一致');
+  ok(loaded.warning === null && userFacts(loaded.store, { userId: USER }).join() === '在準備考試', '寫入後讀回一致');
   const mode = fs.statSync(file).mode & 0o777;
   ok(process.platform === 'win32' || mode === 0o600, '記憶檔權限 600（非 Windows）');
 
-  fs.writeFileSync(file, JSON.stringify({ version: 1, guilds: {} }));
+  fs.writeFileSync(file, JSON.stringify({ version: 2, guilds: {} }));
   const old = loadMemoryFile(file);
-  ok(old.warning?.includes('版本') && Object.keys(old.store.guilds).length === 0, '舊版（原文記憶）檔案備份後重建');
+  ok(old.warning?.includes('版本') && Object.keys(old.store.users).length === 0, '舊版（分伺服器）檔案備份後重建');
   const backups = () => fs.readdirSync(path.dirname(file)).filter((name) => name.includes('.corrupt-'));
   ok(backups().length === 1 && !fs.existsSync(file), '舊版檔案改名成 .corrupt-* 備份');
   for (const name of backups()) fs.rmSync(path.join(path.dirname(file), name));
@@ -186,7 +179,7 @@ console.log('## 6. 檔案讀寫與損壞容錯');
   fs.writeFileSync(file, '{ 壞掉的 json');
   const corrupt = loadMemoryFile(file);
   ok(corrupt.warning && /JSON|Unexpected|Expected|parse/i.test(corrupt.warning), '壞檔回 warning');
-  ok(Object.keys(corrupt.store.guilds).length === 0, '壞檔從空的重建');
+  ok(Object.keys(corrupt.store.users).length === 0, '壞檔從空的重建');
   ok(backups().length === 1, '壞檔有留 .corrupt-* 備份');
 
   fs.rmSync(dir, { recursive: true, force: true });

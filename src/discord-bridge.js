@@ -764,7 +764,6 @@ async function main() {
     const { key, channel } = await agentSender.resolve(body.token);
     if (!cfg.discord.memory.enabled) throw toolError('群友記憶沒開（config.json 的 discord.memory.enabled）', 403);
     if (!channel.guildId) throw toolError('私聊不記群友記憶', 403);
-    if (channelIsNsfw(channel)) throw toolError('NSFW 頻道不記群友記憶', 403);
     const used = memoryWrites.get(key) ?? 0;
     if (used >= MEMORY_WRITES_PER_TURN) throw toolError(`一輪最多寫 ${MEMORY_WRITES_PER_TURN} 次記憶，下一輪再記`, 429);
     const ref = textArg(body.message);
@@ -777,7 +776,7 @@ async function main() {
       throw toolError(`${ref} 是「${flat(shown, 40)}」說的，不是「${flat(name, 40)}」。要記「${flat(name, 40)}」的事，message 給他自己說的那則 #編號`, 400);
     }
     memoryWrites.set(key, used + 1);
-    return { key, target, guildId: channel.guildId, shown };
+    return { key, target, shown };
   }
 
   const agentHandlers = {
@@ -860,25 +859,25 @@ async function main() {
         member?.joinedAt ? `加入伺服器：${member.joinedAt.toISOString().slice(0, 10)}` : '',
         target.author?.createdAt ? `帳號建立：${target.author.createdAt.toISOString().slice(0, 10)}` : '',
       ];
-      const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { guildId: target.guildId, userId: target.author?.id }) : [];
+      const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { userId: target.author?.id }) : [];
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
       return { text: lines.filter(Boolean).join('\n') };
     },
     async remember(body) {
-      const { key, target, guildId, shown: name } = await memoryTarget(body, textArg(body.name, 40));
+      const { key, target, shown: name } = await memoryTarget(body, textArg(body.name, 40));
       const fact = typeof body.fact === 'string' ? body.fact : '';
       if (cfg.discord.security.blockSensitive && findSensitive(fact, [...agentSecrets(), body.token])) {
         throw toolError('這條像是密碼、令牌或本機路徑，不能記', 400);
       }
-      const facts = rememberFact(memoryStore, { guildId, userId: target.author.id, name, fact }, { maxFacts: cfg.discord.memory.maxFacts });
+      const facts = rememberFact(memoryStore, { userId: target.author.id, name, fact }, { maxFacts: cfg.discord.memory.maxFacts });
       if (!facts) throw toolError('fact 是空的', 400);
       markMemoryDirty();
       log(`MCP 記住 ${key}（${textArg(body.message)}，現在 ${facts.length} 條）`);
       return { text: `已記住。${flat(name, 40)} 現在記著：${numberFacts(facts)}` };
     },
     async 'forget-fact'(body) {
-      const { key, target, guildId } = await memoryTarget(body);
-      const facts = forgetFact(memoryStore, { guildId, userId: target.author.id, number: body.number });
+      const { key, target } = await memoryTarget(body);
+      const facts = forgetFact(memoryStore, { userId: target.author.id, number: body.number });
       if (!facts) throw toolError(`沒有第 ${body.number} 條：用 user_info 看最新的清單`, 404);
       markMemoryDirty();
       log(`MCP 刪記憶 ${key}（${textArg(body.message)} 第 ${body.number} 條，剩 ${facts.length} 條）`);
@@ -1391,7 +1390,6 @@ async function main() {
       }
       if (!memoryShown.has(key)) memoryShown.set(key, new Map());
       memory = formatMemoryBlock(memoryStore, {
-        guildId: job.guildId,
         users: [...speakers.values()],
         maxChars: cfg.discord.memory.maxChars,
         shown: memoryShown.get(key),
@@ -1513,13 +1511,6 @@ async function main() {
       log(`reaction 失敗（${key}）：${error?.message ?? error}`);
       return false;
     }
-  }
-
-  /** 頻道或母頻道是不是 NSFW。 */
-  function channelIsNsfw(channel) {
-    if (!channel) return false;
-    if (channel.nsfw === true) return true;
-    return channel.isThread?.() ? channel.parent?.nsfw === true : false;
   }
 
   // ── 黑話學習 ─────────────────────────────────────────────────────────────
@@ -1768,10 +1759,10 @@ async function main() {
       const command = /^[!/]/.test(text) ? text.slice(1).trim().toLowerCase() : null;
       if (command === 'forget') {
         if (!guildId) { await sendLong(key, '私聊沒有群友記憶。'); return; }
-        const removed = forgetUser(memoryStore, { guildId, userId: message.author.id });
+        const removed = forgetUser(memoryStore, { userId: message.author.id });
         if (removed) markMemoryDirty();
         await sendLong(key, removed
-          ? '已刪除我在這個伺服器記下的關於你的事（目前頻道的對話上下文不受影響）。'
+          ? '已刪除我記下的關於你的事，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
           : '我這邊沒有你的記憶。');
         return;
       }
@@ -1832,22 +1823,22 @@ async function main() {
     }
     // 看、刪記憶是自己的事，不需要管理員權限。
     if (interaction.commandName === 'memory') {
-      const facts = userFacts(memoryStore, { guildId: interaction.guildId, userId: interaction.user.id });
+      const facts = userFacts(memoryStore, { userId: interaction.user.id });
       await interaction.reply({
         content: facts.length
-          ? `我在這個伺服器記得你的事：\n${formatUserMemory(facts)}\n\n要全部刪掉用 /forget。`
-          : '我在這個伺服器沒有記住你的事。',
+          ? `我記得你的事（所有伺服器共用）：\n${formatUserMemory(facts)}\n\n要全部刪掉用 /forget。`
+          : '我沒有記住你的事。',
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     if (interaction.commandName === 'forget') {
-      const removed = forgetUser(memoryStore, { guildId: interaction.guildId, userId: interaction.user.id });
+      const removed = forgetUser(memoryStore, { userId: interaction.user.id });
       if (removed) markMemoryDirty();
       await interaction.reply({
         content: removed
-          ? '已刪除我在這個伺服器記下的關於你的事（目前頻道的對話上下文不受影響）。'
-          : '這個伺服器沒有你的記憶。',
+          ? '已刪除我記下的關於你的事，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
+          : '我沒有你的記憶。',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -2146,7 +2137,7 @@ async function main() {
           quota: quotaInfo,
           memory: () => ({
             enabled: cfg.discord.memory.enabled,
-            guilds: memoryOverview(memoryStore).map((guild) => ({ ...guild, guildName: client.guilds.cache.get(guild.guildId)?.name ?? '' })),
+            users: memoryOverview(memoryStore),
           }),
           usageTurns: (key, limit) => usage.ledger.conversation(key, { turnLimit: limit }),
           usageReset: () => {

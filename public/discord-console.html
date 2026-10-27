@@ -227,7 +227,7 @@
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 remember_user 記下的事，唯讀。要刪請當事人用 /forget。</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>伺服器</th><th>群友</th><th>記得的事</th><th>更新</th></tr></thead>
+        <thead><tr><th>群友</th><th>記得的事</th><th>更新</th></tr></thead>
         <tbody id="memory-rows"></tbody>
       </table>
     </div>
@@ -693,16 +693,15 @@
   }
 
   function renderMemory(data) {
-    const rows = (data?.guilds ?? []).flatMap((guild) => guild.users.map((user) => ({ guild, user })));
+    const rows = data?.users ?? [];
     $('memory-count').textContent = data?.enabled
       ? `（${rows.length} 人）`
       : '（已關閉：config.json 的 discord.memory.enabled）';
-    $('memory-rows').replaceChildren(...(rows.length ? rows.map(({ guild, user }) => el('tr', {},
-      el('td', { className: 'muted' }, guild.guildName || guild.guildId),
+    $('memory-rows').replaceChildren(...(rows.length ? rows.map((user) => el('tr', {},
       el('td', {}, el('strong', {}, user.name || user.userId)),
       el('td', {}, ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact))),
       el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(user.updatedAt)),
-    )) : [el('tr', {}, el('td', { colSpan: 4, className: 'muted' }, '還沒有記住任何人。'))]));
+    )) : [el('tr', {}, el('td', { colSpan: 3, className: 'muted' }, '還沒有記住任何人。'))]));
   }
 
   function renderSessions(list) {    $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},

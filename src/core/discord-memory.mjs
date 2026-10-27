@@ -1,8 +1,8 @@
 // 群友記憶：模型用 remember_user 記下的「關於某個人的事」，那個人說話時帶進 prompt。
 //
 // 邊界（重要）：
-//   - 只記 guild 頻道；私聊不記（橋接在工具入口擋，這裡沒有 guildId 也不收）。
-//   - 不跨伺服器：A 伺服器的記憶不會出現在 B 伺服器；同一個伺服器的頻道之間共用。
+//   - 只記 guild 頻道（含 NSFW）；私聊不記，由橋接在工具入口擋。
+//   - 記憶掛在使用者身上，所有伺服器共用：在 A 伺服器記的事，那個人到 B 伺服器也會帶。
 //   - 記什麼由模型決定，但每一條都是短句、去掉換行與 ★／【管理員】標記，群友沒辦法透過記憶偽造標記。
 //
 // 這裡只做純資料處理（不 import discord.js），方便離線測試；Discord 權限判斷在橋接裡。
@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { defang } from './discord-batch.mjs';
 
-export const MEMORY_VERSION = 2;
+export const MEMORY_VERSION = 3;
 export const MEMORY_MAX_BYTES = 5 * 1024 * 1024;
 export const MEMORY_MAX_FACT_CHARS = 100;
 export const MEMORY_MAX_USERS = 500;
@@ -33,14 +33,14 @@ function backupCorrupt(file) {
 
 /** 空記憶。 */
 export function createMemoryStore() {
-  return { version: MEMORY_VERSION, guilds: {} };
+  return { version: MEMORY_VERSION, users: {} };
 }
 
-const entryOf = (store, guildId, userId) => store?.guilds?.[String(guildId ?? '')]?.[String(userId ?? '')] ?? null;
+const entryOf = (store, userId) => store?.users?.[String(userId ?? '')] ?? null;
 
 /** 某個人目前記著的事（舊→新）。 */
-export function userFacts(store, { guildId, userId } = {}) {
-  return (entryOf(store, guildId, userId)?.facts ?? []).map((fact) => fact.text);
+export function userFacts(store, { userId } = {}) {
+  return (entryOf(store, userId)?.facts ?? []).map((fact) => fact.text);
 }
 
 const nameKey = (value) => defang(String(value ?? '')).replace(/\s+/g, '').toLowerCase();
@@ -62,26 +62,24 @@ export function numberFacts(facts) {
 
 /**
  * 記一條。
- * @param fact { guildId, userId, name, fact }
+ * @param fact { userId, name, fact }
  * @param limits { maxFacts, maxUsers, now }
  * @returns {string[]|null} 記完後這個人的整份清單；沒記（空的、缺 id）回 null
  */
-export function rememberFact(store, { guildId, userId, name, fact } = {}, { maxFacts = 20, maxUsers = MEMORY_MAX_USERS, now = Date.now() } = {}) {
-  const gid = String(guildId ?? '').trim();
+export function rememberFact(store, { userId, name, fact } = {}, { maxFacts = 20, maxUsers = MEMORY_MAX_USERS, now = Date.now() } = {}) {
   const uid = String(userId ?? '').trim();
   const text = cleanText(fact, MEMORY_MAX_FACT_CHARS);
-  if (!gid || !uid || !text) return null;
+  if (!uid || !text) return null;
 
-  store.guilds ??= {};
-  const guild = store.guilds[gid] ?? (store.guilds[gid] = {});
-  let entry = guild[uid];
+  const users = store.users ??= {};
+  let entry = users[uid];
   if (!entry) {
-    const ids = Object.keys(guild);
+    const ids = Object.keys(users);
     if (ids.length >= maxUsers) {
-      const oldest = ids.reduce((a, b) => ((guild[a].updatedAt ?? 0) <= (guild[b].updatedAt ?? 0) ? a : b));
-      delete guild[oldest];
+      const oldest = ids.reduce((a, b) => ((users[a].updatedAt ?? 0) <= (users[b].updatedAt ?? 0) ? a : b));
+      delete users[oldest];
     }
-    entry = guild[uid] = { name: '', updatedAt: now, facts: [] };
+    entry = users[uid] = { name: '', updatedAt: now, facts: [] };
   }
   entry.name = cleanName(name) || entry.name;
   entry.updatedAt = now;
@@ -99,25 +97,22 @@ export function rememberFact(store, { guildId, userId, name, fact } = {}, { maxF
  * 刪第 number 條（從 1 數）。
  * @returns {string[]|null} 刪完剩下的清單；沒有這一條回 null
  */
-export function forgetFact(store, { guildId, userId, number } = {}, { now = Date.now() } = {}) {
-  const entry = entryOf(store, guildId, userId);
+export function forgetFact(store, { userId, number } = {}, { now = Date.now() } = {}) {
+  const entry = entryOf(store, userId);
   const index = Number(number) - 1;
   if (!entry || !Number.isInteger(index) || index < 0 || index >= entry.facts.length) return null;
   entry.facts.splice(index, 1);
   entry.updatedAt = now;
   const left = entry.facts.map((item) => item.text);
-  if (left.length === 0) forgetUser(store, { guildId, userId });
+  if (left.length === 0) forgetUser(store, { userId });
   return left;
 }
 
-/** 刪除某個人在某個伺服器的全部記憶（/forget）。 */
-export function forgetUser(store, { guildId, userId } = {}) {
-  const gid = String(guildId ?? '');
-  const guild = store?.guilds?.[gid];
+/** 刪除某個人的全部記憶（/forget）。 */
+export function forgetUser(store, { userId } = {}) {
   const id = String(userId ?? '');
-  if (!guild || !id || !guild[id]) return false;
-  delete guild[id];
-  if (Object.keys(guild).length === 0) delete store.guilds[gid];
+  if (!id || !store?.users?.[id]) return false;
+  delete store.users[id];
   return true;
 }
 
@@ -127,19 +122,16 @@ export function formatUserMemory(facts, max = 1900) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** 控制台「群友記憶」卡片：每個伺服器一組，最近更新的人排前面。 */
+/** 控制台「群友記憶」卡片：最近更新的人排前面。 */
 export function memoryOverview(store) {
-  return Object.entries(store?.guilds ?? {}).map(([guildId, guild]) => ({
-    guildId,
-    users: Object.entries(guild)
-      .map(([userId, entry]) => ({
-        userId,
-        name: entry.name,
-        updatedAt: entry.updatedAt,
-        facts: entry.facts.map((item) => item.text),
-      }))
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
-  }));
+  return Object.entries(store?.users ?? {})
+    .map(([userId, entry]) => ({
+      userId,
+      name: entry.name,
+      updatedAt: entry.updatedAt,
+      facts: entry.facts.map((item) => item.text),
+    }))
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
 /**
@@ -151,11 +143,11 @@ export function memoryOverview(store) {
  * @param options.users  [{ userId, name }]，name 用目前的顯示名稱
  * @param options.shown  這個會話的 Map<userId, { updatedAt, at }>，會被更新
  */
-export function formatMemoryBlock(store, { guildId, users = [], maxChars = 800, shown, now = Date.now(), refreshMs } = {}) {
+export function formatMemoryBlock(store, { users = [], maxChars = 800, shown, now = Date.now(), refreshMs } = {}) {
   const lines = [];
   let used = 0;
   for (const { userId, name } of users) {
-    const entry = entryOf(store, guildId, userId);
+    const entry = entryOf(store, userId);
     if (!entry || entry.facts.length === 0) continue;
     const last = shown.get(userId);
     if (last && last.updatedAt === entry.updatedAt && now - last.at < refreshMs) continue;
@@ -196,27 +188,22 @@ export function loadMemoryFile(file) {
     backupCorrupt(file);
     return { store: createMemoryStore(), warning: `記憶檔不是合法 JSON（${error?.message ?? error}），已備份並重建` };
   }
-  if (!doc || typeof doc !== 'object' || Array.isArray(doc) || !doc.guilds || typeof doc.guilds !== 'object') {
+  if (doc?.version !== MEMORY_VERSION) {
+    backupCorrupt(file);
+    return { store: createMemoryStore(), warning: `記憶檔版本 ${doc?.version} 不支援，已備份並重建` };
+  }
+  if (!doc.users || typeof doc.users !== 'object' || Array.isArray(doc.users)) {
     backupCorrupt(file);
     return { store: createMemoryStore(), warning: '記憶檔格式錯誤，已備份並重建' };
   }
-  if (doc.version !== MEMORY_VERSION) {
-    backupCorrupt(file);
-    return { store: createMemoryStore(), warning: `記憶檔版本 ${doc.version} 不支援，已備份並重建` };
-  }
   const store = createMemoryStore();
-  for (const [guildId, guild] of Object.entries(doc.guilds)) {
-    if (!guild || typeof guild !== 'object' || Array.isArray(guild)) continue;
-    const cleanGuild = {};
-    for (const [userId, entry] of Object.entries(guild)) {
-      if (!entry || typeof entry !== 'object' || !Array.isArray(entry.facts)) continue;
-      const facts = entry.facts
-        .filter((fact) => fact && typeof fact.text === 'string' && fact.text.trim())
-        .map((fact) => ({ text: cleanText(fact.text, MEMORY_MAX_FACT_CHARS), at: Number(fact.at) || 0 }));
-      if (facts.length === 0) continue;
-      cleanGuild[userId] = { name: cleanName(entry.name), updatedAt: Number(entry.updatedAt) || 0, facts };
-    }
-    if (Object.keys(cleanGuild).length > 0) store.guilds[guildId] = cleanGuild;
+  for (const [userId, entry] of Object.entries(doc.users)) {
+    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.facts)) continue;
+    const facts = entry.facts
+      .filter((fact) => fact && typeof fact.text === 'string' && fact.text.trim())
+      .map((fact) => ({ text: cleanText(fact.text, MEMORY_MAX_FACT_CHARS), at: Number(fact.at) || 0 }));
+    if (facts.length === 0) continue;
+    store.users[userId] = { name: cleanName(entry.name), updatedAt: Number(entry.updatedAt) || 0, facts };
   }
   return { store, warning: null };
 }

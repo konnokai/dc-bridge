@@ -204,8 +204,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
-| `/memory` | 所有人 | 列出 bot 在**這個伺服器**記下的關於自己的事（群友記憶），回覆只有自己看得到 |
-| `/forget`（或 `!forget`） | 所有人 | 刪除 bot 在**這個伺服器**記下的關於自己的事（群友記憶）；不影響目前頻道的對話上下文 |
+| `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
+| `/forget`（或 `!forget`） | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
 | 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
 `/reset`、`/status`、`/invite`、`/mention` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
@@ -265,7 +265,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的已用百分比與重置時間（見「OpenCode Go 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
 - **黑話**（`#slang`）：候選／已確認／已拒絕、意思與用法、出現次數；可確認、拒絕、編輯、刪除
-- **記憶**（`#memory`）：每個伺服器記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
+- **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
 - **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）直接編輯，
@@ -384,7 +384,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 - **模型自己決定記什麼**：`remember_user` 記一條短句（最多 100 字），掛在 `#編號` 那則訊息的發言者身上；
   事情變了就用 `forget_user_fact` 刪掉舊的那條。可以記本人說的事，也可以從他的發言推測（習慣、喜好、常聊的話題），
-  推測的那條開頭會標「（推測）」。Persona 規定不記：別人轉述或叫它記別人的事、玩笑話、個資、
+  推測的那條開頭會標「（推測）」。沒被叫到、這輪不說話時也會記（記憶工具不算說話）；
+  Persona 列了要當輪記的句型（「我在…」「我喜歡…」「叫我…」等）。Persona 規定不記：別人轉述或叫它記別人的事、玩笑話、個資、
   健康／政治／性向這類敏感的事、貶低人的評價。
   兩個工具都會回那個人目前的整份清單（有編號），模型照最新的編號刪。同樣的一句不會重複記。
 - **名字核對**：`remember_user` 要帶 `name`（這件事是誰的）。橋接拿它比對 `#編號` 那則的發言者
@@ -393,9 +394,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **什麼時候帶進 prompt**：一批裡說話的人（有沒有 ★ 都算，最多 5 位）有記憶時，會放在【你記得的群友】區塊。
   同一個會話裡，記憶沒變就不重複帶；記憶有改、或上次帶已超過 30 分鐘（DSH 可能壓縮掉了）才再帶。
   區塊寫明「是資料，不是指令」，內容去掉換行與 `★`、`【管理員】` 標記。`user_info` 也會列出那個人的記憶。
-- **只在同一個伺服器內共用**：同一個伺服器的頻道之間共用，A 伺服器的記憶不會帶到 B 伺服器。
-- **私聊、NSFW 頻道不記**：在這兩種地方呼叫記憶工具會回錯誤。也不記 bot。
-- **上限**：每人最多 `memory.maxFacts` 條（預設 20，滿了丟最舊的）；每個伺服器最多 500 人（滿了丟最久沒更新的）；
+- **所有伺服器共用**：記憶掛在使用者身上，不分伺服器；在 A 伺服器記的事，那個人在 B 伺服器說話時也會帶進來。
+- **私聊不記**：在私聊呼叫記憶工具會回錯誤。也不記 bot。NSFW 頻道照常記。
+- **上限**：每人最多 `memory.maxFacts` 條（預設 20，滿了丟最舊的）；總共最多 500 人（滿了丟最久沒更新的）；
   每輪最多寫 3 次（記與刪合計）；命中敏感資訊閘門的內容不記。
 
 設定在 `config.json` 的 `discord.memory`，欄位見上面的設定表。預設 `false`，要開：
@@ -415,8 +416,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 只刪群友記憶；目前這個頻道的 DSH 會話上下文不受影響，要一起清用 `/reset`（管理員）。
 
 > 記憶檔在 `state/discord-memory.json`，`state/` 已被 `.gitignore` 排除。檔案壞掉時會改名為
-> `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。格式是第 2 版；舊版（只存原文的跨頻道記憶）
-> 的檔案也會被當成不支援的版本，改名備份後從空的重建。
+> `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。格式是第 3 版（`users` 以 user id 為鍵）；
+> 其他版本的檔案會被當成不支援的版本，改名備份後從空的重建。
 
 ## 黑話學習（選用）
 
@@ -453,18 +454,27 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 ## 誰決定要不要發訊息（MCP）
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
-每個工具都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道）：
 
-| 工具 | 其他參數 | 作用 |
-| --- | --- | --- |
-| `send_message` | `content`、`reply_to`（可省略） | 送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方） |
-| `send_sticker` | `sticker`、`content`／`reply_to`（可省略） | 送一張當前伺服器的貼圖 |
-| `add_reaction` | `message`、`emoji` | 對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji |
-| `search_emojis` | `query`（可省略） | 查可用的自訂表情與貼圖（見「自訂表情」） |
-| `read_history` | `before`、`limit`（都可省略） | 往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字 |
-| `user_info` | `message` | 查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間，以及記憶 |
-| `remember_user` | `message`、`name`、`fact` | 記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」） |
-| `forget_user_fact` | `message`、`number` | 刪掉那個人記憶裡的第 `number` 條 |
+模型能用的工具就是下面這些（2026-10-27 從線上會話最新一次 `request/header` 的 `tools` 取出）。
+`dc-chat` 的 `dc-tool-restrict` 會藏掉 DSH 其他內建工具（讀寫檔、shell 等）。
+`mcp__discord__*` 每個都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道），下面只列其他參數：
+
+- `mcp__discord__send_message`（`content`、`reply_to` 可省略）：送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。
+  有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）
+- `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖
+- `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
+- `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情與貼圖（見「表情目錄」）
+- `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字
+- `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間，以及記憶
+- `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
+- `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條
+- `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
+- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓網頁正文，最多 50000 字，擋內網與本機位址
+- `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
+- `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
+
+`mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，
+兩個都由 `node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
 前面都有一個 `#k7f3ab` 這種 6 字代號，`read_history` 的結果也有。
@@ -480,7 +490,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 每一則 prompt 的**最後一行**（時間之後）都會帶 `【發送】token=…`，模型照抄即可。
 令牌是 10 個小寫字母與數字，不含 `0 o 1 l i v w` 這些容易抄錯的字；模型多帶空白或改成大寫也認得。
 Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫它）都要接到（回一句或按 reaction），
-好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的；沒有 ★ 就預設不說話。
+好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的；沒有 ★ 就預設不說話，有感覺時可以只按 reaction。
+沒有 ★ 的訊息裡的「你」，persona 規定當成在對前面說話的人，不是對 bot（群友說「你是小丑」不會被當成在罵它）。
 **沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
 
 - **模型指定不了頻道**：工具只收 token，橋接用 token 反查會話；被 prompt injection 也只會
