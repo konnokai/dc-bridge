@@ -11,11 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { Client, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   INVITE_PERMISSIONS,
   INVITE_SCOPES,
+  adminLinks,
   buildInviteUrl,
   conversationKeyFor,
   describeToolCall,
@@ -122,6 +123,11 @@ const slashCommandData = [
   new SlashCommandBuilder()
     .setName('invite')
     .setDescription('產生機器人邀請連結（管理員）')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('console')
+    .setDescription('開啟 DSH 後台和 bridge 控制台（管理員，只有你看得到）')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false),
   new SlashCommandBuilder()
@@ -2027,6 +2033,17 @@ async function main() {
           `權限：${INVITE_PERMISSIONS.map((permission) => permission.label).join('、')}`,
           '保留 `applications.commands` scope，slash command 才會生效。',
         ].join('\n'),
+      });
+      return;
+    }
+    if (interaction.commandName === 'console') {
+      const links = adminLinks({ dshBaseUrl: cfg.dsh.baseUrl, console: cfg.discord.console, consoleToken: consoleTokenValue });
+      await interaction.editReply({
+        content: '後台連結（只有你看得到；控制台連結含 token，不要轉貼）：',
+        components: [{
+          type: ComponentType.ActionRow,
+          components: links.map(({ label, url }) => ({ type: ComponentType.Button, style: ButtonStyle.Link, label, url })),
+        }],
       });
       return;
     }

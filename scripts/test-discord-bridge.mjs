@@ -13,6 +13,7 @@ import {
   DISCORD_MAX_CHARS,
   INVITE_PERMISSIONS,
   INVITE_SCOPES,
+  adminLinks,
   buildInviteUrl,
   conversationKeyFor,
   describeToolCall,
@@ -114,6 +115,17 @@ console.log('## 1. 設定收斂');
     const many = formatProgress(Array.from({ length: 20 }, (_, i) => `步驟 ${i}`));
     ok(many.split('\n').length === 6 && many.includes('步驟 19') && !many.includes('步驟 13\n'), '只留最後 6 步');
     ok(formatProgress([]) === '', '沒有步驟就是空字串');
+  }
+  {
+    const links = adminLinks({
+      dshBaseUrl: 'http://192.168.98.21:2815/',
+      console: { enabled: true, host: '192.168.98.21', port: 3110 },
+      consoleToken: 'tok en/1',
+    });
+    ok(links.length === 2 && links[0].url === 'http://192.168.98.21:2815/', '/console：DSH 後台用 dsh.baseUrl');
+    ok(links[1].url === 'http://192.168.98.21:3110/?token=tok%20en%2F1', '/console：控制台連結帶編碼過的 token');
+    ok(adminLinks({ dshBaseUrl: 'http://x:1', console: { enabled: false, host: 'h', port: 1 }, consoleToken: 't' }).length === 1, '控制台關閉就不列');
+    ok(adminLinks({ dshBaseUrl: 'http://x:1', console: { enabled: true, host: '::1', port: 3110 }, consoleToken: 't' })[1].url === 'http://[::1]:3110/?token=t', 'IPv6 位址加中括號');
   }
   ok(cfg.memory.enabled === false, '群友記憶預設關閉');
   ok(cfg.memory.maxFacts === 20 && cfg.memory.maxChars === 800, '記憶上限預設值');

@@ -47,6 +47,16 @@ export function buildInviteUrl(clientId) {
   return `https://discord.com/oauth2/authorize?${params.toString()}`;
 }
 
+/** `/console` 的連結按鈕：DSH 後台，加上帶 token 的 bridge 控制台（控制台關閉就不列）。 */
+export function adminLinks({ dshBaseUrl, console: panel, consoleToken }) {
+  const links = [{ label: 'DSH 後台', url: dshBaseUrl }];
+  if (panel.enabled) {
+    const host = panel.host.includes(':') ? `[${panel.host}]` : panel.host;
+    links.push({ label: 'Bridge 控制台', url: `http://${host}:${panel.port}/?token=${encodeURIComponent(consoleToken)}` });
+  }
+  return links;
+}
+
 const APPROVE_WORDS = new Set(['通過', '通过', '同意', '允許', '允许', '批准', 'yes', 'y', 'approve', 'ok']);
 const REJECT_WORDS = new Set(['拒絕', '拒绝', '不同意', '不允許', '不允许', '駁回', '驳回', 'no', 'n', 'reject', 'deny']);
 
