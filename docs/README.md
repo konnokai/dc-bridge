@@ -29,7 +29,7 @@
 | [design/真人语感策略.md](design/真人语感策略.md) | 拟人化策略：短句碎片、接梗、错别字、话题漂移、选择性沉默、括号用法 | ⚠️ 文首已自注：部分「现状」写于旧版随机分句时期，最新行为以 PROJECT_GUIDE / 代码为准 |
 | [design/PLAN_SLANG.md](design/PLAN_SLANG.md) | Discord 版黑话学习：收集窗口、学习会话、候选审核、注入、控制台 API | ✅ v1 已实作；联网考究未做（本机文件） |
 | [design/PLAN_TOKEN_DASHBOARD.md](design/PLAN_TOKEN_DASHBOARD.md) | Discord 版 token/花费看板计画：接 `token-ledger` / `model-prices`、控制台 API 与 UI | ✅ 已实作（本机文件） |
-| [design/PLAN_EMOJI.md](design/PLAN_EMOJI.md) | Discord 表情/贴图：v1 目录 + 关键字 top-N + `:名称:` 代换；v2 omlx embedding + Qdrant；v3 贴图/reaction | 🚧 v1 与 v3 的 reaction 已实作，v2 与贴图待做（本机文件） |
+| [design/PLAN_EMOJI.md](design/PLAN_EMOJI.md) | Discord 表情/贴图：v1 目录 + 关键字 top-N + `:名称:` 代换；v2 omlx embedding + Qdrant；v3 贴图/reaction | 🚧 v1、v3（search_emojis / 贴图 / reaction 工具）已实作，v2 待做（本机文件） |
 
 ## research/ —— 调研记录（结论可直接引用，过程可能过时）
 

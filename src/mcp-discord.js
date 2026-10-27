@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Discord 發送 MCP server（stdio）。
+// Discord MCP server（stdio）。
 // 由 DSH 的 MCP 客戶端 spawn（cordis.patch.yml 裡的 mcp-discord 行）。
 //
-// 為什麼只有一個工具：橋接原本在回合結束時自動把模型文字送到頻道，模型沒有「不說話」
-// 的選擇。改成由模型呼叫 send_message 之後，說不說話、什麼時候說、分幾條，都是模型的
-// 決定；這裡只負責把話帶回橋接，真正的權限（會話令牌、白名單、敏感資訊、切段）在橋接端。
+// 說不說話、回覆誰、按什麼 reaction 都是模型的決定；這裡只負責把呼叫帶回橋接。
+// 真正的權限（會話令牌、白名單、敏感資訊、每輪上限、#編號只查自己頻道）都在橋接端，
+// 所以每個工具都只是一行 post。
 //
 // 端點由橋接寫在 state/discord-agent.json（重啟後埠會變，所以每次呼叫都重讀）。
 import fs from 'node:fs';
@@ -67,21 +67,91 @@ pingTimer.unref?.();
 
 const server = new McpServer({ name: 'discord', version: '0.2.1-r1' });
 
-server.tool(
+const sessionToken = z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）');
+const messageRef = (what) => z.string().describe(`${what}：訊息前面的 #編號（例如 #k7f3ab），只能用這個頻道出現過的`);
+
+/** 每個工具都是：post 到橋接 → 成功回文字，失敗回 isError（模型才不會以為做成了）。 */
+function tool(name, description, schema, pathname, success, timeoutMs = 30_000) {
+  server.tool(name, description, schema, async (args) => {
+    try {
+      const result = await post(pathname, args, timeoutMs);
+      return { content: [{ type: 'text', text: success(result) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: 'text', text: `失敗：${error?.message ?? error}` }] };
+    }
+  });
+}
+
+tool(
   'send_message',
   '把一則訊息送進目前的 Discord 會話。這是唯一能把文字送到 Discord 的方法：不呼叫就不會發出任何東西。',
   {
-    token: z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）'),
+    token: sessionToken,
     content: z.string().describe('要送出的訊息本體（Discord Markdown；:名稱: 會換成伺服器表情；太長會自動分段）'),
+    reply_to: messageRef('要用 Discord「回覆」功能接的那則訊息').optional(),
   },
-  async ({ token, content }) => {
-    try {
-      const result = await post('/send', { token, content }, 30_000);
-      return { content: [{ type: 'text', text: `已送出到 ${result.channel ?? 'Discord'}` }] };
-    } catch (error) {
-      return { isError: true, content: [{ type: 'text', text: `送出失敗：${error?.message ?? error}` }] };
-    }
+  '/send',
+  (result) => `已送出到 ${result.channel ?? 'Discord'}`,
+);
+
+tool(
+  'send_sticker',
+  '送一張這個伺服器的貼圖（名稱先用 search_emojis 查）。私聊與別的伺服器的貼圖送不了。',
+  {
+    token: sessionToken,
+    sticker: z.string().describe('貼圖名稱（search_emojis 回傳的「貼圖」那段）'),
+    content: z.string().optional().describe('跟貼圖一起送的文字，可省略'),
+    reply_to: messageRef('要回覆的那則訊息').optional(),
   },
+  '/send',
+  (result) => `已送出貼圖到 ${result.channel ?? 'Discord'}`,
+);
+
+tool(
+  'add_reaction',
+  '對某則訊息按一個表情反應。比回一句話更輕：同意、好笑、看到了，按一下就好。',
+  {
+    token: sessionToken,
+    message: messageRef('要按 reaction 的那則訊息'),
+    emoji: z.string().describe('伺服器表情名稱（例如 kekw，先用 search_emojis 查）或一個 Unicode emoji（例如 😂）'),
+  },
+  '/react',
+  () => '已按 reaction',
+);
+
+tool(
+  'search_emojis',
+  '用關鍵字查這個伺服器能用的自訂表情與貼圖。query 留空就列出這個伺服器的。',
+  {
+    token: sessionToken,
+    query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),
+  },
+  '/emojis',
+  (result) => String(result.text ?? ''),
+  10_000,
+);
+
+tool(
+  'read_history',
+  '往前讀這個頻道更早的訊息（被問到之前的事、或想知道前面在聊什麼時用）。只能讀目前這個頻道。',
+  {
+    token: sessionToken,
+    before: messageRef('從哪一則往前讀，省略就從最新的開始').optional(),
+    limit: z.number().int().min(1).max(50).optional().describe('讀幾則，預設 20，最多 50'),
+  },
+  '/history',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'user_info',
+  '查某則訊息的發言者：顯示名稱、使用者名稱、身分組、加入伺服器時間。',
+  {
+    token: sessionToken,
+    message: messageRef('那個人說過的某一則訊息'),
+  },
+  '/user',
+  (result) => String(result.text ?? ''),
 );
 
 await server.connect(new StdioServerTransport());

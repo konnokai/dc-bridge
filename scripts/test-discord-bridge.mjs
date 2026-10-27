@@ -37,8 +37,16 @@ import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext } from '../src/core/discord-context.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
-import { formatEmojiHint, queryTokens, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
-import { AGENT_MAX_CONTENT, SEND_PER_TURN_LIMIT, createAgentSender, startAgentApi } from '../src/core/discord-agent.mjs';
+import { formatEmojiLine, queryTokens, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
+import {
+  AGENT_MAX_CONTENT,
+  REACT_PER_TURN_LIMIT,
+  SEND_PER_TURN_LIMIT,
+  createAgentSender,
+  createMessageRefs,
+  messageRefOf,
+  startAgentApi,
+} from '../src/core/discord-agent.mjs';
 import { createBatcher, formatBatch } from '../src/core/discord-batch.mjs';
 import { createUsageTracker, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
@@ -59,6 +67,8 @@ const USER = '222222222222222222';
 const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
+const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'read_history', 'user_info']
+  .map((name) => `mcp__discord__${name}`);
 
 console.log('## 1. 設定收斂');
 {
@@ -247,11 +257,11 @@ console.log('## 7. dc-chat preset 與守衛');
   mod.apply({ tools: { restrict: ({ deny }) => restricted.push(...deny), guard: (fn) => { guard = fn; } } });
   ok(restricted.includes('pwsh') && restricted.includes('read') && restricted.includes('plugin_manager'),
     'restrict 名單含 shell／檔案／外掛裝載');
-  for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', 'mcp__discord__send_message']) {
+  for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
-  ok(true, '白名單放行無害模型側工具、只讀搜尋與 Discord 發送');
-  for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', '', null, 123]) {
+  ok(true, '白名單放行無害模型側工具、只讀搜尋與 6 個 Discord 工具');
+  for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
 
@@ -280,9 +290,9 @@ console.log('## 7. dc-chat preset 與守衛');
     },
   }, { allowWebSearch: false, allowDiscordSend: false });
   ok(learnerRestricted.includes('mcp__web-search-safe__web_search'), '註冊期把 web search 從工具清單移除');
-  ok(learnerRestricted.includes('mcp__discord__send_message'), '註冊期把 Discord 發送從工具清單移除');
+  ok(DISCORD_TOOL_NAMES.every((name) => learnerRestricted.includes(name)), '註冊期把所有 Discord 工具從清單移除');
   ok(typeof learnerGuard({ name: 'mcp__web-search-safe__web_search' }) === 'string', '執行期也拒絕 web search');
-  ok(typeof learnerGuard({ name: 'mcp__discord__send_message' }) === 'string', '執行期也拒絕 Discord 發送');
+  ok(DISCORD_TOOL_NAMES.every((name) => typeof learnerGuard({ name }) === 'string'), '執行期也拒絕所有 Discord 工具（含唯讀的）');
   ok(learnerGuard({ name: 'todo_write' }) === undefined, '無害的 todo 仍然放行');
 }
 
@@ -423,16 +433,21 @@ console.log('## 7d. 智能體發送 API（MCP）');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-agent-'));
   const file = path.join(dir, 'agent.json');
   const sent = [];
+  const reacted = [];
   const api = await startAgentApi({
     file,
-    send: async ({ token, content }) => {
-      if (token !== 'good-token') {
-        const error = new Error('會話令牌不對');
-        error.statusCode = 403;
-        throw error;
-      }
-      sent.push({ content });
-      return { channel: '測試頻道' };
+    handlers: {
+      send: async ({ token, content }) => {
+        if (token !== 'good-token') {
+          const error = new Error('會話令牌不對');
+          error.statusCode = 403;
+          throw error;
+        }
+        if (!content.trim()) throw Object.assign(new Error('content 是空的'), { statusCode: 400 });
+        sent.push({ content });
+        return { channel: '測試頻道' };
+      },
+      react: async (body) => { reacted.push(body); return {}; },
     },
   });
   ok(api.isConnected === undefined, '發送 API 不再提供連線狀態（送不送只看模型有沒有呼叫工具）');
@@ -450,14 +465,29 @@ console.log('## 7d. 智能體發送 API（MCP）');
   const noToken = await fetch(`${doc.url}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   ok(noToken.status === 401, '沒有 x-agent-token 一律拒絕');
   ok((await call({ content: 'x' })).status === 400, '缺會話令牌回 400');
-  ok((await call({ token: 'good-token', content: '   ' })).status === 400, '空內容回 400');
-  ok((await call({ token: 'good-token', content: 'x'.repeat(AGENT_MAX_CONTENT + 1) })).status === 400, '過長內容回 400');
+  ok((await call({ token: 'good-token', content: '   ' })).status === 400, '處理函式丟的 statusCode 原樣回傳');
   ok((await call({ token: 'bad-token', content: 'x' })).status === 403, '令牌不對回 403');
   const good = await call({ token: 'good-token', content: '哈囉' });
   const goodBody = await good.json();
   ok(good.status === 200 && goodBody.channel === '測試頻道', '成功時回頻道名');
   ok(sent.length === 1 && sent[0].content === '哈囉', '內容原樣交給發送函式');
-  ok((await fetch(`${doc.url}/send`, { method: 'GET', headers: { 'x-agent-token': doc.token } })).status === 404, '只開 POST /send 與 /hello');
+  const reactRes = await fetch(`${doc.url}/react`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-agent-token': doc.token },
+    body: JSON.stringify({ token: ' t1 ', message: '#abcde', emoji: '😂' }),
+  });
+  ok(reactRes.status === 200 && reacted[0]?.token === 't1' && reacted[0]?.message === '#abcde', '其他路徑也開，會話令牌先 trim 再交給處理函式');
+  const noTokenReact = await fetch(`${doc.url}/react`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-agent-token': doc.token },
+    body: JSON.stringify({ message: '#abcde' }),
+  });
+  ok(noTokenReact.status === 400 && reacted.length === 1, '每個路徑都要會話令牌，沒帶就不進處理函式');
+  for (const route of ['nope', 'constructor', 'toString', '__proto__']) {
+    const res = await fetch(`${doc.url}/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-token': doc.token }, body: '{"token":"t"}' });
+    ok(res.status === 404, `沒註冊的路徑 /${route} 回 404`);
+  }
+  ok((await fetch(`${doc.url}/send`, { method: 'GET', headers: { 'x-agent-token': doc.token } })).status === 404, '只開 POST');
   await api.close();
   ok(!fs.existsSync(file), '關閉時刪掉端點檔');
   fs.rmSync(dir, { recursive: true, force: true });
@@ -468,6 +498,7 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   const sessions = { 'ch:100': 'sess-a', 'dm:200': 'sess-b' };
   const reverse = new Map([['sess-a', 'ch:100'], ['sess-b', 'dm:200']]);
   const delivered = [];
+  const reactions = [];
   let allowed = true;
   let gate = null;
   const sender = createAgentSender({
@@ -477,9 +508,13 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
     isAllowed: () => allowed,
     secrets: () => ['SECRET-DISCORD-TOKEN'],
     blockSensitive: () => true,
-    deliver: async (key, content) => {
+    deliver: async (key, { content, replyTo, sticker }) => {
       if (gate) await gate;
-      delivered.push({ key, content });
+      delivered.push({ key, content, replyTo, sticker });
+    },
+    deliverReaction: async (key, { message, emoji }) => {
+      if (message === '#gone') throw Object.assign(new Error('找不到訊息'), { statusCode: 404 });
+      reactions.push({ key, message, emoji });
     },
   });
   const tokenA = sender.tokenFor('sess-a');
@@ -502,7 +537,27 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await rejects(sender.send({ token: tokenA.toUpperCase(), content: `抄 ${tokenA}` }), /敏感資訊/, '傳大寫令牌時，內容裡的原文令牌照樣攔截');
   allowed = false;
   await rejects(sender.send({ token: tokenA, content: 'x' }), /白名單/, '頻道不在白名單就拒絕');
+  await rejects(sender.resolve(tokenA), /白名單/, '唯讀工具走同一道門，不在白名單一樣拒絕');
+  await rejects(sender.react({ token: tokenA, message: '#a', emoji: '😂' }), /白名單/, 'reaction 也一樣');
   allowed = true;
+  ok((await sender.resolve(tokenA)).key === 'ch:100', 'resolve 回令牌自己的會話 key');
+
+  await rejects(sender.send({ token: tokenA, content: '   ' }), /空的/, '沒有貼圖時內容不能是空的');
+  await rejects(sender.send({ token: tokenA, content: 'x'.repeat(AGENT_MAX_CONTENT + 1) }), /超過/, '過長內容拒絕');
+  await sender.send({ token: tokenA, content: '', sticker: 'wave' });
+  ok(delivered.at(-1)?.sticker === 'wave' && delivered.at(-1)?.content === '', '只送貼圖可以不帶文字');
+  await sender.send({ token: tokenA, content: '對', replyTo: '#abcde' });
+  ok(delivered.at(-1)?.replyTo === '#abcde', 'reply_to 交給 deliver 去查編號');
+
+  sender.startTurn('ch:100');
+  await rejects(sender.react({ token: tokenA, message: '#gone', emoji: '😂' }), /找不到/, 'reaction 失敗回錯誤');
+  const reactBurst = await Promise.allSettled(
+    Array.from({ length: REACT_PER_TURN_LIMIT + 2 }, () => sender.react({ token: tokenA, message: '#a', emoji: '😂' })),
+  );
+  ok(reactBurst.filter((r) => r.status === 'fulfilled').length === REACT_PER_TURN_LIMIT,
+    `並行 reaction 也只按 ${REACT_PER_TURN_LIMIT} 個（失敗的那次不佔名額）`);
+  const reactTurn = sender.finishTurn('ch:100');
+  ok(reactTurn.sent === 0 && reactTurn.reacted === REACT_PER_TURN_LIMIT, '回合結束回傳按了幾個 reaction（只按 reaction 不算沒回應）');
 
   sender.startTurn('ch:100');
   const burst = await Promise.allSettled(
@@ -534,6 +589,42 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await sender.send({ token: tokenA, content: 'y' });
   sender.clearTurns();
   ok(sender.finishTurn('ch:100').sent === 0, '事件流重連時清掉回合計數');
+}
+
+console.log('## 7d2b. 訊息編號（#ref）');
+{
+  const refs = createMessageRefs({ perKey: 3 });
+  const a = refs.register('ch:1', '1300000000000000001');
+  ok(/^[2-9a-hjkmnp-uxyz]{6}$/.test(a), '編號是 6 個好抄的字');
+  ok(refs.register('ch:1', '1300000000000000001') === a, '同一則訊息重複登記，編號不變');
+  ok(refs.lookup('ch:1', `#${a.toUpperCase()} `) === '1300000000000000001', '查詢接受 #、大寫與空白');
+  ok(refs.lookup('ch:2', a) === null, '別的頻道查不到（令牌只能指自己頻道的訊息）');
+
+  // 橋接重啟 = 新的編號表。同一則訊息還是同一個編號；舊編號在新表裡查不到，不會指到別則。
+  const restarted = createMessageRefs();
+  const others = Array.from({ length: 200 }, (_, i) => restarted.register('ch:1', `13000000000000${String(i + 100).padStart(5, '0')}`));
+  ok(!others.includes(a) && restarted.lookup('ch:1', a) === null, '重啟後的新訊息不會拿到舊編號');
+  ok(restarted.register('ch:1', '1300000000000000001') === a, '重啟後同一則訊息拿回同一個編號');
+  ok(messageRefOf('1300000000000000001') === a, '編號只由訊息 id 決定');
+
+  refs.register('ch:1', '2');
+  refs.register('ch:1', '3');
+  refs.register('ch:1', '4');
+  ok(refs.lookup('ch:1', a) === null, '每個頻道只留最近 perKey 則，舊的淘汰');
+
+  // 撞號：生日問題，幾萬個 id 內就會有兩個 6 字編號相同。新的那則要拿到更長的編號，舊的不受影響。
+  const seen = new Map();
+  let pair = null;
+  for (let i = 0; !pair; i += 1) {
+    const ref = messageRefOf(`m${i}`);
+    if (seen.has(ref)) pair = [seen.get(ref), `m${i}`];
+    else seen.set(ref, `m${i}`);
+  }
+  const clash = createMessageRefs();
+  const first = clash.register('ch:1', pair[0]);
+  const second = clash.register('ch:1', pair[1]);
+  ok(second.length === 7 && clash.lookup('ch:1', first) === pair[0] && clash.lookup('ch:1', second) === pair[1],
+    '撞號時新訊息改用 7 字編號，舊的照樣指向原本那則');
 }
 
 console.log('## 7d3. 批次');
@@ -599,6 +690,12 @@ console.log('## 7d3. 批次');
   ok(guild.includes('\n★【管理員】小明：你覺得呢 [引用 阿華：今天好熱]'), '叫 bot 的訊息有 ★，管理員前綴與引用接在後面');
   ok(guild.includes('\n小美：[圖1]'), '圖片編號標在那一行');
   ok(guild.endsWith('\n小美：[圖片]'), '沒送進模型的圖寫 [圖片]');
+  ok(formatBatch([{ author: '阿華', text: '早', direct: true, ref: 'k7f3ab' }], { guild: true }).endsWith('\n#k7f3ab ★阿華：早'),
+    '有編號時放在行首');
+  ok(formatBatch([{ author: '站長', text: '你昨天說的那個', direct: false, isOwner: true }], { guild: true })
+    .endsWith('\n站長：你昨天說的那個'), '管理員沒叫 bot 時不標【管理員】（在跟朋友聊天）');
+  ok(formatBatch([{ author: 'x', text: '嗨', direct: true, isOwner: true }], { guild: false }) === '【管理員】嗨',
+    '私聊照樣標管理員');
 
   const dm = formatBatch([{ author: 'x', text: '嗨', direct: true }, { author: 'x', text: '在嗎', direct: true }], { guild: false });
   ok(dm === '嗨\n在嗎', '私聊批次只有內文，一則一行');
@@ -640,9 +737,9 @@ console.log('## 7e. Discord MCP 發送工具');
         res.end(JSON.stringify({ error: '會話令牌不對' }));
         return;
       }
-      received.push(parsed);
+      received.push({ url: req.url, ...parsed });
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, channel: '測試頻道' }));
+      res.end(JSON.stringify({ ok: true, channel: '測試頻道', text: `來自 ${req.url}` }));
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -667,15 +764,33 @@ console.log('## 7e. Discord MCP 發送工具');
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    ok(tools.length === 1 && tools[0].name === 'send_message', 'MCP 只註冊 send_message');
-    const required = tools[0].inputSchema?.required ?? [];
-    ok(['token', 'content'].every((name) => required.includes(name)), 'token / content 都是必填');
+    ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
+      'MCP 註冊的工具剛好就是白名單裡那 6 個');
+    ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '每個工具都要 token');
+    const sendTool = tools.find((t) => t.name === 'send_message');
+    ok(['token', 'content'].every((name) => sendTool.inputSchema?.required?.includes(name))
+      && !sendTool.inputSchema?.required?.includes('reply_to'), 'send_message：token / content 必填，reply_to 可省略');
     const result = await client.callTool({
       name: 'send_message',
-      arguments: { token: 't', content: '嗨' },
+      arguments: { token: 't', content: '嗨', reply_to: '#k7f3ab' },
     });
     ok(result.isError !== true && String(result.content?.[0]?.text).includes('測試頻道'), '工具呼叫會打到橋接並回頻道名');
-    ok(received.length === 1 && received[0].token === 't' && received[0].content === '嗨', '橋接收到 token 與內容');
+    ok(received.length === 1 && received[0].url === '/send' && received[0].token === 't' && received[0].content === '嗨'
+      && received[0].reply_to === '#k7f3ab', '橋接收到 token、內容與 reply_to');
+    const routes = {
+      send_sticker: ['/send', { sticker: 'wave' }],
+      add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
+      search_emojis: ['/emojis', { query: '笑' }],
+      read_history: ['/history', { limit: 5 }],
+      user_info: ['/user', { message: '#k7f3ab' }],
+    };
+    for (const [name, [route, args]] of Object.entries(routes)) {
+      const before = received.length;
+      const r = await client.callTool({ name, arguments: { token: 't', ...args } });
+      ok(r.isError !== true && received[before]?.url === route, `${name} 打到橋接的 ${route}`);
+    }
+    const searched = await client.callTool({ name: 'search_emojis', arguments: { token: 't' } });
+    ok(String(searched.content?.[0]?.text) === '來自 /emojis', '唯讀工具把橋接回的 text 原樣交給模型');
     const failed = await client.callTool({
       name: 'send_message',
       arguments: { token: 'bad', content: '嗨' },
@@ -924,6 +1039,8 @@ console.log('## 10. 引用、上下文、出站閘門');
   ], { maxMessages: 10, maxChars: 1000 });
   ok(ctx.startsWith('【最近頻道訊息】') && ctx.indexOf('第一句') < ctx.indexOf('第二句'), '上下文保持時間順序');
   ok(ctx.includes('大肥魚（你）：我在'), '自己的訊息有標記');
+  ok(formatRecentContext([{ author: 'A', content: '嗨', ref: 'k7f3ab' }], { maxMessages: 1, maxChars: 100 }).endsWith('\n#k7f3ab A：嗨'),
+    '上下文也帶 #編號');
   ok(formatRecentContext([{ author: 'A', content: '', hasImage: true }], { maxMessages: 1, maxChars: 100 }).includes('[圖片]'),
     '只有圖片的訊息用 [圖片] 佔位');
   ok(formatRecentContext([], { maxMessages: 10, maxChars: 100 }) === '', '空上下文回空字串');
@@ -983,8 +1100,12 @@ console.log('## 11. 表情目錄與代換');
   ok(picked.length <= 3, '最多 k 個');
 
   ok(retrieveEmojis(catalogs, { guildId: '111', text: '', k: 10, maxChars: 2 }).length === 0, 'maxChars 太小會截斷成空');
-  ok(formatEmojiHint([]) === '', '沒有候選回空字串');
-  ok(formatEmojiHint([{ name: 'kekw', description: '大笑', usage: '好笑時' }]).includes('kekw：大笑（好笑時）'), '提示格式');
+  const sad = retrieveEmojis(catalogs, { guildId: '111', text: '難過', k: 10, maxChars: 1000 });
+  ok(sad.length === 1 && sad[0].name === 'cry', '有查詢字時只回命中的，本服加分不會把不相關的塞進來');
+  ok(retrieveEmojis(catalogs, { guildId: '111', text: '完全無關', k: 10, maxChars: 1000 }).length === 0, '都沒命中就回空的');
+  const browse = retrieveEmojis(catalogs, { guildId: '111', text: '', k: 10, maxChars: 1000 });
+  ok(browse.length === 2 && browse.every((e) => e.guildId === '111'), '查詢字留空就列本服的');
+  ok(formatEmojiLine({ name: 'kekw', description: '大笑', usage: '好笑時' }) === 'kekw：大笑（好笑時）', '一行的格式');
 
   ok(substituteEmojiNames('笑死 :kekw:', { guildId: '111', catalogs }) === '笑死 <:kekw:e1>',
     '當前伺服器的同名優先');

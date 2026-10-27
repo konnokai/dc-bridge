@@ -32,7 +32,7 @@ import {
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext } from './core/discord-context.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { formatEmojiHint, loadCatalogs, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { formatEmojiLine, loadCatalogs, queryTokens, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetUser,
   formatUserMemory,
@@ -62,8 +62,8 @@ import {
   prepareImageBlock,
 } from './core/discord-media.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
-import { createAgentSender, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, formatBatch } from './core/discord-batch.mjs';
+import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
+import { createBatcher, defang, formatBatch } from './core/discord-batch.mjs';
 import { createUsageTracker, usageReport } from './core/discord-usage.mjs';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -605,23 +605,82 @@ async function main() {
     return channel;
   }
 
-  async function sendLong(key, text) {
+  /** replyTo（訊息 id）只掛在第一段，sticker 只掛在最後一段。 */
+  async function sendLong(key, text, { replyTo = null, stickerId = null } = {}) {
     const channel = await resolveChannel(key);
     refreshEmojiCatalogs();
     // 模型輸出 `:名稱:`，這裡換成真正的 emoji tag；找不到就保留原文。
     const rendered = substituteEmojiNames(text, { guildId: channel.guildId ?? null, catalogs: emojiCatalogs });
     const parts = splitDiscordMessage(rendered, cfg.discord.maxMessageChars);
-    if (parts.length === 0) return;
-    for (const part of parts) {
-      // parse: [] —— 模型輸出不會意外 @everyone 或 @某人
-      await channel.send({ content: part, allowedMentions: { parse: [] } });
+    if (parts.length === 0 && stickerId) parts.push('');
+    for (const [index, part] of parts.entries()) {
+      await channel.send({
+        ...(part ? { content: part } : {}),
+        ...(index === 0 && replyTo ? { reply: { messageReference: replyTo, failIfNotExists: false } } : {}),
+        ...(index === parts.length - 1 && stickerId ? { stickers: [stickerId] } : {}),
+        // parse: [] —— 模型輸出不會意外 @everyone 或 @某人；回覆也不額外 ping 對方
+        allowedMentions: { parse: [], repliedUser: false },
+      });
       if (cfg.discord.sendDelayMs > 0) await sleep(cfg.discord.sendDelayMs);
     }
   }
 
-  // ── 智能體發送（MCP） ────────────────────────────────────────────────────
-  // 模型只能透過 mcp__discord__send_message 說話；令牌、白名單、敏感資訊閘門、
+  // ── 智能體工具（MCP） ────────────────────────────────────────────────────
+  // 模型只能透過 mcp__discord__* 工具說話與動作；令牌、白名單、敏感資訊閘門、
   // 每輪上限都在 createAgentSender 裡（scripts/test-discord-bridge.mjs 有測）。
+  // 這裡只負責把 #編號、表情名稱、貼圖名稱翻成 Discord 物件。
+
+  const toolError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
+  const HISTORY_MAX = 50;
+  const HISTORY_MAX_CHARS = 6000;
+
+  /** 模型給的 #編號 → 這個會話頻道裡的 Discord 訊息；只查這個 key 的編號表。 */
+  async function fetchByRef(key, ref) {
+    const id = messageRefs.lookup(key, ref);
+    if (!id) throw toolError(`找不到訊息 ${ref}：只能用這個頻道 prompt 或 read_history 裡出現過的 #編號`, 404);
+    const channel = await resolveChannel(key);
+    try {
+      return await channel.messages.fetch(id);
+    } catch {
+      throw toolError(`訊息 ${ref} 已經不存在（可能被刪了）`, 404);
+    }
+  }
+
+  async function guildStickers(channel) {
+    const guild = channel.guild;
+    if (!guild) return [];
+    if (guild.stickers.cache.size === 0) await guild.stickers.fetch().catch(() => {});
+    return [...guild.stickers.cache.values()].filter((sticker) => sticker.available !== false);
+  }
+
+  async function deliverAgentMessage(key, { content, replyTo, sticker }) {
+    const replyMessage = replyTo ? await fetchByRef(key, replyTo) : null;
+    let stickerId = null;
+    if (sticker) {
+      const wanted = sticker.trim().toLowerCase();
+      const found = (await guildStickers(await resolveChannel(key))).find((s) => s.name.toLowerCase() === wanted);
+      // 貼圖只能送所屬伺服器的；私聊與別服的都送不了。
+      if (!found) throw toolError(`這個伺服器沒有貼圖「${sticker}」：先用 search_emojis 查貼圖名稱`, 404);
+      stickerId = found.id;
+    }
+    await sendLong(key, content, { replyTo: replyMessage?.id ?? null, stickerId });
+  }
+
+  async function deliverReaction(key, { message, emoji }) {
+    const target = await fetchByRef(key, message);
+    const name = String(emoji ?? '').trim().replace(/^:|:$/g, '');
+    refreshEmojiCatalogs();
+    const custom = substituteEmojiNames(`:${name}:`, { guildId: target.guildId ?? null, catalogs: emojiCatalogs });
+    if (custom.startsWith('<')) {
+      await target.react(custom);
+    } else if (name.length <= 16 && /^\p{Extended_Pictographic}/u.test(name)) {
+      await target.react(name);
+    } else {
+      throw toolError(`找不到表情「${emoji}」：自訂表情先用 search_emojis 查名稱，或直接給一個 Unicode emoji`, 404);
+    }
+  }
+
+  const messageRefs = createMessageRefs();
 
   function isChannelAllowed(key, channel) {
     const [kind, id] = key.split(':');
@@ -641,14 +700,99 @@ async function main() {
     isAllowed: isChannelAllowed,
     secrets: () => [process.env.DISCORD_TOKEN, cfg.dsh.authToken, consoleTokenValue],
     blockSensitive: () => cfg.discord.security.blockSensitive,
-    deliver: sendLong,
+    deliver: deliverAgentMessage,
+    deliverReaction,
   });
 
-  async function agentSend(request) {
-    const result = await agentSender.send(request);
-    log(`MCP 送出 ${result.key}（${request.content.length} 字）`);
-    return result;
-  }
+  const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+  const authorName = (message) => message.member?.displayName ?? message.author?.displayName ?? message.author?.username ?? '未知';
+  // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
+  const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
+  const shortTime = (date) => (date ? date.toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+
+  const agentHandlers = {
+    async send(body) {
+      const content = typeof body.content === 'string' ? body.content : '';
+      const result = await agentSender.send({
+        token: body.token,
+        content,
+        replyTo: textArg(body.reply_to),
+        sticker: textArg(body.sticker),
+      });
+      log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}）`);
+      return result;
+    },
+    async react(body) {
+      const result = await agentSender.react({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
+      log(`MCP reaction ${result.key}（${textArg(body.message)} ${textArg(body.emoji)}）`);
+      return result;
+    },
+    async emojis(body) {
+      const { channel } = await agentSender.resolve(body.token);
+      const query = textArg(body.query, 200);
+      refreshEmojiCatalogs();
+      const emojis = cfg.discord.emoji.enabled
+        ? retrieveEmojis(emojiCatalogs, {
+          guildId: channel.guildId ?? null,
+          text: query,
+          k: cfg.discord.emoji.maxCandidates,
+          maxChars: cfg.discord.emoji.maxChars,
+        })
+        : [];
+      const tokens = [...queryTokens(query)];
+      const stickers = (await guildStickers(channel))
+        .filter((s) => tokens.length === 0 || tokens.some((t) => `${s.name} ${s.description ?? ''} ${s.tags ?? ''}`.toLowerCase().includes(t)))
+        .slice(0, 10);
+      const lines = [];
+      if (emojis.length) lines.push('表情（在 content 裡寫 :名稱:）：', ...emojis.map((e) => flat(formatEmojiLine(e), 200)));
+      if (stickers.length) lines.push('貼圖（用 send_sticker 的 name）：', ...stickers.map((s) => flat(`${s.name}：${s.description || s.tags || ''}`, 200)));
+      return { text: lines.length ? lines.join('\n') : '沒有找到。換個短一點的關鍵字，或 query 留空列出這個伺服器的。' };
+    },
+    async history(body) {
+      const { key, channel } = await agentSender.resolve(body.token);
+      const limit = Math.min(HISTORY_MAX, Math.max(1, Number(body.limit) || 20));
+      const before = textArg(body.before);
+      const beforeId = before ? messageRefs.lookup(key, before) : null;
+      if (before && !beforeId) throw toolError(`找不到訊息 ${before}：before 要用出現過的 #編號`, 404);
+      const fetched = await channel.messages.fetch({ limit, ...(beforeId ? { before: beforeId } : {}) });
+      const lines = [];
+      let used = 0;
+      // 從新往舊裝，超過字數上限就停，再倒回舊→新。
+      for (const message of fetched.values()) {
+        const text = flat(message.content, 300)
+          || (message.attachments?.size ? '[圖片]' : '')
+          || (message.stickers?.size ? '[貼圖]' : '[沒有文字]');
+        const self = message.author?.id === client.user.id ? '（你）' : '';
+        const line = `#${messageRefs.register(key, message.id)} ${shortTime(message.createdAt)} ${flat(authorName(message), 40)}${self}：${text}`;
+        if (used + line.length > HISTORY_MAX_CHARS) break;
+        lines.push(line);
+        used += line.length + 1;
+      }
+      return { text: lines.length ? lines.reverse().join('\n') : '沒有更早的訊息了。' };
+    },
+    async user(body) {
+      const { key } = await agentSender.resolve(body.token);
+      const target = await fetchByRef(key, textArg(body.message));
+      // REST 抓回來的訊息不帶 member，快取在重啟後也是空的，要另外抓。
+      const member = target.member ?? await target.guild?.members.fetch(target.author.id).catch(() => null);
+      const roles = member
+        ? [...member.roles.cache.values()]
+          .filter((role) => role.id !== target.guildId)
+          .sort((a, b) => b.position - a.position)
+          .slice(0, 15)
+          .map((role) => flat(role.name, 40))
+        : [];
+      const lines = [
+        `顯示名稱：${flat(authorName(target), 40)}`,
+        `使用者名稱：${flat(target.author?.username, 40)}${target.author?.bot ? '（bot）' : ''}`,
+        ownerIds.has(target.author?.id) ? '這個人是管理員（bot 擁有者）' : '',
+        member ? `身分組：${roles.length ? roles.join('、') : '沒有'}` : '',
+        member?.joinedAt ? `加入伺服器：${member.joinedAt.toISOString().slice(0, 10)}` : '',
+        target.author?.createdAt ? `帳號建立：${target.author.createdAt.toISOString().slice(0, 10)}` : '',
+      ];
+      return { text: lines.filter(Boolean).join('\n') };
+    },
+  };
 
   // 同一會話短時間內的訊息合成一批，一批只開一個模型回合。
   const batcher = createBatcher({
@@ -847,7 +991,7 @@ async function main() {
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
-      if (name === 'mcp__discord__send_message') agentSender.noteAttempt(key);
+      if (/^mcp__discord__(send_message|send_sticker|add_reaction)$/.test(name)) agentSender.noteAttempt(key);
     }
 
     let collector = collectors.get(frame.sessionId);
@@ -882,8 +1026,9 @@ async function main() {
 
     const reason = ended.reason ?? {};
     if (reason.kind === 'completed') {
-      const { sent, attempted } = agentSender.finishTurn(key);
-      if (sent > 0) return;
+      const { sent, reacted, attempted } = agentSender.finishTurn(key);
+      // 只按 reaction 也算回應了，不是「忘了用工具」。
+      if (sent > 0 || reacted > 0) return;
       // 沒有呼叫工具就真的不送。回合文字可能只是思考，不是要發出去的內容，
       // 所以這裡不代送；只留一行日誌方便追「模型忘了用工具」。
       const text = String(ended.text ?? '').trim();
@@ -1084,6 +1229,7 @@ async function main() {
         text: entry.text,
         direct: entry.direct,
         isOwner: entry.isOwner,
+        ref: messageRefs.register(key, entry.id),
         quote,
         imageTags,
         hasImage: entry.hasImage,
@@ -1111,6 +1257,7 @@ async function main() {
         }
         context = formatRecentContext(
           history.reverse().map((entry) => ({
+            ref: messageRefs.register(key, entry.id),
             author: entry.member?.displayName ?? entry.author?.displayName ?? entry.author?.username,
             content: entry.content,
             bot: entry.author?.id === client.user.id,
@@ -1145,18 +1292,6 @@ async function main() {
       memory = blocks.join('\n');
     }
 
-    // 表情候選：只給 top N（每伺服器目錄，關鍵字比對；模型用 :名稱: 表示）。
-    let emojiHint = '';
-    if (cfg.discord.emoji.enabled && guild) {
-      refreshEmojiCatalogs();
-      emojiHint = formatEmojiHint(retrieveEmojis(emojiCatalogs, {
-        guildId: job.guildId,
-        text: `${job.entries.map((entry) => entry.text).join('\n')}\n${context}`,
-        k: cfg.discord.emoji.maxCandidates,
-        maxChars: cfg.discord.emoji.maxChars,
-      }));
-    }
-
     // 已確認的黑話：只有管理員在控制台按過「確認」的才會進來。
     let slangHint = '';
     if (cfg.discord.slang.enabled && guild) {
@@ -1170,7 +1305,7 @@ async function main() {
     const batch = formatBatch(entries, { guild }) + describeSkipped(skipped);
     const time = formatTimeContext({ messageAt: job.entries[0].at });
     return {
-      text: [context, slangHint, memory, emojiHint, batch, time].filter(Boolean).join('\n'),
+      text: [context, slangHint, memory, batch, time].filter(Boolean).join('\n'),
       images,
     };
   }
@@ -1195,7 +1330,7 @@ async function main() {
     }
 
     // 發送提示每輪都給：令牌是模型呼叫 send_message 的唯一依據，壓縮過上下文之後也不能忘。
-    const sendHint = `【發送】token=${agentSender.tokenFor(sessionId)}；要說話就呼叫 mcp__discord__send_message（token 照抄，content 放你要說的內容）。不呼叫就是這次不說話；直接輸出文字不會送出。`;
+    const sendHint = `【發送】token=${agentSender.tokenFor(sessionId)}；所有 mcp__discord__ 工具都要帶這個 token（照抄）。要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。不呼叫就是這次不說話；直接輸出文字不會送出。`;
     const text = `${prompt.text}\n${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
@@ -1755,8 +1890,8 @@ async function main() {
   // ── 智能體發送 API（MCP） ────────────────────────────────────────────────
   // 只綁 127.0.0.1 的隨機埠，端點寫在 state/discord-agent.json 給 MCP server 讀。
   // 啟動失敗就讓它失敗：沒有發送端點，模型就完全無法回話，比直接掛掉更難查。
-  agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, send: agentSend, log });
-  log('模型發訊息：mcp__discord__send_message（DSH 要掛 mcp-discord）');
+  agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: agentHandlers, log });
+  log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
 
   // ── 控制台 ───────────────────────────────────────────────────────────────
   /** 邀請連結：slash `/invite` 與控制台共用同一份權限清單。 */

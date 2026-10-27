@@ -55,14 +55,14 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
   let used = 0;
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const entry = list[i];
-    const author = clean(entry.author) || '未知';
+    const author = `${entry.ref ? `#${entry.ref} ` : ''}${clean(entry.author) || '未知'}${entry.bot ? '（你）' : ''}`;
     const body = cut(clean(entry.content) || '[圖片]', 400);
-    const line = `${author}${entry.bot ? '（你）' : ''}：${body}`;
+    const line = `${author}：${body}`;
     if (used + line.length > maxChars) {
       // 最新一則再長也要留一點，不然整個上下文會變空的。
       if (lines.length === 0) {
-        const room = Math.max(10, maxChars - author.length - 4);
-        lines.unshift(`${author}${entry.bot ? '（你）' : ''}：${cut(body, room)}`);
+        const room = Math.max(10, maxChars - author.length - 1);
+        lines.unshift(`${author}：${cut(body, room)}`);
       }
       break;
     }

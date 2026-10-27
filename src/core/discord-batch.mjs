@@ -11,7 +11,7 @@ const clean = (value) => String(value ?? '')
 
 // ★ 與【管理員】是橋接自己加的標記，persona 靠它們判斷「有沒有在叫你」「是不是管理員」；
 // 群友寫在暱稱或內文裡的同樣字樣要改掉，不然就能冒充。
-const defang = (value) => String(value ?? '').replace(/【管理員】/g, '[管理員]').replace(/★/g, '☆');
+export const defang = (value) => String(value ?? '').replace(/【管理員】/g, '[管理員]').replace(/★/g, '☆');
 
 /**
  * 建立批次器。
@@ -73,7 +73,7 @@ export function createBatcher({
  * 一批訊息 → prompt 裡的【新訊息】區塊。
  * 頻道：每行 `暱稱：內容`，叫 bot 的加 ★；私聊：只有內文（DSH 會話本身就是一對一）。
  *
- * @param entries { author, text, direct, isOwner?, quote?, imageTags?, hasImage? }[]
+ * @param entries { author, text, direct, isOwner?, ref?, quote?, imageTags?, hasImage? }[]
  */
 export function formatBatch(entries, { guild }) {
   const lines = entries.map((entry) => {
@@ -83,10 +83,12 @@ export function formatBatch(entries, { guild }) {
     // 群友才不能用換行在行首偽造一則「★【管理員】」。
     const text = defang(entry.text).trim().replace(/\n/g, guild ? '\n  ' : '\n');
     const body = [text, media, defang(entry.quote)].filter(Boolean).join(' ');
-    const owner = entry.isOwner ? '【管理員】' : '';
-    if (!guild) return `${owner}${body}`;
-    return `${entry.direct ? '★' : ''}${owner}${clean(defang(entry.author)) || '未知'}：${body}`;
+    // 頻道裡只有叫 bot 的那則才標管理員：管理員跟朋友聊天時也掛著標籤，模型會以為是在對它說話。
+    const owner = entry.isOwner && (entry.direct || !guild) ? '【管理員】' : '';
+    const ref = entry.ref ? `#${entry.ref} ` : '';
+    if (!guild) return `${ref}${owner}${body}`;
+    return `${ref}${entry.direct ? '★' : ''}${owner}${clean(defang(entry.author)) || '未知'}：${body}`;
   });
   if (!guild) return lines.join('\n');
-  return `【新訊息】（★ = 在叫你：@你或回覆你）\n${lines.join('\n')}`;
+  return `【新訊息】（★ = 在叫你：@你或回覆你；#編號 用來指定要回覆或按 reaction 的訊息）\n${lines.join('\n')}`;
 }

@@ -1,7 +1,8 @@
 // Discord 自訂表情目錄：挑選、格式化、把 `:名稱:` 換成真正的 emoji tag。
 //
+// 表情不再整張塞進 prompt：模型想用表情時呼叫 search_emojis 工具查，背後就是 retrieveEmojis。
 // v1 用關鍵字（中文 bigram）排序，不碰 embedding；之後要換成向量檢索時，
-// 只需替換 retrieveEmojis 的實作，prompt 格式與 `:名稱:` 協定都不用改。
+// 只需替換 retrieveEmojis 的實作，工具介面與 `:名稱:` 協定都不用改。
 //
 // 為什麼 prompt 不直接給 `<:name:id>`：id 又長又容易抄錯，而且同名 emoji 在不同
 // 伺服器有不同 id。給名稱、由橋接代換，模型只要輸出 `:名稱:`。
@@ -83,8 +84,8 @@ export function formatEmojiLine(entry) {
 
 /**
  * 挑候選表情。
- * 規則：當前伺服器 +6、名稱命中 +4、其他關鍵字每命中 +2；
- * 一定先放當前伺服器最多 3 個（即使沒命中），再按分數補到 k 個，最後受 maxChars 限制。
+ * 規則：當前伺服器 +6、名稱命中 +4、其他關鍵字每命中 +2；按分數取前 k 個，受 maxChars 限制。
+ * 有查詢字時只回命中關鍵字的；查詢字是空的就列當前伺服器的。
  */
 export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, maxChars = 600 } = {}) {
   if (!catalogs?.size) return [];
@@ -110,27 +111,11 @@ export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, ma
   }
   rows.sort((a, b) => b.score - a.score || String(a.entry.name).localeCompare(String(b.entry.name)));
 
-  const picked = [];
-  const seen = new Set();
-  const take = (row) => {
-    const key = `${row.guildId}:${row.entry.id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    picked.push(row);
-  };
-
-  if (current) {
-    let local = 0;
-    for (const row of rows) {
-      if (local >= Math.min(3, k)) break;
-      if (row.guildId === current) { take(row); local += 1; }
-    }
-  }
-  for (const row of rows) {
-    if (picked.length >= k) break;
-    if (row.score > 0) take(row);
-  }
-  // 不再用 0 分的條目硬補到 k：寧可只給 4、5 個相關的，也不要塞 8 個不相關的。
+  // 有查詢字就只要命中關鍵字的：當前伺服器的 +6 會讓每個本服表情都大於 0 分，
+  // 只看 score 會把結果塞滿不相關的。沒有查詢字就是「瀏覽」，照分數列出本服的。
+  const picked = rows
+    .filter((row) => (tokens.size > 0 ? row.keywordScore > 0 : row.score > 0))
+    .slice(0, k);
 
   const out = [];
   let used = 0;
@@ -141,12 +126,6 @@ export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, ma
     used += line.length + 1;
   }
   return out;
-}
-
-/** 組成 prompt 區塊；沒有候選就回空字串。 */
-export function formatEmojiHint(entries) {
-  if (!entries?.length) return '';
-  return `【可用表情（用 :名稱: 表示，系統會換成真正的表情）】\n${entries.map(formatEmojiLine).join('\n')}`;
 }
 
 /**

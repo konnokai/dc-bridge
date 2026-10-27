@@ -49,12 +49,20 @@ const DANGEROUS = [
   'dev_stage_promote', 'dev_uninject_plugin',
 ]
 
-// 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）與 mcp-discord（發訊息）；
+// 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）與 mcp-discord（發訊息與頻道動作）；
 // 新增 MCP 時把命名空間前綴或精確工具名加在這裡，並同步更新 docs/guides/DISCORD.md。
 const SAFE_PREFIXES = ['mcp__web-search-safe__']
 const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-safe__web_search']
-// 只放行這一個精確名稱。裸的 send_message 是 DSH 的 subagent 控制工具，留在 DANGEROUS。
-const DISCORD_SEND_TOOL = 'mcp__discord__send_message'
+// 逐一列精確名稱，不放 mcp__discord__ 前綴：mcp-discord 新增工具時要有人看過才放行。
+// 裸的 send_message 是 DSH 的 subagent 控制工具，留在 DANGEROUS。
+const DISCORD_TOOLS = [
+  'mcp__discord__send_message',
+  'mcp__discord__send_sticker',
+  'mcp__discord__add_reaction',
+  'mcp__discord__search_emojis',
+  'mcp__discord__read_history',
+  'mcp__discord__user_info',
+]
 
 const SAFE_EXACT = new Set([
   'ask_user_question', // 提問轉到 Discord
@@ -66,7 +74,8 @@ const SAFE_EXACT = new Set([
  * 會在註冊期把 MCP web search 從工具清單移除，執行期再擋一次。
  * 預設 true，dc-chat 的行為不變。
  *
- * `allowDiscordSend: false` 同理：學習會話是純抽取器，不該有辦法把字送進頻道。
+ * `allowDiscordSend: false` 同理：學習會話是純抽取器，所有 Discord 工具（含唯讀的）都拿掉，
+ * 不該有辦法把字送進頻道，也不需要讀頻道。
  */
 export function apply(ctx, config = {}) {
   const allowWebSearch = config?.allowWebSearch !== false
@@ -74,10 +83,10 @@ export function apply(ctx, config = {}) {
   const denyList = [
     ...DANGEROUS,
     ...(allowWebSearch ? [] : WEB_SEARCH_TOOLS),
-    ...(allowDiscordSend ? [] : [DISCORD_SEND_TOOL]),
+    ...(allowDiscordSend ? [] : DISCORD_TOOLS),
   ]
   const exact = new Set(SAFE_EXACT)
-  if (allowDiscordSend) exact.add(DISCORD_SEND_TOOL)
+  if (allowDiscordSend) for (const tool of DISCORD_TOOLS) exact.add(tool)
   const failed = []
   for (const tool of denyList) {
     try {

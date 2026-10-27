@@ -107,10 +107,10 @@ pm2 logs dc-bridge
 | `security.blockSensitive` | 回覆含本機路徑／憑證／已知令牌時整條攔截，預設 `true` |
 | `queue.max` | DSH 連不上時每個會話最多排幾批，預設 50 |
 | `queue.retryMs` | 恢復後的重試間隔，預設 10000 |
-| `emoji.enabled` | 是否注入自訂表情候選、代換 `:名稱:`，預設 `true` |
+| `emoji.enabled` | `search_emojis` 是否查自訂表情、是否代換 `:名稱:`，預設 `true` |
 | `emoji.dir` | 表情目錄位置，預設 `state/discord-emoji/` |
-| `emoji.maxCandidates` | 每回合最多注入幾個候選，預設 12（3~30） |
-| `emoji.maxChars` | 表情提示的字數上限，預設 600 |
+| `emoji.maxCandidates` | `search_emojis` 一次最多回幾個表情，預設 12（3~30） |
+| `emoji.maxChars` | `search_emojis` 表情結果的字數上限，預設 600 |
 | `reactions.enabled` | 對「沒叫 bot」的頻道訊息偶爾加 reaction，預設 `false` |
 | `reactions.probability` | 命中後實際加 reaction 的機率，預設 0.15 |
 | `reactions.cooldownMs` | 同一頻道兩次 reaction 的最短間隔，預設 10 分鐘 |
@@ -319,8 +319,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
    建置期間卡片會顯示「更新中…（已完成/總數）」與日誌尾巴，子程序的輸出一併進
    控制台「日誌」與 pm2 log，不用等建置結束才看得到進度。
 
-2. **每回合挑 top N**：當前伺服器 +6 分、名稱命中 +4、中文 bigram 關鍵字命中 +2；
-   先放當前伺服器最多 3 個，再補到 `emoji.maxCandidates` 個，受 `emoji.maxChars` 限制。
+2. **模型自己查**：prompt 不附表情清單。模型想用表情時呼叫 `mcp__discord__search_emojis`
+   用關鍵字查：當前伺服器 +6 分、名稱命中 +4、中文 bigram 關鍵字命中 +2，只回命中關鍵字的，
+   最多 `emoji.maxCandidates` 個、受 `emoji.maxChars` 限制；query 留空就列當前伺服器的。
+   同一個工具也會列出當前伺服器符合的貼圖（`send_sticker` 用）。
 
 3. **模型輸出 `:名稱:`**，橋接在送出前換成 `<:名稱:id>`（動畫用 `<a:…>`）。同名時
    當前伺服器優先；找不到就保留原文。這樣 prompt 不用塞長長的 ID，也不會抄錯。
@@ -328,11 +330,16 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
 就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
 用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `274878237760`）。
-貼圖（guild sticker）才是綁伺服器的，跨服只能改送圖片。
+貼圖（guild sticker）才是綁伺服器的：`send_sticker` 只送當前伺服器的貼圖，私聊與別服的送不了。
 
 ### 表情反應（reaction）
 
-不用回話也能有反應。只有「沒有 @ bot、也沒有回覆 bot」的**頻道訊息**才會走這條路；
+有兩條路：
+
+- **模型自己按**：`mcp__discord__add_reaction`，一輪最多 3 個（見下面「誰決定要不要發訊息」）。
+- **橋接自動按**（下面這段）：不呼叫模型。
+
+自動 reaction 只看「沒有 @ bot、也沒有回覆 bot」的**頻道訊息**；
 被叫到的訊息會正常回覆，不會再多加 reaction。
 
 - 條件：訊息與目錄的關鍵字分數 ≥ `reactions.minKeywordScore`、通過 `reactions.probability`、
@@ -399,12 +406,28 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 ## 誰決定要不要發訊息（MCP）
 
-回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話，就呼叫 `mcp__discord__send_message`：
+回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
+每個工具都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道）：
 
-| 參數 | 說明 |
-| --- | --- |
-| `token` | 這個 DSH 會話的令牌（橋接用它反查要送到哪個頻道） |
-| `content` | 要送出的訊息（Discord Markdown；`:名稱:` 會換成伺服器表情） |
+| 工具 | 其他參數 | 作用 |
+| --- | --- | --- |
+| `send_message` | `content`、`reply_to`（可省略） | 送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方） |
+| `send_sticker` | `sticker`、`content`／`reply_to`（可省略） | 送一張當前伺服器的貼圖 |
+| `add_reaction` | `message`、`emoji` | 對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji |
+| `search_emojis` | `query`（可省略） | 查可用的自訂表情與貼圖（見「自訂表情」） |
+| `read_history` | `before`、`limit`（都可省略） | 往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字 |
+| `user_info` | `message` | 查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間 |
+
+`message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
+前面都有一個 `#k7f3ab` 這種 6 字代號，`read_history` 的結果也有。
+
+- 編號由 Discord 訊息 id 雜湊出來：同一則訊息永遠同一個編號，橋接重啟後也一樣。
+  流水號在重啟後會從頭數，舊的編號就會指到別則，所以不用流水號。兩則撞號時後登記的那則改用 7 字編號；
+  只有撞號又剛好在重啟後以相反順序出現時，舊編號才會指錯（一個頻道約萬分之二）。
+  重啟後還沒重新出現在 prompt 裡的舊編號會查不到，工具回「找不到」。
+- 每個頻道各自一張表（最近 500 則），令牌只能查自己頻道的編號。
+- `read_history` 與 `user_info` 回給模型的群友文字會去掉換行，並把 `★`、`【管理員】` 改寫，
+  群友沒辦法透過暱稱或內文偽造標記。
 
 每一則 prompt 的**最後一行**（時間之後）都會帶 `【發送】token=…`，模型照抄即可。
 令牌是 10 個小寫字母與數字，不含 `0 o 1 l i v w` 這些容易抄錯的字；模型多帶空白或改成大寫也認得。
@@ -418,17 +441,18 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
   遇到 `/reset` 也會被擋下來，不會送進新的會話。
 - **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
   模型不會誤以為已送出。
-- **一輪最多 5 則**；同一會話的訊息照順序送，超過 2000 字由橋接切段。
-- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。
+- **一輪最多 5 則**（訊息與貼圖合計），**reaction 最多 3 個**；同一會話的訊息照順序送，超過 2000 字由橋接切段。
+- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。只按了 reaction 不算。
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
-發送端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與 `POST /send`，
-網址與令牌寫在 `state/discord-agent.json`（橋接重啟就換一組）。MCP server 是
-`src/mcp-discord.js`，由 DSH 以 stdio 拉起。
+工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與
+`/send`、`/react`、`/emojis`、`/history`、`/user`，網址與令牌寫在 `state/discord-agent.json`
+（橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
+**新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
 ## 行為細節
 
-- 回覆只在模型呼叫 `mcp__discord__send_message` 時送出；回合文字不會自動貼出。不做逐字串流。
+- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_sticker` 時送出；回合文字不會自動貼出。不做逐字串流。
 - **引用**：★ 的訊息回覆了某則訊息時，被引用的作者與原文會以 `[引用 某人：原文]` 接在那一行後面。
 - **頻道上下文**：會用 `channel.messages.fetch` 抓這一批第一則之前的 `context.messages` 則訊息放進
   prompt。預設模式每一批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶（橋接重啟或
@@ -448,8 +472,9 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
 - 超過 `maxMessageChars` 會先在換行邊界切段，沒有換行才硬切（不會切開 emoji）。
 - Discord 顯示 Markdown，所以**不**轉純文字（QQ 版會轉）。
 - 每個會話的批次依序投遞（同一會話同時只跑一個 prompt 佇列），避免上下文順序錯亂。
-- 頻道訊息會帶上發言者名稱（`暱稱：內容`）；管理員訊息加 `【管理員】` 前綴。
-- 送出時 `allowedMentions: { parse: [] }`，模型輸出不會不小心 @everyone。
+- 頻道訊息會帶上發言者名稱（`暱稱：內容`）；管理員訊息加 `【管理員】` 前綴，
+  但頻道裡只有叫 bot（★）的那則才加：管理員跟朋友聊天時不標，模型才不會以為是在對它說話。私聊一律加。
+- 送出時 `allowedMentions: { parse: [], repliedUser: false }`，模型輸出不會不小心 @everyone，回覆也不 ping 對方。
 - DSH 重啟後事件流會自動重連，並重新 follow `state/discord-sessions.json` 裡的會話。
 
 ## 安全邊界
@@ -463,7 +488,8 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
 5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
 6. **發送端點只在本機**：`mcp-discord` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`
    （`state/discord-agent.json`，0600）加會話令牌；沒帶令牌的請求一律 401，不會因為漏帶而
-   升級成別的身分。端點只開 `POST /hello` 與 `POST /send`。
+   升級成別的身分。端點只開 `POST /hello` 與上面列的工具路徑；每個工具都先過同一個令牌檢查
+   （會話還活著、頻道在白名單內），唯讀工具也一樣，而且只能讀令牌自己的頻道。
 
 ## 已知限制
 
@@ -472,8 +498,9 @@ Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在�
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
 - **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__send_message`（唯一能把訊息送進
-  Discord 的路徑），加上只讀的 `mcp__web-search-safe__web_search` / `web_fetch`。
+- 模型側工具有 `ask_user_question`、`todo_write`、6 個 `mcp__discord__*` 工具（唯一能碰 Discord 的路徑；
+  `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去），加上只讀的
+  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 6 個 Discord 工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、跨頻道記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）也一樣。

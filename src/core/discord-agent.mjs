@@ -1,16 +1,17 @@
-// 智能體發送 API：MCP（src/mcp-discord.js）把模型要說的話送回橋接的唯一入口。
+// 智能體 API：MCP（src/mcp-discord.js）的所有 Discord 動作（說話、貼圖、reaction、
+// 查表情、讀歷史、查成員）都從這裡進橋接。
 //
 // 為什麼另外開一個 listener，而不是掛在控制台上：
 //   控制台綁的是「人」的管理面（可以設成 LAN），模型發訊息是「程式」在動，只需要本機。
 //   兩者共用一個埠，等於把發送面一起放上網路，權限也混在一起。這裡固定綁 127.0.0.1
-//   的隨機埠，只開 POST /hello 與 POST /send。
+//   的隨機埠，只開 POST /hello 與各工具的 POST 路徑。
 //
 // 為什麼用檔案傳端點：MCP server 是 DSH 拉起的另一個行程，兩邊唯一的共同點是同一個
 // state 目錄。橋接重啟後埠會變，所以 MCP 每次呼叫都重讀這個檔。
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { findSensitive } from './discord-security.mjs';
 
 /** 單次工具呼叫的內容上限；sendLong 會再按 Discord 的 2000 字上限切段。 */
@@ -18,6 +19,9 @@ export const AGENT_MAX_CONTENT = 8_000;
 
 /** 一輪最多 5 則：夠模型分幾句講完，又洗不了版。 */
 export const SEND_PER_TURN_LIMIT = 5;
+
+/** reaction 一輪最多 3 個：真人不會一口氣對一串訊息按表情。 */
+export const REACT_PER_TURN_LIMIT = 3;
 
 const statusError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
@@ -27,20 +31,69 @@ const statusError = (message, statusCode) => Object.assign(new Error(message), {
 const SESSION_TOKEN_ALPHABET = '23456789abcdefghjkmnpqrstuxyz';
 const SESSION_TOKEN_LENGTH = 10;
 
+// 6 字（約 5.9 億種）：一個頻道 500 則裡撞號的機會約萬分之二。撞號時後登記的那則改用更長的編號；
+// 只有撞號又剛好在重啟後以相反順序登記時，舊編號才會指到另一則。
+// shortcut: 撞號 + 重啟的極端情況沒處理，真的遇到再改成持久化編號表。
+const MESSAGE_REF_LENGTH = 6;
+const MESSAGE_REFS_PER_KEY = 500;
+
 /**
- * 發送回端：MCP send_message 送進來之後，決定能不能送、送到哪裡。
+ * 訊息編號：prompt 裡每則訊息前面的 `#xxxxx`，模型用它指定要回覆／按 reaction 的訊息。
+ *
+ * 編號由 Discord 訊息 id 雜湊出來，不用流水號：DSH 會話撐過橋接重啟，模型還記得舊編號。
+ * 流水號重啟後從頭數，舊的 #3 會指到另一則訊息；雜湊則同一則訊息永遠同一個編號，
+ * 重啟後查不到只會回「找不到」，不會指錯。
+ */
+export function messageRefOf(messageId, length = MESSAGE_REF_LENGTH) {
+  const digest = createHash('sha256').update(String(messageId)).digest();
+  let out = '';
+  for (let i = 0; i < length; i += 1) out += SESSION_TOKEN_ALPHABET[digest[i] % SESSION_TOKEN_ALPHABET.length];
+  return out;
+}
+
+/** 每個會話 key 各自一張編號表：令牌只能查到自己頻道的訊息。 */
+export function createMessageRefs({ perKey = MESSAGE_REFS_PER_KEY } = {}) {
+  const tables = new Map(); // key -> Map(ref -> messageId)，插入順序就是新舊順序
+
+  function register(key, messageId) {
+    const id = String(messageId ?? '');
+    if (!id) return '';
+    let table = tables.get(key);
+    if (!table) { table = new Map(); tables.set(key, table); }
+    // 撞號就加長，直到沒撞或撞到的就是自己。
+    let ref = messageRefOf(id);
+    for (let length = MESSAGE_REF_LENGTH + 1; table.has(ref) && table.get(ref) !== id; length += 1) {
+      ref = messageRefOf(id, length);
+    }
+    table.delete(ref);
+    table.set(ref, id);
+    while (table.size > perKey) table.delete(table.keys().next().value);
+    return ref;
+  }
+
+  function lookup(key, ref) {
+    const normalized = String(ref ?? '').trim().replace(/^#/, '').toLowerCase();
+    return tables.get(key)?.get(normalized) ?? null;
+  }
+
+  return { register, lookup };
+}
+
+/**
+ * 工具回端：MCP 的每個工具送進來之後，決定能不能做、對哪個頻道做。
  *
  * 工具只收 token，不收 key：令牌綁定一個會話，模型就算被騙也指定不了別的頻道。
  * 白名單、敏感資訊閘門、每輪上限都在這裡判斷。MCP server 是 DSH 拉起的另一個行程，
- * 不該持有這些判斷。
+ * 不該持有這些判斷。唯讀工具（查表情、讀歷史、查成員）也走 resolve()，同一道門。
  *
- * @param options.sessions       key -> sessionId（橋接的會話表，會被橋接原地改）
- * @param options.reverse        sessionId -> key
- * @param options.resolveChannel async key => Discord channel
- * @param options.isAllowed      (key, channel) => boolean
- * @param options.secrets        () => 已知令牌清單（會話令牌另外自動加入）
- * @param options.blockSensitive () => boolean
- * @param options.deliver        async (key, content) => void
+ * @param options.sessions        key -> sessionId（橋接的會話表，會被橋接原地改）
+ * @param options.reverse         sessionId -> key
+ * @param options.resolveChannel  async key => Discord channel
+ * @param options.isAllowed       (key, channel) => boolean
+ * @param options.secrets         () => 已知令牌清單（會話令牌另外自動加入）
+ * @param options.blockSensitive  () => boolean
+ * @param options.deliver         async (key, { content, replyTo, sticker }) => void
+ * @param options.deliverReaction async (key, { message, emoji }) => void
  */
 export function createAgentSender({
   sessions,
@@ -50,11 +103,14 @@ export function createAgentSender({
   secrets = () => [],
   blockSensitive = () => true,
   deliver,
+  deliverReaction = async () => {},
   limit = SEND_PER_TURN_LIMIT,
+  reactLimit = REACT_PER_TURN_LIMIT,
 }) {
   const tokens = new Map(); // sessionId -> 會話令牌（只在記憶體，橋接重啟就換）
   const chains = new Map(); // key -> 串行化（同一輪的多個 tool call 不搶順序）
   const sentCounts = new Map(); // key -> 這一輪已經送出幾則
+  const reactCounts = new Map(); // key -> 這一輪已經按了幾個 reaction
   const attempted = new Set(); // key -> 這一輪有沒有試過呼叫發送工具
 
   function tokenFor(sessionId) {
@@ -81,7 +137,8 @@ export function createAgentSender({
 
   const alive = (key, sessionId) => sessions[key] === sessionId && reverse.get(sessionId) === key;
 
-  async function send({ token, content }) {
+  /** 令牌 → 會話與頻道。每個工具都先過這一關。 */
+  async function resolve(token) {
     const sessionId = sessionForToken(token);
     // 令牌過期（橋接重啟或 /reset）是模型最可能遇到的失敗。訊息要它去抄最新一行，
     // 否則它會以為「這個會話不能發」，整輪就靜音了。
@@ -93,6 +150,15 @@ export function createAgentSender({
 
     const channel = await resolveChannel(key);
     if (!isAllowed(key, channel)) throw statusError(`頻道 ${key} 不在白名單內，不送出`, 403);
+    return { sessionId, key, kind, channel };
+  }
+
+  async function send({ token, content = '', replyTo = '', sticker = '' }) {
+    if (typeof content !== 'string' || content.length > AGENT_MAX_CONTENT) {
+      throw statusError(`content 超過 ${AGENT_MAX_CONTENT} 字`, 400);
+    }
+    if (!content.trim() && !sticker) throw statusError('content 是空的', 400);
+    const { sessionId, key, kind, channel } = await resolve(token);
 
     // 用存著的令牌比對：模型傳來的可能是大寫版，拿它比對會漏掉內容裡的小寫原文。
     const hit = blockSensitive() ? findSensitive(content, [...secrets(), tokens.get(sessionId)]) : null;
@@ -106,7 +172,7 @@ export function createAgentSender({
       if ((sentCounts.get(key) ?? 0) >= limit) {
         throw statusError(`這一輪已經送出 ${limit} 則，不再送出`, 429);
       }
-      await deliver(key, content);
+      await deliver(key, { content, replyTo, sticker });
       sentCounts.set(key, (sentCounts.get(key) ?? 0) + 1);
     });
     chains.set(key, next);
@@ -116,22 +182,40 @@ export function createAgentSender({
     return { key, channel: kind === 'dm' ? '私聊' : (channel?.name ?? key) };
   }
 
+  async function react({ token, message, emoji }) {
+    const { key } = await resolve(token);
+    // 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。
+    const used = reactCounts.get(key) ?? 0;
+    if (used >= reactLimit) throw statusError(`這一輪已經按了 ${reactLimit} 個 reaction，不再按`, 429);
+    reactCounts.set(key, used + 1);
+    try {
+      await deliverReaction(key, { message, emoji });
+    } catch (error) {
+      reactCounts.set(key, (reactCounts.get(key) ?? 1) - 1);
+      throw error;
+    }
+    return { key };
+  }
+
+  const clearKey = (key) => { sentCounts.delete(key); reactCounts.delete(key); attempted.delete(key); };
+
   return {
     tokenFor,
+    resolve,
     send,
+    react,
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },
-    startTurn: (key) => { sentCounts.delete(key); attempted.delete(key); },
+    startTurn: clearKey,
     noteAttempt: (key) => { attempted.add(key); },
-    /** 回合結束：回傳這一輪送了幾則、有沒有試過呼叫工具，並歸零。 */
+    /** 回合結束：回傳這一輪送了幾則、按了幾個 reaction、有沒有試過呼叫工具，並歸零。 */
     finishTurn: (key) => {
-      const result = { sent: sentCounts.get(key) ?? 0, attempted: attempted.has(key) };
-      sentCounts.delete(key);
-      attempted.delete(key);
+      const result = { sent: sentCounts.get(key) ?? 0, reacted: reactCounts.get(key) ?? 0, attempted: attempted.has(key) };
+      clearKey(key);
       return result;
     },
     /** 事件流重連：舊回合的 turn/start 可能永遠不會再來，計數不能帶到下一輪。 */
-    clearTurns: () => { sentCounts.clear(); attempted.clear(); },
+    clearTurns: () => { sentCounts.clear(); reactCounts.clear(); attempted.clear(); },
   };
 }
 
@@ -190,13 +274,14 @@ function readBody(req) {
 }
 
 /**
- * 啟動智能體發送 API。
+ * 啟動智能體 API。
  *
- * @param options.file   端點檔（寫入 { url, token }，0600）
- * @param options.send   async ({ token, content }) => 額外回傳欄位；丟出的錯誤可用 statusCode
- * @param options.log    日誌函式
+ * @param options.file     端點檔（寫入 { url, token }，0600）
+ * @param options.handlers { 路徑名: async (body) => 額外回傳欄位 }，例如 { send, react }；
+ *                         body.token（會話令牌）已檢查過是字串；丟出的錯誤可用 statusCode
+ * @param options.log      日誌函式
  */
-export async function startAgentApi({ file, send, log = () => {} }) {
+export async function startAgentApi({ file, handlers, log = () => {} }) {
   const token = randomBytes(32).toString('base64url');
   // MCP server 有沒有真的掛上：只影響日誌。送不送訊息仍然只由模型有沒有呼叫
   // send_message 決定，橋接不會因為「連上了」或「沒連上」改變行為。
@@ -206,7 +291,9 @@ export async function startAgentApi({ file, send, log = () => {} }) {
     void (async () => {
       try {
         const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-        if (req.method !== 'POST' || (url.pathname !== '/send' && url.pathname !== '/hello')) {
+        const route = url.pathname.slice(1);
+        const handler = Object.hasOwn(handlers, route) ? handlers[route] : null;
+        if (req.method !== 'POST' || (!handler && route !== 'hello')) {
           sendJson(res, 404, { error: 'not found' });
           return;
         }
@@ -220,7 +307,7 @@ export async function startAgentApi({ file, send, log = () => {} }) {
           announced = true;
           log('mcp-discord 已連上：模型可以自己決定要不要發訊息');
         }
-        if (url.pathname === '/hello') {
+        if (route === 'hello') {
           sendJson(res, 200, { ok: true });
           return;
         }
@@ -231,20 +318,11 @@ export async function startAgentApi({ file, send, log = () => {} }) {
         }
         const body = await readBody(req);
         const sessionToken = typeof body?.token === 'string' ? body.token.trim() : '';
-        const content = typeof body?.content === 'string' ? body.content : '';
         if (!sessionToken || sessionToken.length > 128) {
           sendJson(res, 400, { error: '缺少會話令牌' });
           return;
         }
-        if (!content.trim()) {
-          sendJson(res, 400, { error: 'content 是空的' });
-          return;
-        }
-        if (content.length > AGENT_MAX_CONTENT) {
-          sendJson(res, 400, { error: `content 超過 ${AGENT_MAX_CONTENT} 字` });
-          return;
-        }
-        const extra = await send({ token: sessionToken, content });
+        const extra = await handler({ ...body, token: sessionToken });
         sendJson(res, 200, { ok: true, ...(extra ?? {}) });
       } catch (error) {
         const status = Number(error?.statusCode) || 502;
