@@ -484,7 +484,8 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   });
   const tokenA = sender.tokenFor('sess-a');
   const tokenB = sender.tokenFor('sess-b');
-  ok(tokenA !== tokenB && tokenA.length >= 20, '每個會話各有一組令牌');
+  ok(tokenA !== tokenB, '每個會話各有一組令牌');
+  ok(/^[2-9a-hjkmnp-uxyz]{10}$/.test(tokenA), '令牌只有小寫與數字，沒有 0/o/1/l/i/v/w 這類易抄錯的字');
   ok(sender.tokenFor('sess-a') === tokenA, '同一會話重複取令牌不換');
 
   const rejects = async (promise, re, label) => {
@@ -497,6 +498,8 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await rejects(sender.send({ token: 'nope', content: 'x' }), /最新一則【發送】/, '舊令牌回可重試的錯誤');
   await rejects(sender.send({ token: tokenA, content: '外洩 SECRET-DISCORD-TOKEN' }), /敏感資訊/, '已知令牌被攔截');
   await rejects(sender.send({ token: tokenA, content: `抄 ${tokenA}` }), /敏感資訊/, '會話令牌本身也被攔截');
+  ok((await sender.send({ token: ` ${tokenA.toUpperCase()} `, content: '大寫' })).key === 'ch:100', '令牌多空白或改大寫仍認得');
+  await rejects(sender.send({ token: tokenA.toUpperCase(), content: `抄 ${tokenA}` }), /敏感資訊/, '傳大寫令牌時，內容裡的原文令牌照樣攔截');
   allowed = false;
   await rejects(sender.send({ token: tokenA, content: 'x' }), /白名單/, '頻道不在白名單就拒絕');
   allowed = true;

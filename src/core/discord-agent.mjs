@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { findSensitive } from './discord-security.mjs';
 
 /** 單次工具呼叫的內容上限；sendLong 會再按 Discord 的 2000 字上限切段。 */
@@ -20,6 +20,12 @@ export const AGENT_MAX_CONTENT = 8_000;
 export const SEND_PER_TURN_LIMIT = 5;
 
 const statusError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
+
+// 會話令牌要讓模型照抄：base64url 大小寫混雜，模型會把 W 抄成 V。
+// 只用小寫和數字，拿掉 0/o、1/l/i、v/w 這幾組長得像的字。10 字仍有約 2^48 種，
+// 而且敏感資訊閘門只比對 8 字以上的令牌，不能再短。
+const SESSION_TOKEN_ALPHABET = '23456789abcdefghjkmnpqrstuxyz';
+const SESSION_TOKEN_LENGTH = 10;
 
 /**
  * 發送回端：MCP send_message 送進來之後，決定能不能送、送到哪裡。
@@ -54,7 +60,8 @@ export function createAgentSender({
   function tokenFor(sessionId) {
     let value = tokens.get(sessionId);
     if (!value) {
-      value = randomBytes(18).toString('base64url');
+      value = Array.from({ length: SESSION_TOKEN_LENGTH },
+        () => SESSION_TOKEN_ALPHABET[randomInt(SESSION_TOKEN_ALPHABET.length)]).join('');
       tokens.set(sessionId, value);
     }
     return value;
@@ -62,7 +69,8 @@ export function createAgentSender({
 
   /** 令牌數量等於會話數（很少），逐一定長比對即可。 */
   function sessionForToken(given) {
-    const g = Buffer.from(String(given ?? ''), 'utf8');
+    // 模型常多帶空白或改成大寫，這些不算抄錯。
+    const g = Buffer.from(String(given ?? '').trim().toLowerCase(), 'utf8');
     if (g.length === 0) return null;
     for (const [sessionId, token] of tokens) {
       const t = Buffer.from(token, 'utf8');
@@ -86,7 +94,8 @@ export function createAgentSender({
     const channel = await resolveChannel(key);
     if (!isAllowed(key, channel)) throw statusError(`頻道 ${key} 不在白名單內，不送出`, 403);
 
-    const hit = blockSensitive() ? findSensitive(content, [...secrets(), token]) : null;
+    // 用存著的令牌比對：模型傳來的可能是大寫版，拿它比對會漏掉內容裡的小寫原文。
+    const hit = blockSensitive() ? findSensitive(content, [...secrets(), tokens.get(sessionId)]) : null;
     if (hit) throw statusError(`內容命中敏感資訊閘門（${hit}），已攔截`, 400);
 
     const previous = chains.get(key) ?? Promise.resolve();

@@ -173,6 +173,11 @@
   <section class="card">
     <h2>白名單與媒體</h2>
     <form id="config-form" class="grid">
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="require-mention" type="checkbox" style="width:auto;margin:0">
+        requireMentionInGuild：頻道要 @bot 或回覆 bot 才回（取消勾選＝自由參與）
+      </label>
+      <p id="require-mention-note" class="muted" style="grid-column:1/-1;margin:0" hidden>沒開 messageContentIntent：收不到沒 @bot 的訊息內容，一律要 @bot。</p>
       <label>allow.guilds<textarea id="allow-guilds" placeholder="一行一個 ID"></textarea></label>
       <label>allow.channels<textarea id="allow-channels" placeholder="一行一個 ID"></textarea></label>
       <label>allow.users（私聊）<textarea id="allow-users" placeholder="一行一個 ID"></textarea></label>
@@ -180,7 +185,7 @@
       <label>deny.guilds<textarea id="deny-guilds"></textarea></label>
       <label>deny.channels<textarea id="deny-channels"></textarea></label>
       <label>deny.users<textarea id="deny-users"></textarea></label>
-      <label>media.maxBytes<input id="media-max-bytes" type="number" min="65536" step="1048576"></label>
+      <label>media.maxBytes<input id="media-max-bytes" type="number" min="65536" step="any"></label>
       <label>media.maxModelBytes<input id="media-max-model-bytes" type="number" min="131072" step="131072"></label>
       <label>media.maxLongEdge<input id="media-max-long-edge" type="number" min="256" max="2048" step="64"></label>
       <label>media.maxCount<input id="media-max-count" type="number" min="1" max="8"></label>
@@ -284,6 +289,7 @@
       ['會話', s.sessions + ' 個｜等待回答 ' + s.pending + '｜離線佇列 ' + (s.queue ?? 0) + ' 條'],
       ['白名單', 'guilds ' + s.allow.guilds + '｜channels ' + s.allow.channels + '｜users ' + s.allow.users],
       ['管理員', s.ownerIds.length ? s.ownerIds.join(', ') : '未設定'],
+      ['頻道模式', s.requireMention ? '要 @bot 才回' : '自由參與'],
       ['圖片', s.media.enabled ? ('≤' + Math.round(s.media.maxBytes / 1048576) + 'MB，長邊 ≤' + s.media.maxLongEdge + '，最多 ' + s.media.maxCount + ' 張') : '關閉'],
       ['表情目錄', (s.emoji?.entries ?? 0) + ' 條／' + (s.emoji?.guilds ?? 0) + ' 個伺服器'],
       ['黑話', s.slang ? (s.slang.enabled ? ('待確認 ' + s.slang.candidate + '｜已確認 ' + s.slang.confirmed) : '關閉') : '—'],
@@ -607,6 +613,9 @@
     $('media-max-long-edge').value = c.media.maxLongEdge;
     $('media-max-count').value = c.media.maxCount;
     $('media-timeout').value = c.media.timeoutMs;
+    $('require-mention').checked = c.requireMentionInGuild || !c.messageContentIntent;
+    $('require-mention').disabled = !c.messageContentIntent;
+    $('require-mention-note').hidden = c.messageContentIntent;
   }
 
   async function loadConfig() {
@@ -802,10 +811,12 @@
             maxCount: Number($('media-max-count').value),
             timeoutMs: Number($('media-timeout').value),
           },
+          // disabled 時沒得選，不送，免得把 config.json 裡原本的值蓋掉
+          ...($('require-mention').disabled ? {} : { requireMentionInGuild: $('require-mention').checked }),
         }),
       });
       fillConfig(result.config);
-      msg.textContent = '已儲存（白名單與媒體立即生效）';
+      msg.textContent = '已儲存（立即生效）';
       msg.className = 'msg ok';
       await refresh();
     } catch (error) {

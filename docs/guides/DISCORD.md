@@ -160,6 +160,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   `allowAllWhenEmpty: true`）。Discord 要求 bot 與物件至少同一個伺服器才收得到私聊，
   所以先把 bot 邀進你自己的伺服器。
 - **頻道**：預設要 @bot 或回覆 bot 的訊息。`requireMentionInGuild: false` 是「自由參與」，見下一節。
+  執行中可用 `/mention` 或控制台切換，不用重啟。
 - **討論串**：視為獨立會話（用自己的 channel id），不會跟母頻道共用上下文。白名單看討論串自己的 id；
   黑名單也看母頻道，母頻道在 `deny.channels` 裡時，底下的討論串一律擋掉。
 
@@ -196,18 +197,19 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/reset`（或 `!reset`、`!new`） | 管理員 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文 |
 | `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
+| `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
 | `/forget`（或 `!forget`） | 所有人 | 刪除自己在**這個伺服器**的跨頻道記憶；不影響目前頻道的對話上下文 |
 | 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
-`/reset`、`/status`、`/invite` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
+`/reset`、`/status`、`/invite`、`/mention` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
 只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
 
-- **誰看得到選單**：`default_member_permissions: Administrator`，只有伺服器管理員的 `/` 選單會出現這三個指令。
+- **誰看得到選單**：`default_member_permissions: Administrator`，只有伺服器管理員的 `/` 選單會出現這四個指令。
   Discord 沒辦法把指令選單只開給某一個人，所以用 Administrator 縮小範圍。
 - **誰能執行**：執行時只認 `ownerIds`。伺服器管理員看得到選單，但不在 `ownerIds` 裡就會被拒絕。
 
 > Discord 官方客戶端會把未註冊的 `/xxx` 當成指令輸入，可能不讓你送出。`/reset`、`/status`、`/forget`
-> 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡）。
+> 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡），`/mention` 也沒有。
 > `!` 別名是一般訊息，頻道裡要 @bot 或回覆 bot 才算數（私聊直接打）。
 > DSH 的斜線命令沒有別名（`!model` 會被當成普通文字）。
 
@@ -254,10 +256,11 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **邀請機器人**：產生含目前功能權限的邀請連結，可開啟或複製
 - **會話**：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
 - **黑話詞庫**：候選／已確認／已拒絕、意思與用法、出現次數；可確認、拒絕、編輯、刪除
-- **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` 直接編輯，存檔後**立即生效**並寫回 `config.json`
+- **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）直接編輯，
+  存檔後**立即生效**並寫回 `config.json`。沒開 `messageContentIntent` 時勾選框鎖住（一律要 @bot）
 - **日誌**：最近 200 行（記憶體 ring buffer，重啟就清空）
 
-不做的事（跟 QQ 版控制台不同）：人格編輯、模式切換、語音。那些在 Discord 版沒有對應概念，
+不做的事（跟 QQ 版控制台不同）：人格編輯、QQ 版那種模式切換、語音。那些在 Discord 版沒有對應概念，
 或需要重啟 DSH 才有意義。
 
 > token 留空時會自動產生，存在 `state/discord-console-token`（重啟沿用）。要換 token 就刪掉那個檔，或直接在
@@ -404,6 +407,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `content` | 要送出的訊息（Discord Markdown；`:名稱:` 會換成伺服器表情） |
 
 每一則 prompt 的**最後一行**（時間之後）都會帶 `【發送】token=…`，模型照抄即可。
+令牌是 10 個小寫字母與數字，不含 `0 o 1 l i v w` 這些容易抄錯的字；模型多帶空白或改成大寫也認得。
 Persona 把「用工具說話」放在最前面：批次裡有 ★（有人在叫它）就至少送一則；沒有 ★ 就預設不說話。
 **沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
 

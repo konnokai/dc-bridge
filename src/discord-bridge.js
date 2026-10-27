@@ -105,6 +105,14 @@ const slashCommandData = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false),
   new SlashCommandBuilder()
+    .setName('mention')
+    .setDescription('切換頻道要不要 @bot 才回（全部伺服器共用，管理員）')
+    .addBooleanOption((option) => option
+      .setName('required')
+      .setDescription('true：要 @bot 才回；false：自由參與。不填就只顯示目前設定'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false),
+  new SlashCommandBuilder()
     .setName('forget')
     .setDescription('刪除你在這個伺服器的跨頻道記憶')
     .setDMPermission(false),
@@ -1659,6 +1667,24 @@ async function main() {
       await interaction.editReply(`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜頻道`);
       return;
     }
+    if (interaction.commandName === 'mention') {
+      // 沒開意圖時跟控制台一樣不寫入：寫了 false，日後開意圖重啟就會突然變自由參與。
+      const required = cfg.discord.messageContentIntent ? interaction.options.getBoolean('required') : null;
+      if (required !== null) {
+        try {
+          await updateConfig({ requireMentionInGuild: required });
+        } catch (error) {
+          await interaction.editReply(`切換失敗：${error?.message ?? error}`);
+          return;
+        }
+      }
+      const mode = requireMentionInGuild() ? '頻道要 @bot 或回覆 bot 才回' : '自由參與（模型自己決定要不要接話）';
+      const forced = !cfg.discord.messageContentIntent
+        ? '\n沒開 Message Content 意圖，收不到沒 @bot 的訊息內容，所以一律要 @bot。'
+        : '';
+      await interaction.editReply(`${required === null ? '目前' : '已切換成'}：${mode}。這個設定所有伺服器共用。${forced}`);
+      return;
+    }
     await interaction.editReply('未知的指令。');
   }
 
@@ -1749,7 +1775,9 @@ async function main() {
       deny: cfg.discord.deny,
       ownerIds: cfg.discord.ownerIds,
       media: cfg.discord.media,
+      requireMentionInGuild: cfg.discord.requireMentionInGuild,
       // 唯讀：改這些要重啟橋接或重生 preset
+      messageContentIntent: cfg.discord.messageContentIntent,
       agentPreset: cfg.discord.agentPreset,
       provider: cfg.dsh.provider,
       model: cfg.dsh.model,
@@ -1758,7 +1786,7 @@ async function main() {
   }
 
   async function updateConfig(patch) {
-    // 只接受白名單、黑名單、ownerIds、media；其餘欄位一律沿用目前值。
+    // 只接受白名單、黑名單、ownerIds、media、requireMentionInGuild；其餘欄位一律沿用目前值。
     // 整份候選設定都過一次 normalizeDiscordConfig：ID 格式、數字範圍都在那裡擋。
     const next = normalizeDiscordConfig({
       ...cfg.discord,
@@ -1767,12 +1795,19 @@ async function main() {
       ownerIds: patch?.ownerIds ?? cfg.discord.ownerIds,
       // media 逐欄合併：表單只送數字欄位，不要把 enabled 之類的開關蓋回預設值。
       media: { ...cfg.discord.media, ...(patch?.media ?? {}) },
+      // 只認真的 boolean：normalize 用 `!== false`，字串 "false" 會被當成 true。
+      requireMentionInGuild: typeof patch?.requireMentionInGuild === 'boolean'
+        ? patch.requireMentionInGuild
+        : cfg.discord.requireMentionInGuild,
     });
 
+    // 切到自由參與：讓每個頻道下一批重新帶一次上下文，@ 模式期間沒叫 bot 的閒聊，模型沒看過。
+    if (cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) primedKeys.clear();
     cfg.discord.allow = next.allow;
     cfg.discord.deny = next.deny;
     cfg.discord.ownerIds = next.ownerIds;
     cfg.discord.media = next.media;
+    cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
     ownerIds.clear();
     for (const id of next.ownerIds) ownerIds.add(id);
 
@@ -1783,11 +1818,12 @@ async function main() {
       deny: next.deny,
       ownerIds: next.ownerIds,
       media: next.media,
+      requireMentionInGuild: next.requireMentionInGuild,
     };
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, CONFIG_FILE);
-    log(`控制台更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}`);
+    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}`);
     return editableConfig();
   }
 
@@ -1845,6 +1881,7 @@ async function main() {
             },
             ownerIds: [...ownerIds],
             media: cfg.discord.media,
+            requireMention: requireMentionInGuild(),
             emoji: {
               guilds: emojiCatalogs.size,
               entries: [...emojiCatalogs.values()].reduce((sum, catalog) => sum + (catalog.entries?.length ?? 0), 0),
