@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import { PermissionFlagsBits } from 'discord.js';
 import {
+  COMPACT_NOTICE,
   DISCORD_MAX_CHARS,
   INVITE_PERMISSIONS,
   INVITE_SCOPES,
@@ -117,6 +118,8 @@ console.log('## 1. 設定收斂');
     const many = formatProgress(Array.from({ length: 20 }, (_, i) => `步驟 ${i}`));
     ok(many.split('\n').length === 6 && many.includes('步驟 19') && !many.includes('步驟 13\n'), '只留最後 6 步');
     ok(formatProgress([]) === '', '沒有步驟就是空字串');
+    ok(/^-# \S/.test(COMPACT_NOTICE) && !COMPACT_NOTICE.includes('\n'), '壓縮提示是一行 -# 小字');
+    ok(COMPACT_NOTICE.includes('壓縮'), '壓縮提示講明在壓縮');
   }
   {
     const links = adminLinks({

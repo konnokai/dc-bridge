@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
+  COMPACT_NOTICE,
   INVITE_PERMISSIONS,
   INVITE_SCOPES,
   adminLinks,
@@ -393,6 +394,7 @@ async function main() {
   const pending = new Map(); // key -> 掛起的提問／審批
   const typingTimers = new Map(); // key -> interval
   const progress = new Map(); // key -> 這個回合的進度訊息
+  const compactNotices = new Map(); // key -> 壓縮提示訊息（送出中的 Promise）
   const channelCache = new Map(); // key -> channel
   const lastActive = new Map(); // key -> 最後活動時間（控制台顯示用）
   let lastFrameAt = 0; // 事件流最後一幀的時間（控制台顯示用）
@@ -599,6 +601,7 @@ async function main() {
   async function retireSession(key) {
     stopTyping(key);
     finishProgress(key);
+    hideCompactNotice(key);
     epochs.set(key, epochOf(key) + 1);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
     batcher.drop(key);
@@ -1043,6 +1046,31 @@ async function main() {
       .catch((error) => log(`進度訊息刪除失敗（${key}）：${error?.message ?? error}`));
   }
 
+  function showCompactNotice(key) {
+    if (compactNotices.has(key)) return;
+    const sent = resolveChannel(key)
+      .then((channel) => channel.send({
+        content: COMPACT_NOTICE,
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.SuppressNotifications | MessageFlags.SuppressEmbeds,
+      }))
+      .catch((error) => {
+        log(`壓縮提示送出失敗（${key}）：${error?.message ?? error}`);
+        return null;
+      });
+    compactNotices.set(key, sent);
+  }
+
+  function hideCompactNotice(key) {
+    const sent = compactNotices.get(key);
+    if (!sent) return;
+    compactNotices.delete(key);
+    // 等送出完成再刪：壓縮很快結束時，提示可能還在路上。
+    sent
+      .then((message) => message?.delete())
+      .catch((error) => log(`壓縮提示刪除失敗（${key}）：${error?.message ?? error}`));
+  }
+
   // ── 提問與審批 ───────────────────────────────────────────────────────────
 
   async function cancelPendingEntry(entry) {
@@ -1211,6 +1239,11 @@ async function main() {
       agentSender.startTurn(key);
       memoryWrites.delete(key);
     }
+    if (event.type === 'compaction/start') showCompactNotice(key);
+    if (event.type === 'compaction/end') {
+      hideCompactNotice(key);
+      if (event.data?.error) log(`壓縮失敗 ${key}：${String(event.data.error).slice(0, 200)}`);
+    }
     const usageTokens = event.type === 'assistant/message' ? event.data?.usage?.totalTokens : undefined;
     if (Number.isFinite(usageTokens)) contextTokens.set(frame.sessionId, usageTokens);
     // 任何 turn/end 都放行下一批，包括沒對到 turn/start 的那種；不然頻道要卡到保險計時器。
@@ -1346,6 +1379,7 @@ async function main() {
         turnGate.releaseAll();
         for (const key of [...typingTimers.keys()]) stopTyping(key);
         for (const key of [...progress.keys()]) finishProgress(key);
+        for (const key of [...compactNotices.keys()]) hideCompactNotice(key);
         // 學習會話也一樣：事件流斷了就不會再有回合結束，直接失敗（下次冷卻後再學）。
         for (const waiter of [...learnerWaiters.values()]) {
           waiter.fail(new Error('DSH 事件流中斷，學習回合取消'));

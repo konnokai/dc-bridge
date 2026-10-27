@@ -305,6 +305,9 @@ export function formatProgress(lines) {
   return lines.slice(-PROGRESS_LINES_MAX).map((line) => `-# ${line}`).join('\n');
 }
 
+/** DSH 壓縮上下文期間貼在頻道的提示：壓縮要十幾秒，只有「正在輸入」看不出在做什麼。 */
+export const COMPACT_NOTICE = '-# 🗜️ 聊天紀錄太長，正在壓縮，稍等一下…';
+
 /**
  * 頻道訊息是否在叫 bot。
  *
