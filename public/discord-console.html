@@ -64,6 +64,9 @@
   tr.clickable:hover td { background: var(--panel-2); }
   tr.detail > td { background: var(--panel-2); }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pager { justify-content: flex-end; margin-top: 10px; font-size: 12px; }
+  .pager:empty { display: none; }
+  .pager button { padding: 4px 10px; font-size: 12px; }
   .msg { font-size: 12px; }
   .msg.ok { color: #8fe3ab; }
   .msg.err { color: #ff9a9e; }
@@ -208,8 +211,9 @@
 
   <div class="tab-panel" role="tabpanel" id="tab-slang" aria-labelledby="tabbtn-slang" hidden>
   <section class="card">
-    <h2>黑話與頻道風格 <span id="slang-count" class="muted"></span></h2>
+    <h2>黑話詞庫 <span id="slang-count" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
+      <div class="seg" id="slang-filter"></div>
       <span id="slang-learning" class="muted"></span>
     </div>
     <div class="table-wrap">
@@ -218,6 +222,22 @@
         <tbody id="slang-rows"></tbody>
       </table>
     </div>
+    <div class="row pager" id="slang-pager"></div>
+  </section>
+
+  <section class="card">
+    <h2>頻道風格 <span id="style-count" class="muted"></span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <div class="seg" id="style-filter"></div>
+      <span class="muted" style="font-size:12px">跟黑話同一次抽；確認後才會注入那個頻道</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>頻道</th><th>標籤</th><th>描述</th><th>狀態</th><th>次數</th><th>操作</th></tr></thead>
+        <tbody id="style-rows"></tbody>
+      </table>
+    </div>
+    <div class="row pager" id="style-pager"></div>
   </section>
   </div>
 
@@ -667,31 +687,74 @@
   }
 
   let slangEntries = [];
+  let lastSlangLearning = null;
   const SLANG_LABEL = { candidate: '待確認', confirmed: '已確認', rejected: '已拒絕' };
+
+  const LIST_PAGE_SIZE = 20;
+  // 自動重新整理每 5 秒重畫一次，過濾和頁碼放在這裡才不會被重設。
+  const listView = { slang: { status: 'all', page: 1 }, style: { status: 'all', page: 1 } };
+  const LIST_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']];
+
+  function entryActions(entry) {
+    return el('div', { className: 'row' },
+      entry.status === 'candidate' ? el('button', { dataset: { action: 'confirm', id: entry.id }, textContent: '確認' }) : null,
+      entry.status !== 'rejected' ? el('button', { className: 'ghost', dataset: { action: 'reject', id: entry.id }, textContent: '拒絕' }) : null,
+      el('button', { className: 'ghost', dataset: { action: 'edit', id: entry.id }, textContent: '編輯' }),
+      el('button', { className: 'danger', dataset: { action: 'delete', id: entry.id }, textContent: '刪除' }),
+    );
+  }
+
+  function renderEntryList(kind, all, { cells, empty }) {
+    const view = listView[kind];
+    const counts = { all: all.length, candidate: 0, confirmed: 0, rejected: 0 };
+    for (const entry of all) if (counts[entry.status] !== undefined) counts[entry.status] += 1;
+    $(kind + '-count').textContent = `（待確認 ${counts.candidate}｜已確認 ${counts.confirmed}｜已拒絕 ${counts.rejected}）`;
+    $(kind + '-filter').replaceChildren(...LIST_FILTERS.map(([status, label]) => {
+      const button = el('button', { type: 'button', dataset: { list: kind, status }, textContent: `${label} ${counts[status]}` });
+      button.setAttribute('aria-pressed', String(view.status === status));
+      return button;
+    }));
+
+    const shown = view.status === 'all' ? all : all.filter((entry) => entry.status === view.status);
+    const pages = Math.max(1, Math.ceil(shown.length / LIST_PAGE_SIZE));
+    view.page = Math.min(Math.max(1, view.page), pages);
+    const rows = shown.slice((view.page - 1) * LIST_PAGE_SIZE, view.page * LIST_PAGE_SIZE);
+    $(kind + '-rows').replaceChildren(...(rows.length
+      ? rows.map((entry) => el('tr', {}, ...cells(entry), el('td', {}, entryActions(entry))))
+      : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, all.length ? '這個狀態沒有項目。' : empty))]));
+    $(kind + '-pager').replaceChildren(...(pages > 1 ? [
+      el('button', { type: 'button', className: 'ghost', dataset: { list: kind, page: String(view.page - 1) }, textContent: '上一頁', disabled: view.page <= 1 }),
+      el('span', { className: 'muted' }, `第 ${view.page} / ${pages} 頁（${shown.length} 筆）`),
+      el('button', { type: 'button', className: 'ghost', dataset: { list: kind, page: String(view.page + 1) }, textContent: '下一頁', disabled: view.page >= pages }),
+    ] : []));
+  }
 
   function renderSlang(data) {
     slangEntries = data?.entries ?? [];
-    const stats = data?.stats ?? {};
-    $('slang-count').textContent = `（待確認 ${stats.candidate ?? 0}｜已確認 ${stats.confirmed ?? 0}｜已拒絕 ${stats.rejected ?? 0}）`;
-    const learning = data?.learning;
+    const learning = lastSlangLearning = data?.learning;
     $('slang-learning').textContent = learning?.enabled
       ? (learning.running ? '學習中…' : `佇列 ${learning.queued ?? 0}｜今天 ${learning.today ?? 0}/${learning.maxPerDay ?? 0}`)
       : '黑話學習已關閉（config.json 的 discord.slang.enabled）';
-    $('slang-rows').replaceChildren(...(slangEntries.length ? slangEntries.map((entry) => el('tr', {},
-      el('td', {},
-        entry.kind === 'style' ? el('div', { className: 'muted' }, '頻道風格 #' + (entry.channelName || entry.channelId)) : null,
-        el('strong', {}, entry.term)),
-      el('td', {}, entry.meaning),
-      el('td', { className: 'muted' }, entry.usage || '—'),
-      el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
-      el('td', {}, String(entry.seen ?? 0)),
-      el('td', {}, el('div', { className: 'row' },
-        entry.status === 'candidate' ? el('button', { dataset: { action: 'confirm', id: entry.id }, textContent: '確認' }) : null,
-        entry.status !== 'rejected' ? el('button', { className: 'ghost', dataset: { action: 'reject', id: entry.id }, textContent: '拒絕' }) : null,
-        el('button', { className: 'ghost', dataset: { action: 'edit', id: entry.id }, textContent: '編輯' }),
-        el('button', { className: 'danger', dataset: { action: 'delete', id: entry.id }, textContent: '刪除' }),
-      )),
-    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有詞條；在允許的頻道累積 20 則訊息後會自動學。'))]));
+    renderEntryList('slang', slangEntries.filter((entry) => entry.kind !== 'style'), {
+      empty: '還沒有詞條；在允許的頻道累積 20 則訊息後會自動學。',
+      cells: (entry) => [
+        el('td', {}, el('strong', {}, entry.term)),
+        el('td', {}, entry.meaning),
+        el('td', { className: 'muted' }, entry.usage || '—'),
+        el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
+        el('td', {}, String(entry.seen ?? 0)),
+      ],
+    });
+    renderEntryList('style', slangEntries.filter((entry) => entry.kind === 'style'), {
+      empty: '還沒有頻道風格；黑話學習每次抽取時會順便產出。',
+      cells: (entry) => [
+        el('td', { className: 'muted' }, '#' + (entry.channelName || entry.channelId)),
+        el('td', {}, el('strong', {}, entry.term)),
+        el('td', {}, entry.meaning),
+        el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
+        el('td', {}, String(entry.seen ?? 0)),
+      ],
+    });
   }
 
   function renderMemory(data) {
@@ -862,7 +925,21 @@
     }
   });
 
-  $('slang-rows').addEventListener('click', async (event) => {
+  for (const kind of ['slang', 'style']) {
+    $(kind + '-rows').addEventListener('click', onEntryAction);
+    for (const part of ['-filter', '-pager']) {
+      $(kind + part).addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-list]');
+        if (!button || button.disabled) return;
+        const view = listView[button.dataset.list];
+        if (button.dataset.status) { view.status = button.dataset.status; view.page = 1; }
+        else view.page = Number(button.dataset.page) || 1;
+        renderSlang({ entries: slangEntries, learning: lastSlangLearning });
+      });
+    }
+  }
+
+  async function onEntryAction(event) {
     const button = event.target.closest('button[data-action]');
     if (!button) return;
     const entry = slangEntries.find((item) => item.id === button.dataset.id);
@@ -894,7 +971,7 @@
     } finally {
       button.disabled = false;
     }
-  });
+  }
 
   $('sessions').addEventListener('click', async (event) => {
     const button = event.target.closest('button[data-key]');
