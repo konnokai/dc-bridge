@@ -30,6 +30,8 @@
   button:disabled { opacity: .5; cursor: default; }
   button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
   button.danger { background: var(--danger); }
+  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; max-width: 100%; }
+  select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   input, textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
   textarea { font-family: var(--mono); font-size: 12px; min-height: 84px; resize: vertical; }
   label { display: block; font-size: 12px; color: var(--muted); }
@@ -228,6 +230,7 @@
   <section class="card">
     <h2>頻道風格 <span id="style-count" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
+      <select id="style-channel" aria-label="頻道"></select>
       <div class="seg" id="style-filter"></div>
       <span class="muted" style="font-size:12px">跟黑話同一次抽；確認後才會注入那個頻道</span>
     </div>
@@ -692,7 +695,7 @@
 
   const LIST_PAGE_SIZE = 20;
   // 自動重新整理每 5 秒重畫一次，過濾和頁碼放在這裡才不會被重設。
-  const listView = { slang: { status: 'all', page: 1 }, style: { status: 'all', page: 1 } };
+  const listView = { slang: { status: 'all', page: 1 }, style: { status: 'all', page: 1, channel: 'all' } };
   const LIST_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']];
 
   function entryActions(entry) {
@@ -729,6 +732,32 @@
     ] : []));
   }
 
+  // 回傳選到的頻道的條目。頻道沒增減就只改選項文字、不重建：5 秒一次的重畫會把使用者正打開的選單關掉。
+  function renderStyleChannels(styles) {
+    const view = listView.style;
+    const channels = new Map();
+    for (const entry of styles) {
+      const channel = channels.get(entry.channelId) ?? { id: entry.channelId, name: entry.channelName || entry.channelId, count: 0 };
+      channel.count += 1;
+      channels.set(entry.channelId, channel);
+    }
+    if (view.channel !== 'all' && !channels.has(view.channel)) { view.channel = 'all'; view.page = 1; }
+    const list = [...channels.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant') || a.id.localeCompare(b.id));
+    const names = list.map((channel) => channel.name);
+    // 不同伺服器常有同名頻道（例如 general），補上 id 才分得出來。
+    const options = [['all', `全部頻道（${styles.length}）`], ...list.map((channel) => [channel.id,
+      '#' + channel.name + (names.indexOf(channel.name) !== names.lastIndexOf(channel.name) ? ' · ' + channel.id : '') + `（${channel.count}）`])];
+    const select = $('style-channel');
+    const values = options.map(([value]) => value).join('\n');
+    if (values !== [...select.options].map((option) => option.value).join('\n')) {
+      select.replaceChildren(...options.map(([value, label]) => el('option', { value, textContent: label })));
+    } else {
+      options.forEach(([, label], index) => { if (select.options[index].textContent !== label) select.options[index].textContent = label; });
+    }
+    select.value = view.channel;
+    return view.channel === 'all' ? styles : styles.filter((entry) => entry.channelId === view.channel);
+  }
+
   function renderSlang(data) {
     slangEntries = data?.entries ?? [];
     const learning = lastSlangLearning = data?.learning;
@@ -745,7 +774,7 @@
         el('td', {}, String(entry.seen ?? 0)),
       ],
     });
-    renderEntryList('style', slangEntries.filter((entry) => entry.kind === 'style'), {
+    renderEntryList('style', renderStyleChannels(slangEntries.filter((entry) => entry.kind === 'style')), {
       empty: '還沒有頻道風格；黑話學習每次抽取時會順便產出。',
       cells: (entry) => [
         el('td', { className: 'muted' }, '#' + (entry.channelName || entry.channelId)),
@@ -938,6 +967,12 @@
       });
     }
   }
+
+  $('style-channel').addEventListener('change', (event) => {
+    listView.style.channel = event.target.value;
+    listView.style.page = 1;
+    renderSlang({ entries: slangEntries, learning: lastSlangLearning });
+  });
 
   async function onEntryAction(event) {
     const button = event.target.closest('button[data-action]');

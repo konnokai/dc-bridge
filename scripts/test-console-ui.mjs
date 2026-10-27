@@ -8,6 +8,7 @@ import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { startConsoleFixture } from './console-ui-fixture.mjs';
+import { startConsole } from '../src/core/discord-console.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -571,6 +572,95 @@ try {
       await page.locator('#themeToggle').click();
     }
   }
+  if (!original) await test('Discord 控制台：頻道風格可按頻道過濾，跟狀態過濾一起作用', async () => {
+    const style = (id, channelId, channelName, status) => ({ id, kind: 'style', channelId, channelName, term: id, meaning: '描述', status, seen: 1 });
+    let entries = [
+      { id: 'w1', kind: 'slang', term: '難繃', meaning: '很難繃住', status: 'candidate', seen: 1 },
+      ...Array.from({ length: 22 }, (_, i) => style(`chat${i}`, 'c1', '閒聊', i < 2 ? 'confirmed' : 'candidate')),
+      style('gen-a', 'c2', 'general', 'confirmed'),
+      style('gen-b', 'c3', 'general', 'candidate'),
+      // 橋接查不到頻道名稱時 channelName 會退回 id
+      style('gone', '999', '999', 'rejected'),
+    ];
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries, learning: { enabled: true } }),
+        logs: () => [],
+      },
+    });
+    const dcBase = `http://127.0.0.1:${dc.server.address().port}`;
+    const dcContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    try {
+      const dcErrors = [];
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      p.on('pageerror', error => dcErrors.push(error.message));
+      await p.goto(`${dcBase}/?token=t#slang`);
+      const select = p.locator('#style-channel');
+      await p.waitForFunction(() => document.querySelectorAll('#style-channel option').length === 5);
+      assert.deepEqual(await select.locator('option').allTextContents(),
+        ['全部頻道（25）', '#999（1）', '#閒聊（22）', '#general · c2（1）', '#general · c3（1）']);
+      assert.equal(await select.inputValue(), 'all');
+      assert.equal(await select.getAttribute('aria-label'), '頻道');
+
+      const styleRows = p.locator('#style-rows tr');
+      const channelCells = () => p.locator('#style-rows tr td:first-child').allTextContents();
+      await p.locator('#style-pager button', { hasText: '下一頁' }).click();
+      assert.match(await p.locator('#style-pager').textContent(), /第 2 \/ 2 頁/);
+
+      await select.selectOption('c1');
+      assert.match(await p.locator('#style-pager').textContent(), /第 1 \/ 2 頁（22 筆）/, '換頻道要回到第 1 頁');
+      assert.equal(await styleRows.count(), 20);
+      assert((await channelCells()).every(text => text === '#閒聊'));
+
+      await p.locator('#style-filter button[data-status="confirmed"]').click();
+      assert.equal(await styleRows.count(), 2);
+      assert.equal(await p.locator('#style-filter button[data-status="confirmed"]').textContent(), '已確認 2');
+      assert.equal(await p.locator('#style-filter button[data-status="candidate"]').textContent(), '待確認 20', '狀態計數只算選到的頻道');
+
+      await select.selectOption('c2');
+      assert.deepEqual(await channelCells(), ['#general']);
+      assert.equal(await p.locator('#style-filter button[data-status="confirmed"]').getAttribute('aria-pressed'), 'true', '換頻道不重設狀態過濾');
+
+      await select.selectOption('999');
+      assert.equal(await p.locator('#style-rows td').textContent(), '這個狀態沒有項目。');
+      await p.locator('#style-filter button[data-status="all"]').click();
+      assert.deepEqual(await channelCells(), ['#999']);
+      assert.match(await p.locator('#style-count').textContent(), /待確認 0｜已確認 0｜已拒絕 1/);
+      assert.equal(await p.locator('#slang-rows tr').count(), 1, '黑話卡片不受頻道選單影響');
+
+      const refreshed = () => Promise.all([
+        p.waitForResponse(r => new URL(r.url()).pathname === '/api/slang'),
+        p.locator('#refresh').click(),
+      ]);
+      // 筆數變了但頻道沒增減：只改文字，不重建 option（重建會關掉使用者正打開的選單）。
+      entries = [...entries, style('chat-new', 'c1', '閒聊', 'candidate')];
+      await select.evaluate(node => { node.options[0].keep = true; });
+      await refreshed();
+      await p.waitForFunction(() => document.querySelector('#style-channel option').textContent === '全部頻道（26）');
+      assert.equal(await select.evaluate(node => node.options[0].keep), true, '頻道沒增減時不重建選項');
+      assert.equal(await select.inputValue(), '999', '重新整理後保留選到的頻道');
+
+      entries = entries.filter(entry => entry.channelId !== '999');
+      await refreshed();
+      await p.waitForFunction(() => document.querySelectorAll('#style-channel option').length === 4);
+      assert.equal(await select.inputValue(), 'all', '頻道已經沒有條目時退回全部頻道');
+      assert.equal(await styleRows.count(), 20);
+      assert.deepEqual(dcErrors, []);
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('No JavaScript errors, unknown API routes or external requests', async () => {
     assert.deepEqual(errors, []);
     assert.deepEqual(fixture.unknownRequests, []);

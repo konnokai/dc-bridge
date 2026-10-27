@@ -68,6 +68,18 @@ if (!hasVoiceTool()) {
   catch (e) { ok(false, 'voice.html 前端 JS 可解析', e.message); }
 }
 
+console.log('## Discord 控制台');
+{
+  const dc = fs.readFileSync(path.join(ROOT, 'public', 'discord-console.html'), 'utf8');
+  const dcIds = [...dc.matchAll(/\sid="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]);
+  const dcDups = [...new Set(dcIds.filter((v, i) => dcIds.indexOf(v) !== i))];
+  ok(dcDups.length === 0, 'discord-console.html ID 唯一', dcDups.length ? `重复：${dcDups.join(', ')}` : `共 ${dcIds.length} 个`);
+  ok(/<select id="style-channel"[^>]*aria-label="頻道"/.test(dc), '频道风格卡片有频道下拉选单');
+  const dcScript = [...dc.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0] ?? '';
+  try { new Function(dcScript); ok(true, 'discord-console.html 前端 JS 可解析'); }
+  catch (e) { ok(false, 'discord-console.html 前端 JS 可解析', e.message); }
+}
+
 console.log('## fixture mock 覆盖');
 const fixture = fs.readFileSync(path.join(ROOT, 'scripts', 'console-ui-fixture.mjs'), 'utf8');
 ok(fixture.includes("case '/api/socialV2/voices'"), 'fixture mock 了 /api/socialV2/voices');
