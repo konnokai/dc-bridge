@@ -465,7 +465,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情與貼圖（見「表情目錄」）
 - `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字
-- `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間，以及記憶
+- `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、全域名稱、使用者名稱、身分組（含最高身分組顏色）、
+  加入時間、帳號建立時間、加成起始日、禁言到期時間，以及記憶；另外附上頭像圖片（有伺服器專屬頭像就用那張，128px，
+  經 `media` 設定的縮圖流程）。頭像抓不到時只少圖，文字照回。個人簡介、代名詞 Discord 不給 bot 讀；線上狀態要 Presence 特權 intent，沒開
 - `mcp__discord__server_info`（沒有其他參數）：查目前這個伺服器與頻道：伺服器名稱、簡介、建立日期、擁有者、成員數、
   加成等級、頻道與身分組數量、自訂表情與貼圖數量、bot 在這裡的暱稱，以及目前頻道的名稱、主題、是否 NSFW。私聊回錯誤
 - `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）

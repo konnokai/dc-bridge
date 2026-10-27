@@ -70,12 +70,16 @@ const server = new McpServer({ name: 'discord', version: '0.2.1-r1' });
 const sessionToken = z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）');
 const messageRef = (what) => z.string().describe(`${what}：訊息前面的 #編號（例如 #k7f3ab），只能用這個頻道出現過的`);
 
-/** 每個工具都是：post 到橋接 → 成功回文字，失敗回 isError（模型才不會以為做成了）。 */
+/**
+ * 每個工具都是：post 到橋接 → 成功回文字，失敗回 isError（模型才不會以為做成了）。
+ * success 也可以回 content 陣列（文字加圖片）。
+ */
 function tool(name, description, schema, pathname, success, timeoutMs = 30_000) {
   server.tool(name, description, schema, async (args) => {
     try {
       const result = await post(pathname, args, timeoutMs);
-      return { content: [{ type: 'text', text: success(result) }] };
+      const out = success(result);
+      return { content: Array.isArray(out) ? out : [{ type: 'text', text: out }] };
     } catch (error) {
       return { isError: true, content: [{ type: 'text', text: `失敗：${error?.message ?? error}` }] };
     }
@@ -145,13 +149,16 @@ tool(
 
 tool(
   'user_info',
-  '查某則訊息的發言者：顯示名稱、使用者名稱、身分組、加入伺服器時間，以及你記得的關於他的事。',
+  '查某則訊息的發言者：顯示名稱、使用者名稱、身分組、加入伺服器時間、加成與禁言狀態、你記得的關於他的事，並附上他的頭像圖片。',
   {
     token: sessionToken,
     message: messageRef('那個人說過的某一則訊息'),
   },
   '/user',
-  (result) => String(result.text ?? ''),
+  (result) => [
+    { type: 'text', text: String(result.text ?? '') },
+    ...(result.avatar?.data ? [{ type: 'image', data: result.avatar.data, mimeType: result.avatar.mimeType }] : []),
+  ],
 );
 
 tool(

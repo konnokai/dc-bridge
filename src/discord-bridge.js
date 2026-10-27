@@ -851,17 +851,33 @@ async function main() {
           .slice(0, 15)
           .map((role) => flat(role.name, 40))
         : [];
+      const date = (value) => value.toISOString().slice(0, 10);
+      const mutedUntil = member?.communicationDisabledUntil;
       const lines = [
         `顯示名稱：${flat(authorName(target), 40)}`,
+        target.author?.globalName ? `全域名稱：${flat(target.author.globalName, 40)}` : '',
         `使用者名稱：${flat(target.author?.username, 40)}${target.author?.bot ? '（bot）' : ''}`,
         ownerIds.has(target.author?.id) ? '這個人是管理員（bot 擁有者）' : '',
         member ? `身分組：${roles.length ? roles.join('、') : '沒有'}` : '',
-        member?.joinedAt ? `加入伺服器：${member.joinedAt.toISOString().slice(0, 10)}` : '',
-        target.author?.createdAt ? `帳號建立：${target.author.createdAt.toISOString().slice(0, 10)}` : '',
+        member && member.displayHexColor !== '#000000' ? `名字顏色：${member.displayHexColor}` : '',
+        member?.joinedAt ? `加入伺服器：${date(member.joinedAt)}` : '',
+        target.author?.createdAt ? `帳號建立：${date(target.author.createdAt)}` : '',
+        member?.premiumSince ? `從 ${date(member.premiumSince)} 開始加成這個伺服器` : '',
+        mutedUntil && mutedUntil > new Date() ? `禁言中，到 ${shortTime(mutedUntil)}` : '',
       ];
       const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { userId: target.author?.id }) : [];
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
-      return { text: lines.filter(Boolean).join('\n') };
+      // 頭像抓不到不算失敗：文字照回，少一張圖而已。
+      let avatar = null;
+      try {
+        const url = (member ?? target.author).displayAvatarURL({ extension: 'png', size: 128, forceStatic: true });
+        const prepared = await prepareImageBlock(await fetchDiscordImage(url, cfg.discord.media), 'avatar', cfg.discord.media);
+        if (prepared.block) avatar = { data: prepared.block.data, mimeType: prepared.block.mediaType };
+        else lines.push(`（頭像看不到：${prepared.error}）`);
+      } catch (error) {
+        lines.push(`（頭像看不到：${flat(error?.message ?? error, 80)}）`);
+      }
+      return { text: lines.filter(Boolean).join('\n'), avatar };
     },
     async server(body) {
       const { channel } = await agentSender.resolve(body.token);

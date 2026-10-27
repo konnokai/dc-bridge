@@ -851,7 +851,12 @@ console.log('## 7e. Discord MCP 發送工具');
       }
       received.push({ url: req.url, ...parsed });
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, channel: '測試頻道', text: `來自 ${req.url}` }));
+      res.end(JSON.stringify({
+        ok: true,
+        channel: '測試頻道',
+        text: `來自 ${req.url}`,
+        ...(req.url === '/user' ? { avatar: { data: 'iVBORw0KGgo=', mimeType: 'image/png' } } : {}),
+      }));
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -906,6 +911,10 @@ console.log('## 7e. Discord MCP 發送工具');
     }
     const searched = await client.callTool({ name: 'search_emojis', arguments: { token: 't' } });
     ok(String(searched.content?.[0]?.text) === '來自 /emojis', '唯讀工具把橋接回的 text 原樣交給模型');
+    const userResult = await client.callTool({ name: 'user_info', arguments: { token: 't', message: '#k7f3ab' } });
+    ok(String(userResult.content?.[0]?.text) === '來自 /user'
+      && userResult.content?.[1]?.type === 'image' && userResult.content[1].mimeType === 'image/png'
+      && userResult.content[1].data === 'iVBORw0KGgo=', 'user_info 把橋接回的頭像當成 MCP 圖片交給模型');
     const remembered = await client.callTool({ name: 'remember_user', arguments: { token: 't', message: '#k7f3ab', name: '小明', fact: '喜歡貓' } });
     ok(String(remembered.content?.[0]?.text) === '來自 /remember', '記憶工具把橋接回的最新清單交給模型');
     const rememberTool = tools.find((t) => t.name === 'remember_user');
