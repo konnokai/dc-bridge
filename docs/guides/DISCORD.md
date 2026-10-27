@@ -392,16 +392,19 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 ## 黑話學習（選用）
 
-從允許的公開頻道收集語料 → 學習會話抽候選 → 管理員在控制台確認 → 下一則 prompt 才看得到。
+從允許的頻道收集語料 → 學習會話抽候選 → 管理員在控制台確認 → 下一則 prompt 才看得到。
 
-- **只收公開頻道**：`allow.guilds` / `allow.channels` 內、`@everyone` 看得到的頻道；私聊、
-  私密討論串、NSFW 頻道不收。含本機路徑／憑證特徵的訊息也不送進學習會話。
+- **收哪些訊息**：`allow.guilds` / `allow.channels` 內 bot 讀得到的伺服器頻道都收，包含不給 `@everyone` 看的頻道、
+  私密討論串、NSFW 頻道（很多伺服器把頻道只開給某個身分組，用 `@everyone` 判斷會什麼都收不到）。
+  不收：私聊、bot 的訊息、`!`／`/` 開頭的指令、含本機路徑／憑證特徵的訊息。
+  因為每個詞都要管理員確認才會注入，私密頻道的內容不會自己流到別的頻道。
 - **不會自動轉正**：候選只存在 `state/discord-slang.json`，控制台按「確認」才會注入。
 - **每伺服器分開**：A 服的詞不會出現在 B 服。
 - **成本控制**：同一頻道累積 `extractMinMessages` 則、距上次 ≥ `extractCooldownMs`、
   每天 ≤ `maxPerDay` 才抽一次；失敗也吃冷卻，不會每則訊息重試。
 - **學習會話隔離**：獨立 DSH 會話、不進 `reverse`、不回 Discord；提問／審批自動取消、結束就歸檔。
 - **注入**：只有 `confirmed`，按出現次數排序，格式 `【群裡的黑話】- 詞：意思（用法：…）`。
+  跟群友記憶一樣，同一個會話裡內容沒變就不重複帶；詞庫有改、或上次帶已超過 30 分鐘才再帶。
 - **prompt injection**：頻道訊息會轉義後包進 `<chat>`，prompt 明講只當語料。學習會話用
   `dc-learner`（短 prompt），並在註冊期把 profile 掛的唯讀 web-search MCP 一起移除；
   `request/header` 的 `tools` 是 0 個，模型沒有工具可呼叫。

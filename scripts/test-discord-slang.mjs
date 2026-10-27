@@ -127,8 +127,15 @@ console.log('## 2. 確認、編輯、注入');
   ok(buildSlangHint(store, { guildId: GUILD, max: 1 }).split('\n').length <= 2, 'max 限制條數');
   ok(buildSlangHint(store, { guildId: GUILD, maxChars: 120 }).length <= 120, 'maxChars 限制總長度');
 
+  const shown = new Map();
+  const once = (now) => buildSlangHint(store, { guildId: GUILD, shown, now, refreshMs: 30 * 60_000 });
+  ok(once(NOW).includes('難繃'), '同一會話第一次會帶');
+  ok(once(NOW + 60_000) === '', '同一會話內容沒變就不重複帶');
+  ok(once(NOW + 40 * 60_000).includes('難繃'), '超過 refreshMs 再帶一次（DSH 可能壓縮掉了）');
+
   updateSlang(store, nanbeng.id, { usage: '看到爛操作時' }, NOW + 2000);
   ok(buildSlangHint(store, { guildId: GUILD }).includes('用法：看到爛操作時'), '編輯立即反映在注入');
+  ok(once(NOW + 41 * 60_000).includes('用法：看到爛操作時'), '詞庫有改就再帶');
   updateSlang(store, nanbeng.id, { meaning: '   ' }, NOW + 2500);
   ok(store.entries.find((entry) => entry.id === nanbeng.id).meaning === '撐不住／很好笑', '意思不接受清空');
   ok(updateSlang(store, 'nope', { meaning: 'x' }) === null, '編輯不存在的詞回 null');

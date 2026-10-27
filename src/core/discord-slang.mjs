@@ -299,8 +299,18 @@ export function slangStats(store) {
 /**
  * 注入 prompt 的已確認詞條。
  * 只取本伺服器（`guildId` 相符）的詞；`seen` 高的優先，總字數受 maxChars 限制。
+ * 有給 `shown`（這個會話的 Map）時，內容沒變又沒超過 refreshMs 就回空字串：每一批都帶只是燒 token。
  */
-export function buildSlangHint(store, { guildId = '', max = 8, maxChars = 1500 } = {}) {
+export function buildSlangHint(store, { guildId = '', max = 8, maxChars = 1500, shown = null, now = Date.now(), refreshMs = 0 } = {}) {
+  const text = slangHintText(store, { guildId, max, maxChars });
+  if (!text || !shown) return text;
+  const last = shown.get('slang');
+  if (last && last.text === text && now - last.at < refreshMs) return '';
+  shown.set('slang', { text, at: now });
+  return text;
+}
+
+function slangHintText(store, { guildId, max, maxChars }) {
   const gid = clean(guildId, 24);
   if (!gid) return '';
   const confirmed = (store?.entries ?? [])

@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { Client, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, ChannelType } from 'discord.js';
+import { Client, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   INVITE_PERMISSIONS,
@@ -260,6 +260,7 @@ async function main() {
 
   const memoryShown = new Map(); // key -> Map<userId, { updatedAt, at }>：這個會話帶過誰的記憶
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
+  const slangShown = new Map(); // key -> Map：這個會話上次帶的黑話區塊
   process.on('exit', () => { try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ } });
 
   // 黑話詞庫：候選靠學習會話產生，只有管理員在控制台確認過的才會注入 prompt。
@@ -564,6 +565,7 @@ async function main() {
     primedKeys.delete(key);
     memoryShown.delete(key);
     memoryWrites.delete(key);
+    slangShown.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
     const entry = pending.get(key);
@@ -1325,7 +1327,7 @@ async function main() {
         const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id));
         // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）。
         for (const entry of history) {
-          if (!entry.author?.bot && entry.content) collectSlangSample(entry, entry.content, job.channel);
+          if (!entry.author?.bot && entry.content) collectSlangSample(entry, entry.content);
         }
         context = formatRecentContext(
           history.reverse().map((entry) => ({
@@ -1361,13 +1363,16 @@ async function main() {
       });
     }
 
-    // 已確認的黑話：只有管理員在控制台按過「確認」的才會進來。
+    // 已確認的黑話：只有管理員在控制台按過「確認」的才會進來；同一會話沒變就不重複帶。
     let slangHint = '';
     if (cfg.discord.slang.enabled && guild) {
+      if (!slangShown.has(key)) slangShown.set(key, new Map());
       slangHint = buildSlangHint(slangStore, {
         guildId: job.guildId,
         max: cfg.discord.slang.injectMax,
         maxChars: cfg.discord.slang.maxChars,
+        shown: slangShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
       });
     }
 
@@ -1474,20 +1479,6 @@ async function main() {
     }
   }
 
-  /** 這個頻道的訊息能不能帶到其他頻道：只分享 @everyone 看得到的公開頻道。 */
-  function canShareChannel(channel) {
-    if (!channel) return false;
-    if (channel.isThread?.() && channel.type === ChannelType.PrivateThread) return false;
-    const target = channel.isThread?.() ? channel.parent : channel;
-    const everyone = target?.guild?.roles?.everyone;
-    if (!everyone || typeof target.permissionsFor !== 'function') return false;
-    try {
-      return target.permissionsFor(everyone)?.has(PermissionFlagsBits.ViewChannel) === true;
-    } catch {
-      return false;
-    }
-  }
-
   /** 頻道或母頻道是不是 NSFW。 */
   function channelIsNsfw(channel) {
     if (!channel) return false;
@@ -1520,17 +1511,15 @@ async function main() {
   }
 
   /**
-   * 收集一則語料。只收允許的公開頻道；私密討論串、NSFW、指令、機器人都不收。
-   * `channelOverride` 給「抓回來的歷史訊息」用（那些 message.channel 可能是 undefined）。
+   * 收集一則語料。允許的伺服器頻道都收（含不給 @everyone 看的、NSFW）：每個詞都要管理員確認才注入，
+   * 私密頻道的內容不會自己流到別處。指令、機器人、私聊不收。
    */
-  function collectSlangSample(message, text, channelOverride = null) {
+  function collectSlangSample(message, text) {
     if (!cfg.discord.slang.enabled || !message?.guildId) return;
     const value = String(text ?? '').trim();
     if (!value || /^[!/]/.test(value)) return;
     // 含本機路徑／憑證特徵的訊息不送進學習會話（也沒有必要學）。
     if (findSensitive(value)) return;
-    const channel = channelOverride ?? message.channel;
-    if (!canShareChannel(channel) || channelIsNsfw(channel)) return;
 
     const channelId = String(message.channelId);
     const window = slangWindows.get(channelId) ?? [];
@@ -1712,7 +1701,7 @@ async function main() {
     const direct = !guildId
       || shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
 
-    // 黑話語料：所有允許的公開頻道訊息都收（含沒叫 bot 的），才有足夠樣本。
+    // 黑話語料：允許的頻道訊息都收（含沒叫 bot 的），才有足夠樣本。
     if (text) collectSlangSample(message, text);
 
     if (!direct) {
