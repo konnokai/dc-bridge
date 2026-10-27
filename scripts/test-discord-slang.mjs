@@ -196,6 +196,7 @@ console.log('## 4. 檔案讀寫、壞檔與上限');
     const loaded = loadSlangFile(file);
     ok(loaded.warning === null && loaded.store.entries.length === 1, '存檔後讀得回來');
     ok(loaded.store.entries[0].term === '難繃' && loaded.store.entries[0].sources.length === 2, '來源與內容都保留');
+    ok(loaded.store.entries[0].updatedAt === new Date(NOW).toISOString(), '載入不會把時間重設成現在');
 
     fs.writeFileSync(file, '{壞掉的 JSON', 'utf8');
     const broken = loadSlangFile(file);

@@ -50,7 +50,8 @@ function isStatus(value) {
 }
 
 function iso(ms) {
-  const n = Number(ms);
+  // 存檔裡是 ISO 字串，Number() 會變 NaN；以前每次載入都把時間重設成現在，已拒絕的詞永遠不會過期。
+  const n = typeof ms === 'string' ? Date.parse(ms) : Number(ms);
   return new Date(Number.isFinite(n) ? n : Date.now()).toISOString();
 }
 
