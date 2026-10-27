@@ -56,6 +56,10 @@
   .bar-wrap { display: flex; align-items: center; gap: 6px; min-width: 90px; }
   .bar-track { flex: 1; height: 7px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
   .bar-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); min-width: 2px; }
+  .bar-fill.warn { background: #d4a72c; }
+  .bar-fill.bad { background: var(--danger); }
+  .quota-row { display: grid; grid-template-columns: 48px minmax(60px, 1fr) minmax(0, auto); gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; }
+  .quota-row .num { font-variant-numeric: tabular-nums; text-align: right; }
   tr.clickable { cursor: pointer; }
   tr.clickable:hover td { background: var(--panel-2); }
   tr.detail > td { background: var(--panel-2); }
@@ -66,6 +70,12 @@
   .gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
   .gate form { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: grid; gap: 12px; }
   .hidden { display: none !important; }
+  .tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; margin: 0 0 14px; background: var(--bg); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: none; background: transparent; color: var(--muted); border-radius: 0; padding: 10px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button:hover { color: var(--text); filter: none; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 </style>
 </head>
 <body>
@@ -89,11 +99,29 @@
     </div>
   </header>
 
+  <nav class="tabs" role="tablist" aria-label="控制台分頁" id="tabs">
+    <button role="tab" id="tabbtn-overview" aria-controls="tab-overview" data-tab="overview">總覽</button>
+    <button role="tab" id="tabbtn-usage" aria-controls="tab-usage" data-tab="usage">花費</button>
+    <button role="tab" id="tabbtn-slang" aria-controls="tab-slang" data-tab="slang">黑話</button>
+    <button role="tab" id="tabbtn-memory" aria-controls="tab-memory" data-tab="memory">記憶</button>
+    <button role="tab" id="tabbtn-sessions" aria-controls="tab-sessions" data-tab="sessions">會話</button>
+    <button role="tab" id="tabbtn-settings" aria-controls="tab-settings" data-tab="settings">設定</button>
+    <button role="tab" id="tabbtn-logs" aria-controls="tab-logs" data-tab="logs">日誌</button>
+  </nav>
+
+  <div class="tab-panel" role="tabpanel" id="tab-overview" aria-labelledby="tabbtn-overview">
   <section class="card">
     <h2>狀態</h2>
     <div class="grid" id="status"></div>
   </section>
 
+  <section class="card" id="quota-card">
+    <h2>OpenCode Go 額度 <span id="quota-note" class="muted"></span></h2>
+    <div id="quota"></div>
+  </section>
+  </div>
+
+  <div class="tab-panel" role="tabpanel" id="tab-usage" aria-labelledby="tabbtn-usage" hidden>
   <section class="card">
     <h2>花費 <span id="usage-total" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
@@ -119,57 +147,9 @@
       <span id="usage-msg" class="msg"></span>
     </div>
   </section>
+  </div>
 
-  <section class="card">
-    <h2>邀請機器人 <span class="muted">（管理員）</span></h2>
-    <p class="muted" style="margin:0 0 10px">連結已包含目前所有功能的權限。貼給要邀請 bot 的人，或在 Discord 開啟。</p>
-    <div class="row" style="margin-bottom:8px">
-      <button id="invite-open">開啟邀請頁</button>
-      <button id="invite-copy" class="ghost">複製連結</button>
-      <span id="invite-msg" class="msg"></span>
-    </div>
-    <input id="invite-url" readonly placeholder="載入中…">
-    <div id="invite-perms" class="muted" style="margin-top:8px;font-size:12px"></div>
-  </section>
-
-  <section class="card">
-    <h2>表情目錄 <span id="emoji-count" class="muted"></span></h2>
-    <div class="row" style="margin-bottom:10px">
-      <button id="emoji-rebuild">更新目錄</button>
-      <span id="emoji-job" class="muted"></span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>伺服器</th><th>條目</th><th>建立時間</th></tr></thead>
-        <tbody id="emoji-guilds"></tbody>
-      </table>
-    </div>
-    <pre id="emoji-log" class="hidden"></pre>
-  </section>
-
-  <section class="card">
-    <h2>黑話詞庫 <span id="slang-count" class="muted"></span></h2>
-    <div class="row" style="margin-bottom:10px">
-      <span id="slang-learning" class="muted"></span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>詞</th><th>意思</th><th>用法</th><th>狀態</th><th>次數</th><th>操作</th></tr></thead>
-        <tbody id="slang-rows"></tbody>
-      </table>
-    </div>
-  </section>
-
-  <section class="card">
-    <h2>會話 <span id="session-count" class="muted"></span></h2>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>等待中</th><th></th></tr></thead>
-        <tbody id="sessions"></tbody>
-      </table>
-    </div>
-  </section>
-
+  <div class="tab-panel" role="tabpanel" id="tab-settings" aria-labelledby="tabbtn-settings" hidden>
   <section class="card">
     <h2>白名單與媒體</h2>
     <form id="config-form" class="grid">
@@ -199,9 +179,79 @@
   </section>
 
   <section class="card">
+    <h2>邀請機器人 <span class="muted">（管理員）</span></h2>
+    <p class="muted" style="margin:0 0 10px">連結已包含目前所有功能的權限。貼給要邀請 bot 的人，或在 Discord 開啟。</p>
+    <div class="row" style="margin-bottom:8px">
+      <button id="invite-open">開啟邀請頁</button>
+      <button id="invite-copy" class="ghost">複製連結</button>
+      <span id="invite-msg" class="msg"></span>
+    </div>
+    <input id="invite-url" readonly placeholder="載入中…">
+    <div id="invite-perms" class="muted" style="margin-top:8px;font-size:12px"></div>
+  </section>
+
+  <section class="card">
+    <h2>表情目錄 <span id="emoji-count" class="muted"></span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <button id="emoji-rebuild">更新目錄</button>
+      <span id="emoji-job" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>伺服器</th><th>條目</th><th>建立時間</th></tr></thead>
+        <tbody id="emoji-guilds"></tbody>
+      </table>
+    </div>
+    <pre id="emoji-log" class="hidden"></pre>
+  </section>
+  </div>
+
+  <div class="tab-panel" role="tabpanel" id="tab-slang" aria-labelledby="tabbtn-slang" hidden>
+  <section class="card">
+    <h2>黑話詞庫 <span id="slang-count" class="muted"></span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <span id="slang-learning" class="muted"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>詞</th><th>意思</th><th>用法</th><th>狀態</th><th>次數</th><th>操作</th></tr></thead>
+        <tbody id="slang-rows"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div class="tab-panel" role="tabpanel" id="tab-memory" aria-labelledby="tabbtn-memory" hidden>
+  <section class="card">
+    <h2>群友記憶 <span id="memory-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 remember_user 記下的事，唯讀。要刪請當事人用 /forget。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>伺服器</th><th>群友</th><th>記得的事</th><th>更新</th></tr></thead>
+        <tbody id="memory-rows"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div class="tab-panel" role="tabpanel" id="tab-sessions" aria-labelledby="tabbtn-sessions" hidden>
+  <section class="card">
+    <h2>會話 <span id="session-count" class="muted"></span></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>等待中</th><th></th></tr></thead>
+        <tbody id="sessions"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div class="tab-panel" role="tabpanel" id="tab-logs" aria-labelledby="tabbtn-logs" hidden>
+  <section class="card">
     <h2>日誌</h2>
     <pre id="logs"></pre>
   </section>
+  </div>
 </main>
 
 <script>
@@ -216,8 +266,37 @@
   if (fromQuery) {
     token = fromQuery;
     localStorage.setItem(KEY, token);
-    history.replaceState(null, '', location.pathname);
+    history.replaceState(null, '', location.pathname + location.hash);
   }
+
+  // ── 分頁 ──────────────────────────────────────────────────────────────────
+  // 目前分頁記在網址的 #：重新整理、分享連結都會停在同一頁。資料照常每 5 秒全部刷新，切頁不用重抓。
+  const tabButtons = [...document.querySelectorAll('#tabs [role="tab"]')];
+  function selectTab(name, { focus = false } = {}) {
+    const target = tabButtons.find((button) => button.dataset.tab === name) ?? tabButtons[0];
+    for (const button of tabButtons) {
+      const selected = button === target;
+      button.setAttribute('aria-selected', String(selected));
+      button.tabIndex = selected ? 0 : -1;
+      document.getElementById(button.getAttribute('aria-controls')).hidden = !selected;
+    }
+    if (focus) target.focus();
+    if (location.hash !== '#' + target.dataset.tab) history.replaceState(null, '', '#' + target.dataset.tab);
+  }
+  document.getElementById('tabs').addEventListener('click', (event) => {
+    const button = event.target.closest('[role="tab"]');
+    if (button) selectTab(button.dataset.tab);
+  });
+  document.getElementById('tabs').addEventListener('keydown', (event) => {
+    const index = tabButtons.indexOf(document.activeElement);
+    if (index < 0) return;
+    const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabButtons.length - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    selectTab(tabButtons[(next + tabButtons.length) % tabButtons.length].dataset.tab, { focus: true });
+  });
+  window.addEventListener('hashchange', () => selectTab(location.hash.slice(1)));
+  selectTab(location.hash.slice(1));
 
   const el = (tag, props = {}, ...children) => {
     const node = document.createElement(tag);
@@ -513,6 +592,38 @@
     $('usage-rows').replaceChildren(...rows);
   }
 
+  // ── OpenCode Go 額度 ──────────────────────────────────────────────────────
+  // 這是 OpenCode 伺服器算的（用完會被擋）；上面的花費是橋接按價目表估的。
+  function untilText(ms) {
+    const minutes = Math.max(0, Math.round(ms / 60000));
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    if (days > 0) return days + ' 天 ' + hours + ' 小時';
+    if (hours > 0) return hours + ' 小時 ' + (minutes % 60) + ' 分';
+    return minutes + ' 分';
+  }
+
+  function renderQuota(q) {
+    $('quota-card').hidden = !!q?.skipped;
+    if (q?.skipped) return;
+    if (!q?.ok) {
+      $('quota-note').textContent = '';
+      $('quota').replaceChildren(el('div', { className: 'msg err' }, '查不到：' + (q?.error ?? '未知原因')));
+      return;
+    }
+    $('quota-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，60 秒更新一次）';
+    $('quota').replaceChildren(...q.windows.map((w) => {
+      const level = w.percent >= 90 ? ' bad' : w.percent >= 70 ? ' warn' : '';
+      const reset = w.resetsAt ? untilText(w.resetsAt - Date.now()) + '後重置' : '';
+      return el('div', { className: 'quota-row' },
+        el('span', { className: 'muted' }, w.label),
+        el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(w.percent), ariaLabel: w.label + '額度' },
+          el('div', { className: 'bar-fill' + level, style: 'width:' + Math.min(100, Math.max(0, w.percent)) + '%' })),
+        el('span', { className: 'num' }, w.percent + '%' + (w.status && w.status !== 'ok' ? '（' + w.status + '）' : '') + (reset ? '｜' + reset : '')),
+      );
+    }));
+  }
+
   async function refreshUsage() {
     try {
       renderUsage(await api('/api/usage?range=' + encodeURIComponent(usageRange)));
@@ -581,6 +692,19 @@
     )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有詞條；在允許的頻道累積 20 則訊息後會自動學。'))]));
   }
 
+  function renderMemory(data) {
+    const rows = (data?.guilds ?? []).flatMap((guild) => guild.users.map((user) => ({ guild, user })));
+    $('memory-count').textContent = data?.enabled
+      ? `（${rows.length} 人）`
+      : '（已關閉：config.json 的 discord.memory.enabled）';
+    $('memory-rows').replaceChildren(...(rows.length ? rows.map(({ guild, user }) => el('tr', {},
+      el('td', { className: 'muted' }, guild.guildName || guild.guildId),
+      el('td', {}, el('strong', {}, user.name || user.userId)),
+      el('td', {}, ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact))),
+      el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(user.updatedAt)),
+    )) : [el('tr', {}, el('td', { colSpan: 4, className: 'muted' }, '還沒有記住任何人。'))]));
+  }
+
   function renderSessions(list) {    $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
       el('td', { className: 'mono' }, s.key),
       el('td', { className: 'mono' }, s.sessionId),
@@ -627,7 +751,7 @@
   async function refresh() {
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
-      api('/api/usage?range=' + encodeURIComponent(usageRange)),
+      api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -636,6 +760,8 @@
     if (results[3].status === 'fulfilled') renderSlang(results[3].value);
     if (results[4].status === 'fulfilled') renderInvite(results[4].value);
     if (results[5].status === 'fulfilled') renderUsage(results[5].value);
+    if (results[6].status === 'fulfilled') renderQuota(results[6].value);
+    if (results[7].status === 'fulfilled') renderMemory(results[7].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {

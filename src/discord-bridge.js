@@ -37,7 +37,9 @@ import {
   forgetFact,
   forgetUser,
   formatMemoryBlock,
+  formatUserMemory,
   loadMemoryFile,
+  memoryOverview,
   nameMatches,
   numberFacts,
   rememberFact,
@@ -67,7 +69,8 @@ import {
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
 import { createBatcher, createTurnGate, defang, formatBatch } from './core/discord-batch.mjs';
-import { createUsageTracker, usageReport } from './core/discord-usage.mjs';
+import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
+import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
 
@@ -94,7 +97,7 @@ const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一�
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
  * 伺服器管理員可以改；真正的邊界是執行時的權限檢查（見 handleSlashCommand）。
  * dmPermission: false —— reset/status 只對伺服器頻道有意義，私聊請用 `!reset` / `!status`。
- * forget 不設管理員權限：任何人都能刪自己的記憶。
+ * forget、memory 不設管理員權限：任何人都能看、刪自己的記憶。
  */
 const slashCommandData = [
   new SlashCommandBuilder()
@@ -119,6 +122,10 @@ const slashCommandData = [
       .setName('required')
       .setDescription('true：要 @bot 才回；false：自由參與。不填就只顯示目前設定'))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('memory')
+    .setDescription('列出 bot 在這個伺服器記下的關於你的事（只有你看得到）')
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('forget')
@@ -303,6 +310,15 @@ async function main() {
 
   function usageInfo({ range = '24h', limit = 200 } = {}) {
     return usageReport({ ledger: usage.ledger, priceTable, nominalModel: cfg.dsh.model, range, limit });
+  }
+
+  // key 跟 DSH 共用同一把：DSH 的 Models 頁存在 .credentials.yaml 的 refs 裡。
+  const goQuota = createGoQuota({
+    getKey: () => process.env.OPENCODE_GO_API_KEY?.trim() || readDshCredential('OPENCODE_GO_API_KEY'),
+  });
+  async function quotaInfo() {
+    if (cfg.dsh.provider !== 'opencode-go') return { ok: false, skipped: true, error: `provider 是 ${cfg.dsh.provider}，不是 opencode-go` };
+    return goQuota.get();
   }
 
   function saveSlangNow() {
@@ -1746,7 +1762,8 @@ async function main() {
       }
       if (command === 'status') {
         if (!isOwner) { await sendLong(key, '管理指令僅管理員可用。'); return; }
-        await sendLong(key, `會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${guildId ? '頻道' : '私聊'}`);
+        const quota = formatGoQuota(await quotaInfo());
+        await sendLong(key, `會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${guildId ? '頻道' : '私聊'}${quota ? `\n${quota}` : ''}`);
         return;
       }
 
@@ -1792,7 +1809,17 @@ async function main() {
       await interaction.reply({ content: '這個指令只能在伺服器頻道使用。', flags: MessageFlags.Ephemeral });
       return;
     }
-    // 刪記憶是自己的事，不需要管理員權限。
+    // 看、刪記憶是自己的事，不需要管理員權限。
+    if (interaction.commandName === 'memory') {
+      const facts = userFacts(memoryStore, { guildId: interaction.guildId, userId: interaction.user.id });
+      await interaction.reply({
+        content: facts.length
+          ? `我在這個伺服器記得你的事：\n${formatUserMemory(facts)}\n\n要全部刪掉用 /forget。`
+          : '我在這個伺服器沒有記住你的事。',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     if (interaction.commandName === 'forget') {
       const removed = forgetUser(memoryStore, { guildId: interaction.guildId, userId: interaction.user.id });
       if (removed) markMemoryDirty();
@@ -1839,7 +1866,8 @@ async function main() {
       return;
     }
     if (interaction.commandName === 'status') {
-      await interaction.editReply(`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜頻道`);
+      const quota = formatGoQuota(await quotaInfo());
+      await interaction.editReply(`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜頻道${quota ? `\n${quota}` : ''}`);
       return;
     }
     if (interaction.commandName === 'mention') {
@@ -2094,6 +2122,11 @@ async function main() {
           updateConfig,
           invite: inviteInfo,
           usage: usageInfo,
+          quota: quotaInfo,
+          memory: () => ({
+            enabled: cfg.discord.memory.enabled,
+            guilds: memoryOverview(memoryStore).map((guild) => ({ ...guild, guildName: client.guilds.cache.get(guild.guildId)?.name ?? '' })),
+          }),
           usageTurns: (key, limit) => usage.ledger.conversation(key, { turnLimit: limit }),
           usageReset: () => {
             usage.ledger.reset();

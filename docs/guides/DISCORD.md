@@ -201,9 +201,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | 指令 | 誰能用 | 作用 |
 | --- | --- | --- |
 | `/reset`（或 `!reset`、`!new`） | 管理員 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文 |
-| `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類 |
+| `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
+| `/memory` | 所有人 | 列出 bot 在**這個伺服器**記下的關於自己的事（群友記憶），回覆只有自己看得到 |
 | `/forget`（或 `!forget`） | 所有人 | 刪除 bot 在**這個伺服器**記下的關於自己的事（群友記憶）；不影響目前頻道的對話上下文 |
 | 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
@@ -215,7 +216,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **誰能執行**：執行時只認 `ownerIds`。伺服器管理員看得到選單，但不在 `ownerIds` 裡就會被拒絕。
 
 > Discord 官方客戶端會把未註冊的 `/xxx` 當成指令輸入，可能不讓你送出。`/reset`、`/status`、`/forget`
-> 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡），`/mention` 也沒有。
+> 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡），`/memory` 也沒有（一般訊息的回覆
+> 整個頻道都看得到，會把你的記憶貼給大家看），`/mention` 也沒有。
 > `!` 別名是一般訊息，頻道裡要 @bot 或回覆 bot 才算數（私聊直接打）。
 > DSH 的斜線命令沒有別名（`!model` 會被當成普通文字）。
 
@@ -255,16 +257,22 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 控制台：http://127.0.0.1:3110/?token=<自動產生的 token>
 ```
 
-打開就能看到：
+頁面分成 7 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
+可以用滑鼠點，也可以在分頁列上用左右方向鍵切換。
 
-- **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批
-- **花費**：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
-- **邀請機器人**：產生含目前功能權限的邀請連結，可開啟或複製
-- **會話**：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
-- **黑話詞庫**：候選／已確認／已拒絕、意思與用法、出現次數；可確認、拒絕、編輯、刪除
-- **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）直接編輯，
-  存檔後**立即生效**並寫回 `config.json`。沒開 `messageContentIntent` 時勾選框鎖住（一律要 @bot）
-- **日誌**：最近 200 行（記憶體 ring buffer，重啟就清空）
+- **總覽**（`#overview`）
+  - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批
+  - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的已用百分比與重置時間（見「OpenCode Go 額度」）
+- **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
+- **黑話**（`#slang`）：候選／已確認／已拒絕、意思與用法、出現次數；可確認、拒絕、編輯、刪除
+- **記憶**（`#memory`）：每個伺服器記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
+- **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
+- **設定**（`#settings`）
+  - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）直接編輯，
+    存檔後**立即生效**並寫回 `config.json`。沒開 `messageContentIntent` 時勾選框鎖住（一律要 @bot）
+  - **表情目錄**：每個伺服器的表情條目數，可手動更新
+  - **邀請機器人**：產生含目前功能權限的邀請連結，可開啟或複製
+- **日誌**（`#logs`）：最近 200 行（記憶體 ring buffer，重啟就清空）
 
 不做的事（跟 QQ 版控制台不同）：人格編輯、QQ 版那種模式切換、語音。那些在 Discord 版沒有對應概念，
 或需要重啟 DSH 才有意義。
@@ -301,6 +309,21 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 控制台端點（都要 console token）：`GET /api/usage?range=24h|3d|7d|30d`、
 `GET /api/usage/turns?key=ch:<id>`、`POST /api/usage/reset`（清空帳本，不可恢復）。
+
+## OpenCode Go 額度
+
+`dsh.provider` 是 `opencode-go` 時，控制台的「OpenCode Go 額度」卡片和 `/status` 會顯示訂閱額度：
+5 小時、每週、每月三個額度各用掉幾 %、多久後重置。上面的「花費」是橋接自己按價目表估算的；
+這裡是 OpenCode 伺服器算的，用完會被擋的是這個數字。
+
+- **資料來源**：`GET https://opencode.ai/zen/go/v1/usage`（跟 opencode.ai 後台的額度頁同一份資料）。
+- **API key**：先看環境變數 `OPENCODE_GO_API_KEY`，沒有就讀 DSH 的 `~/.dsh/.credentials.yaml` →
+  `refs.OPENCODE_GO_API_KEY`（DSH 的 Models 頁存的那把）。key 只送到上面這個固定網址，不跟隨重新導向，
+  不寫日誌、不進錯誤訊息。
+- **快取 60 秒**：控制台每 5 秒刷新，但 60 秒內只會真的查一次；查詢失敗也快取 60 秒，不會一直重打。
+- **失敗時**：卡片和 `/status` 會寫原因（沒有 key、HTTP 狀態碼、逾時），不影響聊天。
+
+控制台端點：`GET /api/quota`。
 
 ## 表情目錄
 
@@ -360,7 +383,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 模型可以用工具記住群友的事（在做什麼、興趣、希望怎麼被稱呼），之後那個人說話時，橋接把這些事帶進 prompt。
 
 - **模型自己決定記什麼**：`remember_user` 記一條短句（最多 100 字），掛在 `#編號` 那則訊息的發言者身上；
-  事情變了就用 `forget_user_fact` 刪掉舊的那條。Persona 規定只記本人說的、之後聊天用得到的事，不記個資。
+  事情變了就用 `forget_user_fact` 刪掉舊的那條。可以記本人說的事，也可以從他的發言推測（習慣、喜好、常聊的話題），
+  推測的那條開頭會標「（推測）」。Persona 規定不記：別人轉述或叫它記別人的事、玩笑話、個資、
+  健康／政治／性向這類敏感的事、貶低人的評價。
   兩個工具都會回那個人目前的整份清單（有編號），模型照最新的編號刪。同樣的一句不會重複記。
 - **名字核對**：`remember_user` 要帶 `name`（這件事是誰的）。橋接拿它比對 `#編號` 那則的發言者
   （伺服器暱稱、Discord 顯示名稱、使用者名稱，不分大小寫、忽略空白；2 字以上可以只寫名字的一段）。
@@ -378,6 +403,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 ```json
 "memory": { "enabled": true }
 ```
+
+看自己的記憶：`/memory`（回覆只有自己看得到）。管理員可以在控制台「群友記憶」卡片看全部
+（端點 `GET /api/memory`）。
 
 刪除自己的記憶：
 

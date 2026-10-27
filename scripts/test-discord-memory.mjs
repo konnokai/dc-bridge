@@ -9,7 +9,9 @@ import {
   forgetFact,
   forgetUser,
   formatMemoryBlock,
+  formatUserMemory,
   loadMemoryFile,
+  memoryOverview,
   nameMatches,
   numberFacts,
   rememberFact,
@@ -135,6 +137,28 @@ console.log('## 5. 名字核對');
   ok(!nameMatches('', names) && !nameMatches('   ', names), '空的對不上');
   ok(!nameMatches('Sora', [null, undefined, '']), '沒有候選名字就對不上');
   ok(nameMatches('站長', ['★【管理員】站長']), '候選名字裡的標記先改寫再比');
+}
+
+console.log('## 5b. 列出記憶（/memory 與控制台）');
+{
+  const store = createMemoryStore();
+  remember(store, '在準備考試', {}, { now: NOW - MIN });
+  remember(store, '喜歡貓', {}, { now: NOW - MIN });
+  remember(store, '養狗', { userId: OTHER_USER, name: '阿華' }, { now: NOW });
+  remember(store, '住台南', { guildId: OTHER_GUILD }, { now: NOW });
+
+  const text = formatUserMemory(userFacts(store, { guildId: GUILD, userId: USER }));
+  ok(text.includes('1. 在準備考試\n2. 喜歡貓'), '/memory 一條一行、有編號');
+  ok(formatUserMemory([]) === '', '沒有記憶回空字串');
+  const long = formatUserMemory(Array.from({ length: 20 }, (_, i) => `${i} ${'字'.repeat(99)}`));
+  ok(long.length <= 1900 && long.endsWith('…'), '太長就截斷，放得進一則 Discord 訊息');
+
+  const overview = memoryOverview(store);
+  ok(overview.length === 2, '每個伺服器一組');
+  const guild = overview.find((g) => g.guildId === GUILD);
+  ok(guild.users.map((u) => u.name).join() === '阿華,小明', '同一個伺服器裡最近更新的排前面');
+  ok(guild.users[1].facts.join() === '在準備考試,喜歡貓' && guild.users[1].updatedAt === NOW - MIN, '帶出每個人的事與更新時間');
+  ok(memoryOverview(createMemoryStore()).length === 0, '空的記憶回空陣列');
 }
 
 console.log('## 6. 檔案讀寫與損壞容錯');

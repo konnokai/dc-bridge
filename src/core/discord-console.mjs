@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, sessions, resetSession, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, memory, sessions, resetSession, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -134,6 +134,14 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
         const detail = handlers.usageTurns(key, limit);
         sendJson(res, detail ? 200 : 404, detail ?? { error: '找不到會話' });
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/memory') {
+        sendJson(res, 200, handlers.memory());
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/quota') {
+        sendJson(res, 200, await handlers.quota());
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/usage/reset') {

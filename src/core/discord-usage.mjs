@@ -104,6 +104,78 @@ export function createUsageTracker({
   return { ledger, rememberModel, ingestEvent, ingestSnapshot };
 }
 
+/** OpenCode Go 的額度端點（PR anomalyco/opencode#16513；跟 opencode.ai 後台額度頁同一份資料）。 */
+export const GO_USAGE_URL = 'https://opencode.ai/zen/go/v1/usage';
+const GO_WINDOWS = [['rolling', '5 小時'], ['weekly', '每週'], ['monthly', '每月']];
+
+/**
+ * 查 OpenCode Go 訂閱額度，結果（含失敗）快取 ttlMs：控制台每 5 秒刷新，不能每次都打出去。
+ * @returns {{ get: () => Promise<{ok: true, windows: object[], fetchedAt: number} | {ok: false, error: string}> }}
+ */
+export function createGoQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeoutMs = 10_000, now = Date.now }) {
+  let cached = null;
+  let inflight = null;
+
+  async function load() {
+    const key = getKey();
+    if (!key) return { ok: false, error: '沒有 OpenCode Go API key（環境變數 OPENCODE_GO_API_KEY 或 DSH 的 .credentials.yaml）' };
+    let res;
+    try {
+      res = await fetchImpl(GO_USAGE_URL, {
+        headers: { authorization: `Bearer ${key}` },
+        redirect: 'error',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      // 錯誤訊息不帶 key：fetch 的錯誤只會有網址與原因。
+      return { ok: false, error: `連不上 OpenCode：${error?.name === 'TimeoutError' ? '逾時' : (error?.message ?? error)}` };
+    }
+    if (!res.ok) return { ok: false, error: `OpenCode 回 HTTP ${res.status}` };
+    const usage = (await res.json().catch(() => null))?.usage;
+    const windows = GO_WINDOWS
+      .filter(([name]) => Number.isFinite(usage?.[name]?.percent))
+      .map(([name, label]) => ({
+        key: name,
+        label,
+        status: String(usage[name].status ?? ''),
+        percent: usage[name].percent,
+        resetsAt: Date.parse(usage[name].resetsAt) || null,
+      }));
+    if (windows.length === 0) return { ok: false, error: 'OpenCode 回的格式看不懂' };
+    return { ok: true, windows, fetchedAt: now() };
+  }
+
+  return {
+    async get() {
+      if (cached && now() - cached.at < ttlMs) return cached.value;
+      inflight ??= load().then((value) => {
+        cached = { value, at: now() };
+        return value;
+      }).finally(() => { inflight = null; });
+      return inflight;
+    },
+  };
+}
+
+function untilText(ms) {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return `${days} 天 ${hours} 小時`;
+  if (hours > 0) return `${hours} 小時 ${minutes % 60} 分`;
+  return `${minutes} 分`;
+}
+
+/** `/status` 用的一行；provider 不是 opencode-go（skipped）時回空字串。 */
+export function formatGoQuota(result, now = Date.now()) {
+  if (!result || result.skipped) return '';
+  if (!result.ok) return `OpenCode Go 額度：查不到（${result.error ?? '未知原因'}）`;
+  const parts = result.windows.map((w) => `${w.label} ${w.percent}%`
+    + (w.status && w.status !== 'ok' ? `（${w.status}）` : '')
+    + (w.resetsAt ? `，${untilText(w.resetsAt - now)}後重置` : ''));
+  return `OpenCode Go 額度：${parts.join('｜')}`;
+}
+
 /** 控制台「花費」卡片一次要的資料：總計、每個會話、走勢、目前價位。 */
 export function usageReport({ ledger, priceTable, nominalModel, range = '24h', limit = 200, now = Date.now() }) {
   const summary = ledger.summary({ limit });

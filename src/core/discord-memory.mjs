@@ -121,6 +121,27 @@ export function forgetUser(store, { guildId, userId } = {}) {
   return true;
 }
 
+/** `/memory` 的回覆：一條一行；截在 1900 字，放得進一則 Discord 訊息（上限 2000）。 */
+export function formatUserMemory(facts, max = 1900) {
+  const text = facts.map((fact, index) => `${index + 1}. ${fact}`).join('\n');
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** 控制台「群友記憶」卡片：每個伺服器一組，最近更新的人排前面。 */
+export function memoryOverview(store) {
+  return Object.entries(store?.guilds ?? {}).map(([guildId, guild]) => ({
+    guildId,
+    users: Object.entries(guild)
+      .map(([userId, entry]) => ({
+        userId,
+        name: entry.name,
+        updatedAt: entry.updatedAt,
+        facts: entry.facts.map((item) => item.text),
+      }))
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+  }));
+}
+
 /**
  * 這一批說話的人的記憶 → prompt 區塊。
  *

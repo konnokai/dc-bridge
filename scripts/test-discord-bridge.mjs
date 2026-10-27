@@ -48,7 +48,7 @@ import {
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
 import { createBatcher, createTurnGate, formatBatch } from '../src/core/discord-batch.mjs';
-import { createUsageTracker, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
+import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
@@ -428,6 +428,54 @@ console.log('## 7c. Token 帳本（花費看板）');
   usage.ledger.reset();
   ok(usage.ledger.summary().totals.cost === 0, '清空帳本後歸零');
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log('## 7c2. OpenCode Go 額度');
+{
+  const NOW = Date.parse('2026-10-27T04:00:00Z');
+  const body = {
+    usage: {
+      rolling: { status: 'ok', percent: 3, resetsAt: '2026-10-27T06:14:00.000Z' },
+      weekly: { status: 'ok', percent: 7, resetsAt: '2026-11-02T00:00:00.000Z' },
+      monthly: { status: 'limited', percent: 100, resetsAt: '2026-11-10T06:26:06.000Z' },
+    },
+  };
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, status: 200, json: async () => body };
+  };
+  let clock = NOW;
+  const quota = createGoQuota({ getKey: () => 'sk-test', fetchImpl: fakeFetch, ttlMs: 60_000, now: () => clock });
+  const first = await quota.get();
+  ok(first.ok && first.windows.map((w) => w.key).join() === 'rolling,weekly,monthly', '三個額度按 5 小時、每週、每月排');
+  ok(calls[0].url === GO_USAGE_URL && calls[0].options.headers.authorization === 'Bearer sk-test', '帶 key 打官方端點');
+  ok(calls[0].options.redirect === 'error', '不跟隨重新導向（key 不會被帶去別的網址）');
+  clock = NOW + 30_000;
+  await quota.get();
+  ok(calls.length === 1, '60 秒內不重打');
+  clock = NOW + 61_000;
+  await quota.get();
+  ok(calls.length === 2, '超過 60 秒再查一次');
+
+  const text = formatGoQuota(first, NOW);
+  ok(text.includes('5 小時 3%') && text.includes('每週 7%') && text.includes('每月 100%'), '/status 文字有三個百分比');
+  ok(text.includes('2 小時 14 分後重置') && text.includes('5 天 20 小時後重置'), '重置時間用「多久後」表示');
+  ok(text.includes('limited'), '狀態不是 ok 時標出來');
+
+  const noKey = await createGoQuota({ getKey: () => '', fetchImpl: fakeFetch }).get();
+  ok(!noKey.ok && noKey.error.includes('OPENCODE_GO_API_KEY'), '沒有 key 回原因');
+  const denied = await createGoQuota({
+    getKey: () => 'sk-secret-key',
+    fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({}) }),
+  }).get();
+  ok(!denied.ok && denied.error.includes('403') && !denied.error.includes('sk-secret-key'), 'HTTP 錯誤回狀態碼，不帶 key');
+  const broken = await createGoQuota({
+    getKey: () => 'k',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ nope: 1 }) }),
+  }).get();
+  ok(!broken.ok && formatGoQuota(broken, NOW).includes('查不到'), '格式不對時回錯誤，/status 寫查不到');
+  ok(formatGoQuota({ ok: false, skipped: true }, NOW) === '', '不是 opencode-go 就不顯示');
 }
 
 console.log('## 7d. 智能體發送 API（MCP）');
@@ -1006,6 +1054,8 @@ console.log('## 9. 控制台');
       }),
       usageTurns: (key) => (key === 'ch:1' ? { ok: true, key, turns: [] } : null),
       usageReset: () => { usageWasReset = true; },
+      quota: async () => ({ ok: true, windows: [{ key: 'rolling', percent: 3 }] }),
+      memory: () => ({ enabled: true, guilds: [{ guildId: '1', users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }] }),
       resetSession: async (key) => { resetKey = key; return true; },
       config: () => ({ allow: { guilds: [], channels: [], users: [] }, deny: { guilds: [], channels: [], users: [] }, ownerIds: [], media: {} }),
       updateConfig: async (patch) => {
@@ -1049,6 +1099,12 @@ console.log('## 9. 控制台');
   ok(turnsResponse.status === 200 && (await turnsResponse.json()).key === 'ch:1', '逐輪明細端點可讀');
   ok((await fetch(`${base}/api/usage/turns?key=nope`, { headers: authed })).status === 404, '不存在的會話回 404');
   ok((await fetch(`${base}/api/usage/turns`, { headers: authed })).status === 400, '缺少 key 回 400');
+  ok((await fetch(`${base}/api/quota`)).status === 401, '沒有 token 讀不到額度');
+  const quotaResponse = await fetch(`${base}/api/quota`, { headers: authed });
+  ok(quotaResponse.status === 200 && (await quotaResponse.json()).windows[0].percent === 3, '額度端點回 handler 的結果');
+  ok((await fetch(`${base}/api/memory`)).status === 401, '沒有 token 讀不到群友記憶');
+  const memoryResponse = await fetch(`${base}/api/memory`, { headers: authed });
+  ok(memoryResponse.status === 200 && (await memoryResponse.json()).guilds[0].users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');
 
   const sessions = await (await fetch(`${base}/api/sessions`, { headers: { 'x-console-token': 'test-token' } })).json();
   ok(sessions.sessions[0].key === 'ch:1', 'x-console-token 也通');
