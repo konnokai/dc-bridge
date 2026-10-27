@@ -86,7 +86,7 @@ console.log('## 1. 候選寫入與去重');
     samples: [],
     items: [{ term: '難繃', meaning: '別服的用法' }],
   });
-  ok(store.entries.length === 3, '不同伺服器分開存');
+  ok(store.entries.length === 2 && store.entries[0].seen === 3, '別服學到同一個詞只累加 seen，不另存（全部伺服器共用）');
 
   rejectSlang(store, store.entries[0].id, NOW + 2000);
   upsertCandidates(store, {
@@ -112,7 +112,7 @@ console.log('## 2. 確認、編輯、注入');
       { term: '水水', meaning: '漂亮' },
     ],
   });
-  ok(buildSlangHint(store, { guildId: GUILD }) === '', '候選不會注入');
+  ok(buildSlangHint(store) === '', '候選不會注入');
 
   const nanbeng = store.entries.find((entry) => entry.term === '難繃');
   const yyds = store.entries.find((entry) => entry.term === 'yyds');
@@ -120,24 +120,66 @@ console.log('## 2. 確認、編輯、注入');
     '確認時可以順便修正意思');
   confirmSlang(store, yyds.id, {}, NOW + 1000);
 
-  const hint = buildSlangHint(store, { guildId: GUILD, max: 5, maxChars: 1000 });
+  const hint = buildSlangHint(store, { max: 5, maxChars: 1000 });
   ok(hint.includes('【群裡的黑話】'), '注入有標題');
   ok(hint.includes('難繃：撐不住／很好笑') && hint.includes('用法：看到離譜的事時'), '注入含意思與用法');
   ok(hint.includes('yyds：永遠的神'), '已確認的都會注入');
   ok(!hint.includes('水水'), '未確認的候選不會注入');
-  ok(buildSlangHint(store, { guildId: OTHER_GUILD }) === '', '不會把 A 服的詞注入 B 服');
-  ok(buildSlangHint(store, { guildId: GUILD, max: 1 }).split('\n').length <= 2, 'max 限制條數');
-  ok(buildSlangHint(store, { guildId: GUILD, maxChars: 120 }).length <= 120, 'maxChars 限制總長度');
+  ok(buildSlangHint(store, { max: 1 }).split('\n').length <= 2, 'max 限制條數');
+  ok(buildSlangHint(store, { maxChars: 120 }).length <= 120, 'maxChars 限制總長度');
+
+  // 難繃 seen 比較高，名額只有 1 條時照 seen 排會是它；這批講到 yyds 就先挑 yyds。
+  nanbeng.seen = 3;
+  ok(buildSlangHint(store, { max: 1 }).includes('難繃'), '沒有命中時照 seen 補');
+  const matched = buildSlangHint(store, { max: 1, text: '這球真的 YYDS' });
+  ok(matched.includes('yyds') && !matched.includes('難繃'), '這批訊息出現的詞優先（不分大小寫）');
 
   const shown = new Map();
-  const once = (now) => buildSlangHint(store, { guildId: GUILD, shown, now, refreshMs: 30 * 60_000 });
+  const once = (now, text = '') => buildSlangHint(store, { shown, now, refreshMs: 30 * 60_000, max: 1, text });
   ok(once(NOW).includes('難繃'), '同一會話第一次會帶');
   ok(once(NOW + 60_000) === '', '同一會話內容沒變就不重複帶');
+  const next = once(NOW + 61_000, 'yyds 啦');
+  ok(next.includes('yyds') && !next.includes('難繃'), '之後命中新詞，只補帶新詞，不重帶已經帶過的');
+  ok(once(NOW + 62_000, 'yyds') === '', '命中的詞剛帶過就不再帶');
   ok(once(NOW + 40 * 60_000).includes('難繃'), '超過 refreshMs 再帶一次（DSH 可能壓縮掉了）');
 
   updateSlang(store, nanbeng.id, { usage: '看到爛操作時' }, NOW + 2000);
-  ok(buildSlangHint(store, { guildId: GUILD }).includes('用法：看到爛操作時'), '編輯立即反映在注入');
+  ok(buildSlangHint(store).includes('用法：看到爛操作時'), '編輯立即反映在注入');
   ok(once(NOW + 41 * 60_000).includes('用法：看到爛操作時'), '詞庫有改就再帶');
+
+  // 改成共用前各服各自學過同一個詞，舊資料會留下重複；注入只帶 seen 最高的那條。
+  const dup = createSlangStore();
+  dup.entries.push(
+    { ...nanbeng, id: 'a', guildId: GUILD, meaning: '甲服的意思', seen: 5 },
+    { ...nanbeng, id: 'b', guildId: OTHER_GUILD, meaning: '乙服的意思', seen: 1 },
+  );
+  const dupHint = buildSlangHint(dup);
+  ok(dupHint.includes('甲服的意思') && !dupHint.includes('乙服的意思'), '舊資料裡跨服重複的詞只注入一條');
+
+  // 舊資料重複時，學習結果要累加到還在用的那筆，不是陣列裡剛好排前面的 rejected。
+  dup.entries[0].status = SLANG_STATUS.REJECTED;
+  upsertCandidates(dup, { guildId: GUILD, samples: [], items: [{ term: '難繃', meaning: 'x' }], now: NOW });
+  ok(dup.entries[1].seen === 2 && dup.entries[0].seen === 5, '重複的詞優先累加到沒被拒絕的那筆');
+
+  // 一個字或英文短詞會撞到數字、英文單字，把真的講到的詞擠掉。
+  const short = createSlangStore();
+  upsertCandidates(short, { guildId: GUILD, samples: [], now: NOW, items: [
+    { term: '6', meaning: '厲害' }, { term: 'w', meaning: '笑' }, { term: 'gg', meaning: '輸了' }, { term: '難繃', meaning: '撐不住' },
+  ] });
+  for (const entry of short.entries) confirmSlang(short, entry.id, {}, NOW);
+  short.entries.find((entry) => entry.term === '難繃').seen = 0;
+  const pick = (text) => buildSlangHint(short, { max: 1, text });
+  ok(pick('我 2026 年買了 window 難繃').includes('難繃'), '一個字的詞不算命中');
+  ok(pick('eggs 難繃').includes('難繃'), '英文詞要整個字對上才算命中');
+  ok(pick('這把 GG 了').includes('gg'), '英文詞單獨出現就算命中');
+
+  // 會話記錄只留還在 refreshMs 內的，改過很多次的詞不會一直堆舊行。
+  const grow = new Map();
+  for (let i = 0; i < 20; i += 1) {
+    updateSlang(store, nanbeng.id, { usage: `第${i}種用法` }, NOW + i);
+    buildSlangHint(store, { shown: grow, now: NOW + i * 60_000, refreshMs: 5 * 60_000 });
+  }
+  ok(grow.get('slang').size <= 10, '過期的已帶記錄會清掉');
   updateSlang(store, nanbeng.id, { meaning: '   ' }, NOW + 2500);
   ok(store.entries.find((entry) => entry.id === nanbeng.id).meaning === '撐不住／很好笑', '意思不接受清空');
   ok(updateSlang(store, 'nope', { meaning: 'x' }) === null, '編輯不存在的詞回 null');
@@ -248,7 +290,7 @@ console.log('## 5. 頻道風格');
   const hint = buildStyleHint(store, { channelId: CHANNEL });
   ok(hint.includes('【這個頻道的風格】') && hint.includes('回覆長度：大家都一兩句話'), '確認後注入這個頻道的風格');
   ok(buildStyleHint(store, { channelId: OTHER_CHANNEL }) === '', '別的頻道看不到');
-  ok(!buildSlangHint(store, { guildId: GUILD }).includes('回覆長度'), '風格不會混進黑話區塊');
+  ok(!buildSlangHint(store).includes('回覆長度'), '風格不會混進黑話區塊');
   ok(!hint.includes('難繃'), '黑話不會混進風格區塊');
 
   for (let i = 0; i < 8; i += 1) {
@@ -264,7 +306,7 @@ console.log('## 5. 頻道風格');
   const shown = new Map();
   ok(buildStyleHint(store, { channelId: CHANNEL, shown, now: NOW, refreshMs: 60_000 }) !== '', '同一會話第一次會帶');
   ok(buildStyleHint(store, { channelId: CHANNEL, shown, now: NOW + 1000, refreshMs: 60_000 }) === '', '沒變就不重複帶');
-  ok(buildSlangHint(store, { guildId: GUILD, shown, now: NOW + 1000, refreshMs: 60_000 }) !== '', '風格和黑話各自記錄有沒有帶過');
+  ok(buildSlangHint(store, { shown, now: NOW + 1000, refreshMs: 60_000 }) !== '', '風格和黑話各自記錄有沒有帶過');
 
   const lang = store.entries.find((entry) => entry.term === '語氣');
   rejectSlang(store, lang.id, NOW + 100);

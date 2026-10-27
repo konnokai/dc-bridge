@@ -5,7 +5,8 @@
 //   - 學習會話的 prompt 與輸出解析
 //   - 已確認詞條的注入格式
 //
-// 邊界：詞條按伺服器分開（`guildId`），A 服的梗不會出現在 B 服。
+// 黑話全部伺服器共用：網路用語不太分哪一服，A 服學到的詞 B 服也用得到。
+// `guildId` 只記是在哪一服學到的，不拿來過濾。
 // 頻道風格（`kind: 'style'`）跟黑話同一次抽、同一個檔，但按頻道分開（`channelId`）。
 // 只有 `confirmed` 會進 prompt；候選與 rejected 永不注入。
 import fs from 'node:fs';
@@ -189,7 +190,7 @@ function findEntry(store, id) {
 
 /**
  * 把學習會話抽出的候選寫進詞庫。
- * 同一個伺服器、同一個詞（正規化後）只留一筆：`seen +1`、補空欄位、合併來源。
+ * 同一個詞（正規化後）不管在哪一服學到都只留一筆：`seen +1`、補空欄位、合併來源。
  * 頻道風格（`kind: 'style'`）改成同一個頻道、同一個標籤只留一筆。
  * 已 rejected 的詞不再復活（使用者已經明確拒絕過）。
  * @returns {{added: number, updated: number, skipped: number}}
@@ -218,9 +219,11 @@ export function upsertCandidates(store, { guildId = '', channelId = '', items = 
         at: Number(sample.at) || 0,
       }));
 
-    const existing = store.entries.find((entry) => entry.kind === kind
-      && (kind === 'style' ? entry.channelId === cid : entry.guildId === gid)
+    const same = store.entries.filter((entry) => entry.kind === kind
+      && (kind === 'slang' || entry.channelId === cid)
       && normalizeTerm(entry.term) === key);
+    // 改成共用前各服各自學過同一個詞，可能有一筆被拒絕、一筆還在用；累加到還在用的那筆。
+    const existing = same.find((entry) => entry.status !== SLANG_STATUS.REJECTED) ?? same[0];
     if (existing) {
       existing.seen += 1;
       existing.updatedAt = stamp;
@@ -311,22 +314,49 @@ export function slangStats(store) {
 }
 
 /**
- * 注入 prompt 的已確認詞條。
- * 只取本伺服器（`guildId` 相符）的詞；`seen` 高的優先，總字數受 maxChars 限制。
- * 有給 `shown`（這個會話的 Map）時，內容沒變又沒超過 refreshMs 就回空字串：每一批都帶只是燒 token。
+ * 注入 prompt 的已確認詞條，全部伺服器共用。
+ * 先挑 `text`（這批訊息）裡出現的詞，剩下的名額照 `seen` 補；總字數受 maxChars 限制。
+ * 有給 `shown`（這個會話的 Map）時逐條記：同一條沒超過 refreshMs 就不再帶，只補帶新命中或改過的。
+ * 沒命中時固定是 `seen` 前幾名，帶過一次就停，不會一批一批往下帶，免得慢慢把整個詞庫塞進會話。
+ * 整批都帶過就回空字串：每一批都帶只是燒 token。
  */
-export function buildSlangHint(store, { guildId = '', max = 8, maxChars = 1500, shown = null, now = Date.now(), refreshMs = 0 } = {}) {
-  const gid = clean(guildId, 24);
-  if (!gid) return '';
-  const confirmed = confirmedOf(store, (entry) => entry.kind === 'slang' && (!entry.guildId || entry.guildId === gid))
-    .slice(0, Math.max(1, Math.min(30, Number(max) || 8)));
-  const text = hintText('【群裡的黑話】只是背景知識；自然用到就好，不要刻意堆砌，不確定就別用。', confirmed,
-    (entry) => `- ${entry.term}：${entry.meaning}${entry.usage ? `（用法：${entry.usage}）` : ''}`,
-    Math.max(100, Number(maxChars) || 1500));
-  return onceInSession(shown, 'slang', text, now, refreshMs);
+export function buildSlangHint(store, { text = '', max = 8, maxChars = 1500, shown = null, now = Date.now(), refreshMs = 0 } = {}) {
+  const said = String(text ?? '').normalize('NFKC').toLowerCase();
+  const terms = new Set();
+  const matched = [];
+  const rest = [];
+  for (const entry of confirmedOf(store, (item) => item.kind === 'slang')) {
+    const key = normalizeTerm(entry.term);
+    // 改成共用前各服各自學過同一個詞；照 seen 排序後先到的那條代表。
+    if (terms.has(key)) continue;
+    terms.add(key);
+    (saidTerm(said, key) ? matched : rest).push(entry);
+  }
+  const lines = [...matched, ...rest]
+    .slice(0, Math.max(1, Math.min(30, Number(max) || 8)))
+    .map((entry) => `- ${entry.term}：${entry.meaning}${entry.usage ? `（用法：${entry.usage}）` : ''}`);
+
+  const last = shown?.get('slang') ?? new Map();
+  for (const [line, at] of last) if (now - at >= refreshMs) last.delete(line);
+  const fresh = lines.filter((line) => !last.has(line));
+  const hint = hintText('【群裡的黑話】只是背景知識；自然用到就好，不要刻意堆砌，不確定就別用。', fresh,
+    (line) => line, Math.max(100, Number(maxChars) || 1500));
+  if (shown && hint) {
+    for (const line of hint.split('\n').slice(1)) last.set(line, now);
+    shown.set('slang', last);
+  }
+  return hint;
 }
 
-/** 注入 prompt 的頻道風格：只取這個頻道已確認的，最多 5 條、300 字；`shown` 的用法同 buildSlangHint。 */
+// 一個字的詞（6、w、草）幾乎每則都撞得到；英文詞要整個字對上，免得 gg 撞到 eggs。
+function saidTerm(said, key) {
+  if ([...key].length < 2) return false;
+  if (!/^[\x20-\x7e]+$/.test(key)) return said.includes(key);
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(said);
+}
+
+/** 注入 prompt 的頻道風格：只取這個頻道已確認的，最多 5 條、300 字；整塊沒變就不重複帶。 */
 export function buildStyleHint(store, { channelId = '', shown = null, now = Date.now(), refreshMs = 0 } = {}) {
   const cid = clean(channelId, 24);
   if (!cid) return '';

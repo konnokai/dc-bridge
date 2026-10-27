@@ -295,7 +295,7 @@ async function main() {
 
   const memoryShown = new Map(); // key -> Map<userId, { updatedAt, at }>：這個會話帶過誰的記憶
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
-  const slangShown = new Map(); // key -> Map：這個會話上次帶的黑話區塊
+  const slangShown = new Map(); // key -> Map：這個會話帶過的黑話（逐條）和頻道風格區塊
   process.on('exit', () => { try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ } });
 
   // 黑話詞庫：候選靠學習會話產生，只有管理員在控制台確認過的才會注入 prompt。
@@ -1746,13 +1746,14 @@ async function main() {
       });
     }
 
-    // 已確認的黑話與頻道風格：只有管理員在控制台按過「確認」的才會進來；同一會話沒變就不重複帶。
+    // 已確認的黑話與頻道風格：只有管理員在控制台按過「確認」的才會進來；同一會話帶過的不重複帶。
+    // 黑話全部伺服器共用，這批訊息講到的詞優先。
     let slangHint = '';
     let styleHint = '';
     if (cfg.discord.slang.enabled && guild) {
       if (!slangShown.has(key)) slangShown.set(key, new Map());
       slangHint = buildSlangHint(slangStore, {
-        guildId: job.guildId,
+        text: entries.map((entry) => `${entry.text}\n${entry.quote}`).join('\n'),
         max: cfg.discord.slang.injectMax,
         maxChars: cfg.discord.slang.maxChars,
         shown: slangShown.get(key),
