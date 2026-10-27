@@ -466,6 +466,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情與貼圖（見「表情目錄」）
 - `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字
 - `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、使用者名稱、身分組、加入時間，以及記憶
+- `mcp__discord__server_info`（沒有其他參數）：查目前這個伺服器與頻道：伺服器名稱、簡介、建立日期、擁有者、成員數、
+  加成等級、頻道與身分組數量、自訂表情與貼圖數量、bot 在這裡的暱稱，以及目前頻道的名稱、主題、是否 NSFW。私聊回錯誤
 - `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
 - `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
@@ -506,7 +508,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與
-`/send`、`/react`、`/emojis`、`/history`、`/user`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
+`/send`、`/react`、`/emojis`、`/history`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
@@ -570,9 +572,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
 - **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、8 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、9 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去），加上只讀的
-  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 8 個 Discord 工具全部拿掉。
+  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 9 個 Discord 工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。

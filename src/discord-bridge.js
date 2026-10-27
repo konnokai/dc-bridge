@@ -863,6 +863,29 @@ async function main() {
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
       return { text: lines.filter(Boolean).join('\n') };
     },
+    async server(body) {
+      const { channel } = await agentSender.resolve(body.token);
+      const guild = channel.guild;
+      if (!guild) throw toolError('私聊沒有伺服器', 400);
+      const owner = await guild.fetchOwner().catch(() => null);
+      const date = (value) => (value ? value.toISOString().slice(0, 10) : '');
+      // 討論串的主題與 NSFW 跟著母頻道。
+      const topicSource = channel.isThread?.() ? channel.parent : channel;
+      const lines = [
+        `伺服器：${flat(guild.name, 100)}`,
+        guild.description ? `簡介：${flat(guild.description, 300)}` : '',
+        `建立：${date(guild.createdAt)}`,
+        owner ? `擁有者：${flat(owner.displayName, 40)}` : '',
+        `成員數：${guild.memberCount ?? '不明'}`,
+        `加成：等級 ${guild.premiumTier ?? 0}（${guild.premiumSubscriptionCount ?? 0} 個加成）`,
+        `頻道 ${guild.channels.cache.size} 個、身分組 ${guild.roles.cache.size} 個、自訂表情 ${guild.emojis.cache.size} 個、貼圖 ${guild.stickers.cache.size} 張`,
+        `你在這裡的暱稱：${flat(guild.members.me?.displayName ?? channel.client.user.username, 40)}`,
+        `目前頻道：#${flat(channel.name, 100)}${channel.isThread?.() ? `（討論串，在 #${flat(channel.parent?.name, 100)} 底下）` : ''}`,
+        topicSource?.topic ? `頻道主題：${flat(topicSource.topic, 300)}` : '',
+        topicSource?.nsfw ? '這是 NSFW 頻道' : '',
+      ];
+      return { text: lines.filter(Boolean).join('\n') };
+    },
     async remember(body) {
       const { key, target, shown: name } = await memoryTarget(body, textArg(body.name, 40));
       const fact = typeof body.fact === 'string' ? body.fact : '';

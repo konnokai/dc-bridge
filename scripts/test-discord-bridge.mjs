@@ -68,7 +68,7 @@ const USER = '222222222222222222';
 const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
-const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'read_history', 'user_info', 'remember_user', 'forget_user_fact']
+const DISCORD_TOOL_NAMES = ['send_message', 'send_sticker', 'add_reaction', 'search_emojis', 'read_history', 'user_info', 'server_info', 'remember_user', 'forget_user_fact']
   .map((name) => `mcp__discord__${name}`);
 
 console.log('## 1. 設定收斂');
@@ -268,7 +268,7 @@ console.log('## 7. dc-chat preset 與守衛');
   for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
-  ok(true, '白名單放行無害模型側工具、只讀搜尋與 8 個 Discord 工具');
+  ok(true, '白名單放行無害模型側工具、只讀搜尋與 9 個 Discord 工具');
   for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
@@ -877,7 +877,7 @@ console.log('## 7e. Discord MCP 發送工具');
     await client.connect(transport);
     const { tools } = await client.listTools();
     ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
-      'MCP 註冊的工具剛好就是白名單裡那 8 個');
+      'MCP 註冊的工具剛好就是白名單裡那 9 個');
     ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '每個工具都要 token');
     const sendTool = tools.find((t) => t.name === 'send_message');
     ok(['token', 'content'].every((name) => sendTool.inputSchema?.required?.includes(name))
@@ -895,6 +895,7 @@ console.log('## 7e. Discord MCP 發送工具');
       search_emojis: ['/emojis', { query: '笑' }],
       read_history: ['/history', { limit: 5 }],
       user_info: ['/user', { message: '#k7f3ab' }],
+      server_info: ['/server', {}],
       remember_user: ['/remember', { message: '#k7f3ab', name: '小明', fact: '在準備考試' }],
       forget_user_fact: ['/forget-fact', { message: '#k7f3ab', number: 1 }],
     };
