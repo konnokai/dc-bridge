@@ -67,7 +67,9 @@ function tool(name, description, schema, pathname, success) {
 }
 
 const server = new McpServer({ name: 'slang', version: '0.1.0' });
-const sessionToken = z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）');
+// 跟 mcp-discord 一樣：令牌由 DSH 外掛自動帶入，模型不用填。
+// 欄位要留著（選填）：MCP SDK 會剝掉 schema 沒宣告的參數，外掛補的值就進不去。
+const sessionToken = z.string().optional().describe('不用填：DSH 外掛會自動帶入會話令牌');
 
 tool(
   'lookup_slang',

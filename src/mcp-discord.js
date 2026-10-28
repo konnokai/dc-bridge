@@ -67,7 +67,10 @@ pingTimer.unref?.();
 
 const server = new McpServer({ name: 'discord', version: '0.2.1-r1' });
 
-const sessionToken = z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）');
+// 正常由 DSH 外掛（plugins/dc-agent-presets/dc-session-token.mjs）自動帶入，模型看不到令牌。
+// token 必須留在 schema 裡：MCP SDK 用 zod 驗參數，沒宣告的欄位會被剝掉，外掛補的值就進不去。
+// 沒有外掛的呼叫端會被橋接拒絕（fail closed），不會退化成某個預設會話。
+const sessionToken = z.string().optional().describe('不用填：DSH 外掛會自動帶入會話令牌');
 const messageRef = (what) => z.string().describe(`${what}：訊息前面的 #編號（例如 #k7f3ab），只能用這個頻道出現過的`);
 
 /** 送出結果帶上 #編號：edit_message／delete_message／看反應都用這些。 */

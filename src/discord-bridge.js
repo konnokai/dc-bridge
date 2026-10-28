@@ -1615,6 +1615,15 @@ async function main() {
       log(`MCP 頻道標籤：收錄「${result.entry.term}」（${key}）`);
       return { text: `已收錄「${flat(result.entry.term, 40)}」＝${flat(result.entry.meaning, 200)}（候選；管理員確認後才會出現在提示裡）` };
     },
+    // DSH 外掛用它把會話令牌補進工具參數，模型看不到令牌。只回活著的 Discord 會話；
+    // 這個路徑不要求會話令牌（它就是來拿令牌的），但仍然要端點的 x-agent-token。
+    async sessionToken(body) {
+      const sessionId = textArg(body.sessionId);
+      if (!sessionId) throw toolError('sessionId 要有值', 400);
+      const token = agentSender.tokenIfLive(sessionId);
+      if (!token) throw toolError('這個會話不是進行中的 Discord 會話', 404);
+      return { token };
+    },
   };
 
   // 同一會話短時間內的訊息合成一批，一批只開一個模型回合。
@@ -2467,8 +2476,9 @@ async function main() {
       return false;
     }
 
-    // 發送提示每輪都給：令牌是模型呼叫 send_message 的唯一依據，壓縮過上下文之後也不能忘。
-    const sendHint = `【發送】token=${agentSender.tokenFor(sessionId)}；所有 mcp__discord__ 工具都要帶這個 token（照抄）。要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。不呼叫就是這次不說話；直接輸出文字不會送出。`;
+    // 令牌由 DSH 外掛自動帶入，不再寫進 prompt：模型看不到，被注入也抄不走。
+    // 每輪還是要提醒一次「文字不會自動送出」，壓縮過上下文之後也不能忘。
+    const sendHint = '【發送】要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。token 由系統自動帶入，不要自己填。不呼叫就是這次不說話；直接輸出文字不會送出。';
     const text = `${prompt.text}\n${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];

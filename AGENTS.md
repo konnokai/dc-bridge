@@ -77,4 +77,4 @@ node -e "import('/home/jun/dc-bridge/node_modules/@modelcontextprotocol/sdk/dist
 | pm2 名稱 | 內容 | 工作目錄 |
 | --- | --- | --- |
 | `dc-bridge` | `src/discord-bridge.js` | `/home/jun/dc-bridge` |
-| `dsh` | `npx @deepseek-ai/dsh web --port 2815 ...` | `/home/jun/dsh` |
+| `dsh` | `npx -y @deepseek-ai/dsh@0.2.1-rc.2 web --no-open --port 2815 ...`（版本鎖在 `/home/jun/dsh/run.sh`） | `/home/jun/dsh` |

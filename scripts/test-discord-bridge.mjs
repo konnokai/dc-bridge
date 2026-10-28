@@ -358,6 +358,8 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(plugins.some((p) => p.id === 'persona'), '有 persona 行');
   const guardRow = plugins.find((p) => p.id === 'dc-tool-restrict');
   ok(guardRow?.name === 'dc-agent-presets/dc-tool-restrict.mjs', '守衛行用 profile 可解析的裸說明符');
+  const tokenRow = plugins.find((p) => p.id === 'dc-session-token');
+  ok(tokenRow?.name === 'dc-agent-presets/dc-session-token.mjs', '令牌外掛行用 profile 可解析的裸說明符');
   ok(!plugins.some((p) => typeof p.name === 'string' && (p.name.startsWith('.') || path.isAbsolute(p.name))),
     '沒有任何相對／絕對路徑子行名');
 
@@ -372,6 +374,9 @@ console.log('## 7. dc-chat preset 與守衛');
   ok((persona.match(/不要裝死/g) ?? []).length <= 1, '「被叫到要回」不在好幾段重複');
   ok(/管理員.{0,10}直接要求.{0,30}優先/.test(persona) && /不能壓過.{0,4}安全邊界/.test(persona), '管理員要求優先於頻道秩序規則，但不壓過安全邊界');
   ok(/不要解釋自己為什麼這樣回/.test(persona), '不解釋自己的說話方式');
+  ok(!/【發送】行給的值/.test(persona) && /由系統自動帶入/.test(persona), 'persona 叫模型不要填 token');
+  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
+  ok(!bridgeSource.includes('【發送】token='), '【發送】行不再把令牌寫進 prompt');
 
   const guardPath = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-tool-restrict.mjs');
   const mod = await import(pathToFileURL(guardPath).href);
@@ -399,6 +404,7 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(learnerPlugins.some((p) => p.id === 'persona'), 'dc-learner 有 persona 行');
   ok(learnerPlugins.some((p) => p.id === 'dc-tool-restrict'), 'dc-learner 有守衛行');
   ok(!learnerPlugins.some((p) => typeof p.id === 'string' && p.id.startsWith('tool-')), 'dc-learner 沒有任何工具行');
+  ok(!learnerPlugins.some((p) => p.id === 'dc-session-token'), 'dc-learner 不掛令牌外掛（它沒有 Discord 工具）');
   const learnerPersona = learnerPlugins.find((p) => p.id === 'persona')?.config?.prefix ?? '';
   ok(learnerPersona.length > 0 && learnerPersona.length < 1500, `dc-learner persona 很短（${learnerPersona.length} 字）`);
   ok(/JSON/.test(learnerPersona) && /黑話/.test(learnerPersona), 'dc-learner persona 是抽取器，不是聊天人格');
@@ -624,6 +630,8 @@ console.log('## 7d. 智能體發送 API（MCP）');
         return { channel: '測試頻道' };
       },
       react: async (body) => { reacted.push(body); return {}; },
+      // 令牌自動帶入用的查詢路徑：本身不能要求會話令牌。
+      sessionToken: async ({ sessionId }) => ({ token: `tok-${sessionId}` }),
     },
   });
   ok(api.isConnected === undefined, '發送 API 不再提供連線狀態（送不送只看模型有沒有呼叫工具）');
@@ -659,6 +667,20 @@ console.log('## 7d. 智能體發送 API（MCP）');
     body: JSON.stringify({ message: '#abcde' }),
   });
   ok(noTokenReact.status === 400 && reacted.length === 1, '每個路徑都要會話令牌，沒帶就不進處理函式');
+  const tokenLookup = await fetch(`${doc.url}/sessionToken`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-agent-token': doc.token },
+    body: JSON.stringify({ sessionId: 'sess-a' }),
+  });
+  const tokenLookupBody = await tokenLookup.json();
+  ok(tokenLookup.status === 200 && tokenLookupBody.token === 'tok-sess-a',
+    '/sessionToken 不用會話令牌就能換令牌（它就是用來拿令牌的）');
+  const tokenLookupNoSecret = await fetch(`${doc.url}/sessionToken`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'sess-a' }),
+  });
+  ok(tokenLookupNoSecret.status === 401, '/sessionToken 仍然要 x-agent-token（端點 secret）');
   for (const route of ['nope', 'constructor', 'toString', '__proto__']) {
     const res = await fetch(`${doc.url}/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-token': doc.token }, body: '{"token":"t"}' });
     ok(res.status === 404, `沒註冊的路徑 /${route} 回 404`);
@@ -706,6 +728,9 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   ok(tokenA !== tokenB, '每個會話各有一組令牌');
   ok(/^[2-9a-hjkmnp-uxyz]{10}$/.test(tokenA), '令牌只有小寫與數字，沒有 0/o/1/l/i/v/w 這類易抄錯的字');
   ok(sender.tokenFor('sess-a') === tokenA, '同一會話重複取令牌不換');
+  ok(sender.tokenIfLive('sess-a') === tokenA, '活著的會話才拿得到令牌（給 DSH 外掛用）');
+  ok(sender.tokenIfLive('sess-unknown') === null, '不存在的會話不發令牌');
+  const { TOKEN_EXPIRED } = await import(pathToFileURL(path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-session-token.mjs')).href);
 
   const rejects = async (promise, re, label) => {
     try { await promise; ok(false, `${label}（應該要拒絕）`); }
@@ -719,7 +744,8 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   ok(sender.ownedKey('not-mine') === null, '不是自己送的訊息回 null');
   sender.forgetKey('ch:100');
   ok(sender.ownedKey(`id-${delivered.length}`) === null, 'reset 後舊訊息不再算自己的');
-  await rejects(sender.send({ token: 'nope', content: 'x' }), /最新一則【發送】/, '舊令牌回可重試的錯誤');
+  await rejects(sender.send({ token: 'nope', content: 'x' }), new RegExp(TOKEN_EXPIRED), '舊令牌回可重試的錯誤（字串跟外掛共用）');
+  await rejects(sender.send({ token: '', content: 'x' }), /沒有帶會話令牌/, '沒帶令牌回「回報管理員」，不是叫模型去抄');
   await rejects(sender.send({ token: tokenA, content: '外洩 SECRET-DISCORD-TOKEN' }), /敏感資訊/, '已知令牌被攔截');
   await rejects(sender.send({ token: tokenA, content: `抄 ${tokenA}` }), /敏感資訊/, '會話令牌本身也被攔截');
   ok((await sender.send({ token: ` ${tokenA.toUpperCase()} `, content: '大寫' })).key === 'ch:100', '令牌多空白或改大寫仍認得');
@@ -796,12 +822,121 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await first.catch(() => {});
   await rejects(second, /已經結束/, '排隊中的發送在重置後被擋下');
   ok(!delivered.some((d) => d.content === '二'), '重置後沒有送出排隊的訊息');
-  await rejects(sender.send({ token: tokenB, content: 'x' }), /最新一則【發送】/, '重置後舊令牌失效');
+  ok(sender.tokenIfLive('sess-b') === null, '/reset 後不再發令牌');
+  await rejects(sender.send({ token: tokenB, content: 'x' }), new RegExp(TOKEN_EXPIRED), '重置後舊令牌失效');
 
   sender.startTurn('ch:100');
   await sender.send({ token: tokenA, content: 'y' });
   sender.clearTurns();
   ok(sender.finishTurn('ch:100').sent === 0, '事件流重連時清掉回合計數');
+}
+
+console.log('## 7d2b. 會話令牌自動帶入（DSH 外掛）');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-token-'));
+  const endpoint = path.join(dir, 'agent.json');
+  const pluginPath = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-session-token.mjs');
+  const mod = await import(pathToFileURL(pluginPath).href);
+  ok(mod.name === 'dc-session-token', '令牌外掛導出 name');
+
+  const calls = [];
+  let counter = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, body, secret: init.headers['x-agent-token'] });
+    if (body.sessionId !== 'sess-a') {
+      return { ok: false, status: 404, json: async () => ({ error: '這個會話不是進行中的 Discord 會話' }) };
+    }
+    counter += 1;
+    return { ok: true, status: 200, json: async () => ({ token: `tok-${counter}` }) };
+  };
+  fs.writeFileSync(endpoint, JSON.stringify({ url: 'http://127.0.0.1:1234', token: 'secret-1' }));
+
+  let listener;
+  mod.apply({ on: (event, fn) => { if (event === 'tools/execute') listener = fn; } }, { endpointFile: endpoint });
+  ok(typeof listener === 'function', '掛上 tools/execute listener');
+
+  {
+    const exec = { name: 'mcp__discord__send_message', agent: { id: 'sess-a' }, arguments: { content: 'hi', token: 'model-junk' } };
+    let seen;
+    const result = await listener(exec, async () => { seen = { ...exec.arguments }; return { isError: false, content: [] }; });
+    ok(seen?.token === 'tok-1' && seen?.content === 'hi', '工具本體收到外掛帶入的令牌，蓋掉模型填的值');
+    ok(result.isError === false, '成功結果原樣回傳');
+    ok(calls[0]?.secret === 'secret-1' && calls[0]?.body.sessionId === 'sess-a', '用端點 secret 換指定會話的令牌');
+  }
+  {
+    const before = calls.length;
+    const exec = { name: 'mcp__slang__record_slang', agent: { id: 'sess-a' }, arguments: { term: 'x' } };
+    await listener(exec, async () => ({ isError: false, content: [] }));
+    ok(calls.length === before && exec.arguments.token === 'tok-1', '同一會話的令牌有快取，不重複問橋接');
+  }
+  {
+    const exec = { name: 'read', agent: { id: 'sess-a' }, arguments: { path: 'x' } };
+    let called = 0;
+    await listener(exec, async () => { called += 1; return { isError: false, content: [] }; });
+    ok(called === 1 && !('token' in exec.arguments), '其他工具不動參數，照常 next()');
+  }
+  {
+    let called = 0;
+    await listener({ name: 'mcp__discord__read_history', arguments: {} }, async () => { called += 1; return { isError: false, content: [] }; });
+    ok(called === 1, '沒有 exec.agent 時不帶令牌，交給工具自己拒絕');
+  }
+  {
+    let round = 0;
+    let resent;
+    const exec = { name: 'mcp__discord__send_message', agent: { id: 'sess-a' }, arguments: { content: 'x' } };
+    const result = await listener(exec, async () => {
+      round += 1;
+      if (round === 1) return { isError: true, content: [{ type: 'text', text: `Error: ${mod.TOKEN_EXPIRED}：外掛會自動重查一次` }] };
+      resent = { ...exec.arguments };
+      return { isError: false, content: [] };
+    });
+    ok(result.isError === false && round === 2, '令牌過期會清快取重查一次並重送');
+    ok(resent?.token === 'tok-2', '重送用重新查到的令牌');
+  }
+  {
+    let round = 0;
+    const exec = { name: 'mcp__discord__send_message', agent: { id: 'sess-a' }, arguments: { content: 'x' } };
+    const result = await listener(exec, async () => { round += 1; return { isError: true, content: [{ type: 'text', text: 'Error: 頻道不在白名單內' }] }; });
+    ok(result.isError === true && round === 1, '白名單等其他錯誤不重試');
+  }
+  {
+    let round = 0;
+    const exec = { name: 'mcp__discord__send_message', agent: { id: 'sess-a' }, arguments: { content: 'x' } };
+    const result = await listener(exec, async () => {
+      round += 1;
+      return { isError: true, content: [{ type: 'text', text: `Error: ${mod.TOKEN_EXPIRED}` }] };
+    });
+    ok(round === 2 && result.isError === true, '連續兩次過期也只重試一次，第二次的錯誤原樣回給模型');
+  }
+  {
+    const exec = { name: 'mcp__discord__send_message', agent: { id: 'sess-a' } };
+    Object.defineProperty(exec, 'arguments', { value: {}, writable: false });
+    let error;
+    try { await listener(exec, async () => ({ isError: false, content: [] })); } catch (caught) { error = caught; }
+    ok(error && /tools\/execute/.test(String(error.message)), '覆寫沒生效時丟清楚的錯誤，不靜默放行');
+  }
+  {
+    let called = 0;
+    let error;
+    try {
+      await listener({ name: 'mcp__discord__send_message', agent: { id: 'sess-b' }, arguments: {} }, async () => { called += 1; return { isError: false, content: [] }; });
+    } catch (caught) { error = caught; }
+    ok(error && /不是進行中的 Discord 會話/.test(String(error.message)) && called === 0,
+      '不是活著的會話：直接報錯，不呼叫工具');
+  }
+  {
+    fs.rmSync(endpoint, { force: true });
+    let called = 0;
+    let error;
+    try {
+      await listener({ name: 'mcp__discord__send_message', agent: { id: 'sess-b' }, arguments: {} }, async () => { called += 1; return { isError: false, content: [] }; });
+    } catch (caught) { error = caught; }
+    ok(error && /端點/.test(String(error.message)) && called === 0, '橋接端點不在時直接報錯，不去呼叫工具');
+  }
+  globalThis.fetch = realFetch;
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 console.log('## 7d2a. 改、收回、投票、搜尋（只動自己送的）');
@@ -1293,10 +1428,11 @@ console.log('## 7e. Discord MCP 發送工具');
     const { tools } = await client.listTools();
     ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
       `MCP 註冊的工具剛好就是白名單裡那 ${DISCORD_TOOL_NAMES.length} 個`);
-    ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '每個工具都要 token');
+    ok(tools.every((t) => !(t.inputSchema?.required ?? []).includes('token')), '每個工具都不要求 token（外掛會帶入）');
     const sendTool = tools.find((t) => t.name === 'send_message');
-    ok(['token', 'content'].every((name) => sendTool.inputSchema?.required?.includes(name))
-      && !sendTool.inputSchema?.required?.includes('reply_to'), 'send_message：token / content 必填，reply_to 可省略');
+    ok(sendTool.inputSchema?.required?.includes('content')
+      && !sendTool.inputSchema?.required?.includes('token')
+      && !sendTool.inputSchema?.required?.includes('reply_to'), 'send_message：content 必填，token 與 reply_to 可省略');
     const result = await client.callTool({
       name: 'send_message',
       arguments: { token: 't', content: '嗨', reply_to: '#k7f3ab' },
@@ -1414,7 +1550,7 @@ console.log('## 7f. 黑話 MCP');
     const { tools } = await client.listTools();
     ok(tools.map((t) => `mcp__slang__${t.name}`).sort().join() === [...SLANG_TOOL_NAMES].sort().join(),
       `黑話 MCP 註冊的工具剛好就是白名單裡那 ${SLANG_TOOL_NAMES.length} 個`);
-    ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '黑話工具每個都要 token');
+    ok(tools.every((t) => !(t.inputSchema?.required ?? []).includes('token')), '黑話工具也不要求 token');
 
     const lookup = await client.callTool({ name: 'lookup_slang', arguments: { token: 't', term: '難繃' } });
     ok(received.at(-1)?.url === '/slang-lookup' && received.at(-1)?.term === '難繃'

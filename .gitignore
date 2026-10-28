@@ -9,20 +9,6 @@ config.json
 *.bak
 *.bak-*
 
-# Local development / planning / research docs (not part of public project)
-/PROJECT_GUIDE.md
-/ARCH_REVIEW.md
-/DSH_QQ_TOOLS_PLAN.md
-/GEN2_SIMULATION_PLAN.md
-/SOCIAL_MODE_PLAN.md
-/RESEARCH_QQ_MESSAGE_DND.md
-/RESEARCH_SNOWLUMA_EMOJI_STICKER.md
-/SnowLuma功能调研.md
-/真人语感策略.md
-# 花费实测档案：含个人用量数据，且未被任何公开文档引用 —— 默认不发布。
-# （如需公开，删掉这一行并挪到 docs/ 后从 README 链接，避免成为孤儿文件。）
-/TOKEN_COST.md
-
 # 本地模型选型 / 硬件配置调研（内部笔记，无任何公开文档引用）
 /LOCAL_MODEL_SIZING.md
 
@@ -55,7 +41,6 @@ config.json
 # 判断依据：① 原 .gitignore 已列出的同义文件；② privacy-scan 实测命中真实路径的文件；
 # ③ 安全审计/发布计划这类"写了怎么绕过"的内部文档。
 docs/audits/
-docs/design/
 docs/legacy/
 docs/research/
 docs/qq-bridge-PUBLISH_PLAN.md
@@ -65,4 +50,3 @@ docs/guides/VOICE.md
 
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/
-

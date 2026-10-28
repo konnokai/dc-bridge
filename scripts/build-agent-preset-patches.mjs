@@ -72,6 +72,7 @@ export const GUARD_SPECIFIER = 'qq-agent-presets/qq-tool-restrict.mjs';
 const RELATIVE_ROW_REWRITES = new Map([
   ['./qq-tool-restrict.mjs', GUARD_SPECIFIER],
   ['./dc-tool-restrict.mjs', 'dc-agent-presets/dc-tool-restrict.mjs'],
+  ['./dc-session-token.mjs', 'dc-agent-presets/dc-session-token.mjs'],
 ]);
 
 export const BUNDLE_DIR = bundleDirFor('qq-chat');

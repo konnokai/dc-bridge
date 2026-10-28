@@ -168,10 +168,14 @@ export function createAgentSender({
 
   /** 令牌 → 會話與頻道。每個工具都先過這一關。 */
   async function resolve(token) {
-    const sessionId = sessionForToken(token);
-    // 令牌過期（橋接重啟或 /reset）是模型最可能遇到的失敗。訊息要它去抄最新一行，
-    // 否則它會以為「這個會話不能發」，整輪就靜音了。
-    if (!sessionId) throw statusError('會話令牌過期或不是最新的：請用最新一則【發送】行的 token 再呼叫一次', 403);
+    const given = String(token ?? '').trim();
+    const sessionId = sessionForToken(given);
+    // 令牌由 DSH 外掛自動帶入（plugins/dc-agent-presets/dc-session-token.mjs），
+    // 模型看不到也不該自己填；這裡的訊息要讓它去回報，不是叫它去抄。
+    if (!sessionId) {
+      if (!given) throw statusError('沒有帶會話令牌（正常由 DSH 外掛自動帶入）：這批送不出去，請回報管理員', 403);
+      throw statusError('會話令牌過期或不是最新的：外掛會自動重查一次；還是不行就回報管理員，不要自己填 token', 403);
+    }
     const key = reverse.get(sessionId);
     if (!key || !alive(key, sessionId)) throw statusError('這個會話已經結束，不送出', 403);
     const kind = key.split(':')[0];
@@ -327,6 +331,11 @@ export function createAgentSender({
 
   return {
     tokenFor,
+    /** DSH 外掛用：只有還活著的會話才發令牌（不會因為亂給 sessionId 就生出新的）。 */
+    tokenIfLive: (sessionId) => {
+      const key = reverse.get(sessionId);
+      return key && sessions[key] === sessionId ? tokenFor(sessionId) : null;
+    },
     resolve,
     checkSensitive,
     send,
@@ -420,7 +429,9 @@ function readBody(req) {
  *
  * @param options.file     端點檔（寫入 { url, token }，0600）
  * @param options.handlers { 路徑名: async (body) => 額外回傳欄位 }，例如 { send, react }；
- *                         body.token（會話令牌）已檢查過是字串；丟出的錯誤可用 statusCode
+ *                         body.token（會話令牌）已檢查過是字串；丟出的錯誤可用 statusCode。
+ *                         `sessionToken` 例外：它就是用來拿會話令牌的，本身不能要求令牌
+ *                         （仍然要 x-agent-token）。
  * @param options.log      日誌函式
  */
 export async function startAgentApi({ file, handlers, log = () => {} }) {
@@ -460,11 +471,12 @@ export async function startAgentApi({ file, handlers, log = () => {} }) {
         }
         const body = await readBody(req);
         const sessionToken = typeof body?.token === 'string' ? body.token.trim() : '';
-        if (!sessionToken || sessionToken.length > 128) {
-          sendJson(res, 400, { error: '缺少會話令牌' });
+        // sessionToken 這個路徑的用途就是「拿會話令牌」，不能反過來要求呼叫方先有令牌。
+        if (route !== 'sessionToken' && (!sessionToken || sessionToken.length > 128)) {
+          sendJson(res, 400, { error: '沒有帶會話令牌（正常由 DSH 外掛自動帶入）：這批送不出去，回報管理員' });
           return;
         }
-        const extra = await handler({ ...body, token: sessionToken });
+        const extra = await handler(sessionToken ? { ...body, token: sessionToken } : body);
         sendJson(res, 200, { ok: true, ...(extra ?? {}) });
       } catch (error) {
         const status = Number(error?.statusCode) || 502;

@@ -601,7 +601,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 模型能用的工具就是下面這些（2026-10-28 從線上會話最新一次 `request/header` 的 `tools` 取出）。
 `dc-chat` 的 `dc-tool-restrict` 會藏掉 DSH 其他內建工具（讀寫檔、shell 等）。
-`mcp__discord__*` 每個都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道），下面只列其他參數：
+`mcp__discord__*` 與 `mcp__slang__*` 的 `token` 由 DSH 外掛 `dc-session-token` 自動帶入
+（模型看不到令牌，也不用填）；下面只列其他參數：
 
 - `mcp__discord__send_message`（`content`、`reply_to` 可省略）：送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。
   沒有 `message` 參數：正文只放 `content`，要接的那則 `#編號` 只放 `reply_to`；`content` 只有一個查得到的 `#編號` 會被擋（400）。
@@ -684,8 +685,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   並把 `★`、`【管理員】` 改寫；訊息裡的 mention 會換成名字（規則見「批次與自由參與」）。
   群友沒辦法透過暱稱或內文偽造標記。
 
-每一則 prompt 的**最後一行**（時間之後）都會帶 `【發送】token=…`，模型照抄即可。
-令牌是 10 個小寫字母與數字，不含 `0 o 1 l i v w` 這些容易抄錯的字；模型多帶空白或改成大寫也認得。
+每一則 prompt 的**最後一行**（時間之後）是 `【發送】`，提醒模型「文字不會自動送出、要呼叫工具」。
+令牌不再寫進 prompt：DSH 外掛 `dc-session-token` 用 `exec.agent.id` 向橋接換這個會話的令牌，
+在工具執行前補進參數（模型看不到，也抄不走）。
 Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫它）都要接到（回一句或按 reaction），
 好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的。沒有 ★ 的訊息三選一：有話想接就說、有感覺但沒話就按 reaction、
 真的無感才跳過；reaction 不佔說話頻率，persona 叫它通常按 1 個、一輪最多 3 個，並列了該按與不該按的情況。
@@ -693,9 +695,10 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 **沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
 
 - **模型指定不了頻道**：工具只收 token，橋接用 token 反查會話；被 prompt injection 也只會
-  送回原本那個頻道。令牌綁在 DSH 會話上，`/reset` 或橋接重啟後會換一組。
+  送回原本那個頻道。令牌綁在 DSH 會話上，`/reset` 或橋接重啟後會換一組；
+  外掛的令牌快取會過期，第一次失敗會自動重查一次。
 - **權限**：橋接只接受「還活著的會話 + 目前在白名單裡」的會話（討論串也看母頻道的黑名單）；
-  令牌過期時工具會回錯誤，並提示模型去抄最新一則【發送】行。已經排隊、還沒送出的訊息，
+  令牌過期重查一次還是不行時，工具會回錯誤並要模型回報管理員，不要自己填 token。已經排隊、還沒送出的訊息，
   遇到 `/reset` 也會被擋下來，不會送進新的會話。
 - **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
   模型不會誤以為已送出。
@@ -709,8 +712,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   免得群友以為被忽略。模型收到提醒後仍然可以不說話。
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
-工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與
-`/send`、`/react`、`/edit`、`/delete`、`/poll`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
+工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
+`POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）與
+`/send`、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/followup`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
@@ -788,8 +792,14 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
 6. **發送端點只在本機**：`mcp-discord` 與 `mcp-slang` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`
    （`state/discord-agent.json`，0600）加會話令牌；沒帶令牌的請求一律 401，不會因為漏帶而
-   升級成別的身分。端點只開 `POST /hello` 與上面列的工具路徑；每個工具都先過同一個令牌檢查
-   （會話還活著、頻道在白名單內），唯讀工具也一樣，而且只能讀令牌自己的頻道。
+   升級成別的身分。端點只開 `POST /hello`、`POST /sessionToken` 與上面列的工具路徑；
+   每個工具都先過同一個令牌檢查（會話還活著、頻道在白名單內），唯讀工具也一樣，
+   而且只能讀令牌自己的頻道。
+7. **`/sessionToken` 的權限代價**：它讓持有端點 secret 的呼叫方用任何活著的 `sessionId` 換令牌。
+   `sessionId` 不是秘密（`state/discord-sessions.json`、日誌、DSH 介面都看得到），所以實際效果是
+   **有 secret 就等於有所有活著會話的發送權**。這是 `dc-session-token` 自動帶令牌的必要代價；
+   端點只回還活著的會話，不提供「列出全部」。`dc-chat` 沒有任何檔案／shell 工具，
+   模型讀不到 `state/discord-agent.json`。
 
 ## 已知限制
 
