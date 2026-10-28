@@ -5,6 +5,7 @@
 // 取資料用 Discord 的 channel.messages.fetch（Read Message History 權限），
 // 不需要 Message Content 特權意圖，也不用自己維護 ring buffer。
 import { describeAge } from '../qq-model-view.js';
+import { defang } from './discord-batch.mjs';
 
 const clean = (value) => String(value ?? '')
   .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -71,8 +72,9 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
   let used = 0;
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const entry = list[i];
-    const author = `${entry.ref ? `#${entry.ref} ` : ''}${clean(entry.author) || '未知'}${entry.bot ? '（你）' : ''}`;
-    const body = cut(clean(entry.content) || '[圖片]', 400);
+    const reply = entry.replyName ? ` ↪回覆 ${clean(defang(entry.replyName)) || '未知'}` : '';
+    const author = `${entry.ref ? `#${entry.ref} ` : ''}${clean(defang(entry.author)) || '未知'}${entry.bot ? '（你）' : ''}${reply}`;
+    const body = cut(clean(defang(entry.content)) || '[圖片]', 400);
     const line = `${author}：${body}`;
     if (used + line.length > maxChars) {
       // 最新一則再長也要留一點，不然整個上下文會變空的。
