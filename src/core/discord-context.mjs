@@ -4,7 +4,7 @@
 // 這裡只補「模型沒看過的部分」——頻道裡不是對它說、但它應該知道的最近幾句。
 // 取資料用 Discord 的 channel.messages.fetch（Read Message History 權限），
 // 不需要 Message Content 特權意圖，也不用自己維護 ring buffer。
-import { describeAge } from '../qq-model-view.js';
+import { describeAge } from '../model-view.js';
 import { defang } from './discord-batch.mjs';
 
 const clean = (value) => String(value ?? '')

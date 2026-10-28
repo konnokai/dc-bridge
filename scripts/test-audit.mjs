@@ -21,6 +21,8 @@ const tests = [
   'test-discord-memory.mjs',
   'test-discord-notes.mjs',
   'test-discord-followup.mjs',
+  'test-discord-slang.mjs',
+  'test-discord-trigger-stats.mjs',
   'test-token-economy.mjs', 'test-qq-model-view.mjs', 'test-qq-preset-contract.mjs',
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-role-card.mjs',
   // 体检修复回归：无令牌智能体调用面、send-burst 失败回滚、唤醒限频重试、

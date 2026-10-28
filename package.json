@@ -9,11 +9,13 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "start": "node src/bridge.js",
+    "start": "node src/discord-bridge.js",
     "start:discord": "node src/discord-bridge.js",
+    "start:qq": "node src/bridge.js",
     "setup:discord": "node scripts/setup-dsh.mjs --discord",
     "build:emojis": "node scripts/build-discord-emojis.mjs",
-    "test:discord": "node scripts/test-discord-bridge.mjs",
+    "test:discord": "node scripts/test-discord-all.mjs",
+    "deploy:discord": "node scripts/deploy-discord.mjs",
     "test:discord-memory": "node scripts/test-discord-memory.mjs",
     "test:discord-notes": "node scripts/test-discord-notes.mjs",
     "test:discord-followup": "node scripts/test-discord-followup.mjs",

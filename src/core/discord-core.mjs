@@ -5,7 +5,7 @@
 // 副作用只有讀寫 sessions 檔，集中在檔案最下面。
 import fs from 'node:fs';
 import path from 'node:path';
-import { splitForQQ } from '../md-to-plain.js';
+import { splitForCharLimit } from '../md-to-plain.js';
 
 /** Discord 一則訊息的上限。 */
 export const DISCORD_MAX_CHARS = 2000;
@@ -413,10 +413,10 @@ export function questionAnswersFor(questions, text) {
 
 /**
  * 依 Discord 上限切段。內容原樣保留（Discord 吃 Markdown），只處理長度與代理對。
- * 重用 QQ 版的切法：它在換行邊界切、不切開 emoji。
+ * 重用共用切法：它在換行邊界切、不切開 emoji。
  */
 export function splitDiscordMessage(text, max = DISCORD_MAX_CHARS) {
-  return splitForQQ(String(text ?? ''), max);
+  return splitForCharLimit(String(text ?? ''), max);
 }
 
 /**

@@ -184,9 +184,10 @@ console.log('## 文档');
   for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
     ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
   }
-  const readme = read('README.md');
-  ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');
-  ok(/AI 发语音默认关闭/.test(readme), 'README 已知限制说明默认关闭');
+  // QQ 手冊搬到 docs/guides/QQ.md：語音是 QQ 版的功能，README 現在只講 Discord。
+  const qqGuide = read(path.join('docs', 'guides', 'QQ.md'));
+  ok(qqGuide.includes('voice-gui.mjs') && qqGuide.includes('voice-cli.mjs'), 'QQ 手冊含两个语音工具的入口说明');
+  ok(/AI 发语音默认关闭/.test(qqGuide), 'QQ 手冊已知限制说明默认关闭');
   ok(read('docs/README.md').includes('FOLDER_MAP.md'), 'docs/README.md 索引链接到 FOLDER_MAP.md');
   ok(exists(path.join('docs', 'FOLDER_MAP.md')), 'docs/FOLDER_MAP.md 存在');
 }

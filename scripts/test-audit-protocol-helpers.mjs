@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { findSticker, mergeStickerLibrary } from '../src/sticker-lib.js';
-import { splitForQQ } from '../src/md-to-plain.js';
+import { splitForCharLimit } from '../src/md-to-plain.js';
 import { formatForwardResponse } from '../src/forward.js';
 
 let failed = 0;
@@ -27,7 +27,7 @@ test('partial sticker refresh preserves learned records outside the fetched page
 });
 test('QQ newline splitting respects the stated per-message limit', () => {
   const text = 'abc\ndef\nghi';
-  const parts = splitForQQ(text, 3);
+  const parts = splitForCharLimit(text, 3);
   assert.equal(parts.join(''), text);
   assert.ok(parts.every((part) => part.length <= 3));
 });

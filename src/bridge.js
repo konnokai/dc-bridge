@@ -17,10 +17,10 @@ import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport,
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
-import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
+import { mdToPlain, splitForCharLimit, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
-import { compactModelMessage, describeAge } from './qq-model-view.js';
+import { compactModelMessage, describeAge } from './model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { normalizeImageForModel } from './media-normalize.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
@@ -7224,7 +7224,7 @@ async function main() {
     const assertSendAllowed = captureSendGuard(key);
     const safeMsg = redactKnownTokensOnly(msg);
     const [kind, id] = key.split(':');
-    const parts = splitForQQ(safeMsg);
+    const parts = splitForCharLimit(safeMsg);
     lastSendFailed.delete(key);
     for (const part of parts) {
       sendChain = sendChain
@@ -10135,7 +10135,7 @@ async function main() {
   // 现象（操作者报告 + 会话实证）：AI 沉睡很久后被唤醒，看到一小时前的话仍然当成"刚发的"去接，
   // 甚至抢进早已散场的话题。根因有两层：
   //   ① 模型看到的时间是裸 epoch（`time: 1792294529471`），它根本算不出"这是 38 分钟前"
-  //      → 已由 qq-model-view.js 换成 `at`/`ago`；
+  //      → 已由 model-view.js 换成 `at`/`ago`；
   //   ② 提示词里**没有任何一条规则**告诉它"旧消息不该按实时对话接"。
   // 这里补第二层：把「现在 / 最新一条多旧 / 唤醒原因那条多旧」算好直接写进去，并给分档规则。
   // 阈值可调（config.json 的 socialV2.wake.staleChatMinutes / staleSilentMinutes）。
@@ -12059,7 +12059,7 @@ process.on('unhandledRejection', (error) => {
  * emitter 逐个调用监听器、不做任何保护。stdout 的读者（守护 cmd 窗口）一旦消失，
  * `console.log` 会抛 EPIPE —— 这个异常会一路穿过 log() → 监听器 → emit → socket 回调，
  * 变成 uncaughtException。没有兜底的话整个 24/7 进程直接死掉且不留堆栈，
- * 在 start.bat 的重启循环里就变成「每 5 秒崩一次」。
+ * 在 pm2 這類會自動拉起的環境裡就變成「每 5 秒崩一次」。
  */
 process.on('uncaughtException', (error) => {
   try { log('致命异常（进程即将退出）:', error?.stack ?? error?.message ?? error); } catch {}

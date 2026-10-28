@@ -1,5 +1,8 @@
 # 安全基线与威胁模型（qq-bridge → QSH）
 
+> 2026-10-28：本專案不再在 Windows 上執行，`start.bat`／`restart.bat` 已刪除，線上由 Linux + pm2 管理。
+> 下面講 Windows ACL 的段落只留作歷史說明；`scripts/harden-state-acl.mjs` 仍可手動跑。
+>
 > 本文把项目里**已经实现的**安全边界、**已知的**残余风险、以及**每次发布必须回归**的
 > 检查项集中到一处。与之配套的承诺性文档是 [../RULES.md](../RULES.md)（面向使用者的
 > 权限说明）；本文偏工程实现，供改动代码前后对照。
@@ -170,7 +173,7 @@ node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 - [x] SSRF：scheme、URL 凭据、私有 IP、重定向、超时、大小限制（11 项）
 - [x] 桥接 `200 + {ok:false}` 会被 MCP 当作失败上报（不产生静默假成功）
 - [x] 旧只读工具在非 `closed-agent` 模式下 fail-closed
-- [x] `state/` ACL 助手：非阻断、防递归、`start.bat` 纯 ASCII+CRLF 且先于桥接调用（**结构级断言**）
+- [x] `state/` ACL 助手：非阻断、防递归（结构级断言）；Windows 啟動器已移除，回歸會擋住 `.bat` 被加回來
 - [ ] **`state/` ACL 的真实 icacls/UAC 行为**：需在普通终端手动复跑 `node scripts/harden-state-acl.mjs` 确认（沙箱/CI 里改 ACL 会被拒，无法自动化）
 
 ---

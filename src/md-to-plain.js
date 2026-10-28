@@ -36,8 +36,8 @@ export function mdToPlain(md) {
   return s.trim();
 }
 
-/** 按 QQ 单条消息长度上限切分（群消息一般 ≤ 4500 字，留余量）。 */
-export function splitForQQ(text, max = 4000) {
+/** 按单条消息长度上限切分（群消息一般 ≤ 4500 字，留余量）。 */
+export function splitForCharLimit(text, max = 4000) {
   const safeMax = Number.isFinite(max) && max >= 1 ? Math.floor(max) : 4000;
   const parts = [];
   let rest = text;
@@ -75,7 +75,7 @@ export function splitForQQ(text, max = 4000) {
  * 桥接里"截断给人看"的地方很多（记忆、旁观窗口、消息详情、角色卡），全部中招。
  *
  * 语义：上限按**码点**算（对纯 BMP 文本与 slice 完全一致；对含 emoji 的文本只多留不切坏）。
- * 判据与同文件的 splitForQQ、以及 src/forward.js 的预览截断保持一致。
+ * 判据与同文件的 splitForCharLimit、以及 src/forward.js 的预览截断保持一致。
  * `max` 非有限数时返回空串 —— 与 `slice(0, NaN)` 的既有行为一致，不做静默放宽。
  */
 export function truncateText(value, max) {

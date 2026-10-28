@@ -32,7 +32,7 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
 import fs from 'node:fs';
 {
   const helperPath = path.join(root, 'scripts/harden-state-acl.mjs');
-  assert.ok(fs.existsSync(helperPath), 'ACL 收紧助手必须存在（start.bat 依赖它）');
+  assert.ok(fs.existsSync(helperPath), 'ACL 收紧助手必须存在（npm run harden-acl）');
   const helper = fs.readFileSync(helperPath, 'utf8');
   for (const needle of ['icacls', '/inheritance:r', '--elevated', 'isHardened', 'process.exit(0)']) {
     assert.ok(helper.includes(needle), `ACL 助手应包含 ${needle}`);
@@ -42,15 +42,11 @@ import fs from 'node:fs';
   // 提权递归防护：被自己拉起的那一次必须跳过提权重试。
   assert.ok(/!isElevatedRun/.test(helper), '提权重试必须被 --elevated 标记短路，防止递归');
 
-  const bat = fs.readFileSync(path.join(root, 'start.bat'));
-  const batText = bat.toString('latin1');
-  const nonAscii = [...bat].filter((b) => b > 127).length;
-  assert.equal(nonAscii, 0, 'start.bat 必须保持纯 ASCII（否则非 UTF-8 控制台会乱码）');
-  assert.equal(batText.match(/(?<!\r)\n/g)?.length ?? 0, 0, 'start.bat 必须使用 CRLF');
-  assert.ok(batText.includes('harden-state-acl.mjs'), 'start.bat 必须在启动桥接前调用 ACL 助手');
-  // 助手必须排在 node src/bridge.js 之前，否则"启动时收紧"就不成立
-  assert.ok(batText.indexOf('harden-state-acl.mjs') < batText.indexOf('node src/bridge.js'), 'ACL 助手必须先于桥接启动');
-  console.log('state ACL hardening: helper is non-blocking, recursion-guarded, and wired into start.bat');
+  // Windows 啟動器已移除：線上只有 Linux，程序由 pm2 管。留這條避免有人把 .bat 加回來。
+  for (const launcher of ['start.bat', 'restart.bat']) {
+    assert.ok(!fs.existsSync(path.join(root, launcher)), `${launcher} 已移除，不要再加回來`);
+  }
+  console.log('state ACL hardening: helper is non-blocking and recursion-guarded; no Windows launchers');
 }
 
 // ── 合规不变量 L6：本程序**只探测、不部署** SnowLuma ────────────────────────────────

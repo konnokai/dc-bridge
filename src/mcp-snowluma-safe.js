@@ -18,7 +18,7 @@ import { z } from 'zod';
 // 这里 import 只用于「出站审计口径一致」的说明，不在 MCP 内做拦截——
 // 在 MCP 里拦会连「安全拒绝理由」都拿不到，反而让模型无法把话说清楚。
 import { SENSITIVE_RE } from './sensitive.js';
-import { serializeModelData } from './qq-model-view.js';
+import { serializeModelData } from './model-view.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
