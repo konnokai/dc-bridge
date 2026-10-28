@@ -5,6 +5,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { test } from 'node:test';
 import { z } from 'zod';
+import { fetchVerdict } from '../src/core/fetch-verdict.mjs';
 
 function loadWebTools({ safeFetch, webSearch }) {
   const tools = new Map();
@@ -18,6 +19,7 @@ function loadWebTools({ safeFetch, webSearch }) {
   vm.runInNewContext(source, {
     safeFetch,
     webSearch,
+    fetchVerdict,
     McpServer,
     StdioServerTransport: class {},
     z,
@@ -69,6 +71,53 @@ test('empty searches are rejected without calling the transport', async () => {
   });
   const result = await callTool('web_search', { query: '[CQ:at,qq=1]\n ' });
   assert.equal(result.isError, true);
+});
+
+test('web_fetch turns bot challenges and HTTP errors into one clear tool error', async () => {
+  const fixtures = [
+    [{ url: 'https://example.com', statusCode: 403, truncated: false, body: '<html><title>Just a moment...</title></html>' }, /机器人验证.*403/],
+    [{ url: 'https://example.com', statusCode: 200, truncated: false, body: '<title>Attention Required! | Cloudflare</title>' }, /机器人验证/],
+    [{ url: 'https://example.com', statusCode: 200, truncated: false, body: '<script>window._cf_chl_opt={}</script>' }, /机器人验证/],
+    [{ url: 'https://example.com', statusCode: 403, truncated: false, body: '<html><title>Forbidden</title></html>' }, /拒绝访问.*403/],
+    [{ url: 'https://example.com', statusCode: 503, truncated: false, body: '' }, /拒绝访问.*503/],
+    [{ url: 'https://example.com', statusCode: 404, truncated: false, body: 'not found' }, /HTTP 404.*不存在/],
+    [{ url: 'https://example.com', statusCode: 500, truncated: false, body: 'boom' }, /HTTP 500/],
+  ];
+  for (const [fixture, expected] of fixtures) {
+    let calls = 0;
+    const callTool = loadWebTools({
+      safeFetch: async () => { calls += 1; return fixture; },
+      webSearch: async () => { assert.fail('web_fetch 不应调用 webSearch'); },
+    });
+    const result = await callTool('web_fetch', { url: fixture.url });
+    assert.equal(calls, 1);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, expected);
+    assert.doesNotMatch(result.content[0].text, /<html|<title|challenge-platform/i, '不要把驗證頁 HTML 原樣交給模型');
+  }
+});
+
+test('web_fetch keeps normal pages that carry Cloudflare JSD snippets', async () => {
+  const body = '<html><head><title>正常文章</title></head><body><article>正文內容</article>'
+    + '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>';
+  const callTool = loadWebTools({
+    safeFetch: async () => ({ url: 'https://example.com/article', statusCode: 200, truncated: false, body }),
+    webSearch: async () => { assert.fail('web_fetch 不应调用 webSearch'); },
+  });
+  const result = await callTool('web_fetch', { url: 'https://example.com/article' });
+  assert.equal(result.isError, false, '正常頁面的 JSD script 不該被當成驗證頁');
+  assert.equal(JSON.parse(result.content[0].text).body, body);
+});
+
+test('web_fetch passes normal responses through unchanged', async () => {
+  const fixture = { url: 'https://example.com/article', statusCode: 200, truncated: false, body: '正常內文 # not a ref' };
+  const callTool = loadWebTools({
+    safeFetch: async () => fixture,
+    webSearch: async () => { assert.fail('web_fetch 不应调用 webSearch'); },
+  });
+  const result = await callTool('web_fetch', { url: fixture.url });
+  assert.equal(result.isError, false);
+  assert.deepEqual(JSON.parse(result.content[0].text), { url: 'https://example.com/article', statusCode: 200, truncated: false, body: '正常內文 # not a ref' });
 });
 
 /**

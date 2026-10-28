@@ -75,6 +75,8 @@ console.log('## Discord 控制台');
   const dcDups = [...new Set(dcIds.filter((v, i) => dcIds.indexOf(v) !== i))];
   ok(dcDups.length === 0, 'discord-console.html ID 唯一', dcDups.length ? `重复：${dcDups.join(', ')}` : `共 ${dcIds.length} 个`);
   ok(/<select id="style-channel"[^>]*aria-label="頻道"/.test(dc), '频道风格卡片有频道下拉选单');
+  ok(/id="notes-count"/.test(dc) && /id="note-rows"/.test(dc), '頻道筆記卡片有計數與表格');
+  ok(/api\('\/api\/notes'\)/.test(dc) && /api\('\/api\/notes\/delete'/.test(dc), '頻道筆記卡片接上查詢與刪除端點');
   ok(/\.entry-table\s*\{[^}]*table-layout:\s*fixed/.test(dc), '黑話／頻道表固定欄寬');
   const dcScript = [...dc.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0] ?? '';
   try { new Function(dcScript); ok(true, 'discord-console.html 前端 JS 可解析'); }

@@ -492,7 +492,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   放在群友記憶之前；同一會話帶過、沒變的筆記不重複帶（30 分鐘後或筆記更新才會再帶）。
 - **上限**：每個頻道 100 條，滿了丟最舊的；過期的筆記不注入也查不到。
 - **敏感資訊**：跟其他工具一樣過閘門（本機路徑、憑證、已知令牌）；命中就不記。
-- **控制台**：`GET /api/notes` 看全部、`POST /api/notes/delete`（`{ id }`）刪一條；畫面之後再做。
+- **控制台**：「記憶」分頁的「頻道筆記」卡片會列出全部筆記（頻道、種類、記下時間、過期日），可以逐條刪除
+  （端點 `GET /api/notes`、`POST /api/notes/delete`）。
 - **每天摘要（v2）**：`notes.dailySummary.enabled` 打開後，每天 `hour` 點之後（bridge 主機時區），對每個有活動的頻道
   讀最近 24 小時（最多 100 則），用 `dc-learner` 背景會話寫一條 300 字以內的摘要筆記，7 天後過期。
   少於 10 則不做；每天每個頻道只試一次，失敗不會當天重試（bridge 重啟後記憶體重來，同一天可能再試一次）。
@@ -652,7 +653,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   不改意思、不累加次數，也不復活已拒絕的詞；一輪最多呼叫 3 次（重送也算），私聊不給寫
 - `mcp__slang__record_channel_tag`（`tag`、`description`）：把這個頻道的風格記成候選；同頻道同名標籤同樣只回「已收錄過」
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
-- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓網頁正文，最多 50000 字，擋內網與本機位址
+- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓網頁正文，最多 50000 字，擋內網與本機位址。
+  有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
 - `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 

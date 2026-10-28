@@ -15,6 +15,7 @@
 // - 搜索结果/抓取结果仅作为“候选解释”，最终是否入库仍由控制台人工确认。
 import path from 'node:path';
 import { safeFetch } from './safe-fetch.js';
+import { fetchVerdict } from './core/fetch-verdict.mjs';
 import { webSearch } from './web-search.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -78,7 +79,8 @@ server.tool(
   async ({ url }) => {
     try {
       const result = await safeFetch(url);
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      const verdict = fetchVerdict(result);
+      return { content: [{ type: 'text', text: verdict.text }], isError: verdict.isError };
     } catch (error) {
       return {
         content: [{ type: 'text', text: `抓取失败：${error?.message ?? error}` }],

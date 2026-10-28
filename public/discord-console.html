@@ -284,6 +284,17 @@
       </table>
     </div>
   </section>
+
+  <section class="card">
+    <h2>頻道筆記 <span id="notes-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 note_event 記下的事，加上每天自動產生的頻道摘要。刪掉後模型就看不到那條。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>頻道</th><th>筆記</th><th>種類</th><th>記下</th><th>過期</th><th></th></tr></thead>
+        <tbody id="note-rows"></tbody>
+      </table>
+    </div>
+  </section>
   </div>
 
   <div class="tab-panel" role="tabpanel" id="tab-sessions" aria-labelledby="tabbtn-sessions" hidden>
@@ -873,7 +884,23 @@
     )) : [el('tr', {}, el('td', { colSpan: 3, className: 'muted' }, '還沒有記住任何人。'))]));
   }
 
-  function renderSessions(list) {    $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
+  function renderNotes(data) {
+    const rows = data?.notes ?? [];
+    $('notes-count').textContent = data?.enabled
+      ? `（${rows.length} 條）`
+      : '（已關閉：config.json 的 discord.notes.enabled）';
+    $('note-rows').replaceChildren(...(rows.length ? rows.map((note) => el('tr', {},
+      el('td', { className: 'mono' }, '#' + (note.channelName || note.channelId)),
+      el('td', {}, note.text),
+      el('td', { className: 'muted', style: 'white-space:nowrap' }, note.by === 'summary' ? '每日摘要' : '模型'),
+      el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(Date.parse(note.at))),
+      el('td', { className: 'muted', style: 'white-space:nowrap' }, note.expiresAt ? new Date(note.expiresAt).toLocaleDateString() : '永久'),
+      el('td', {}, el('button', { className: 'danger', dataset: { noteId: note.id }, textContent: '刪除' })),
+    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有筆記。'))]));
+  }
+
+  function renderSessions(list) {
+    $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
       el('td', { className: 'mono' }, s.key),
       el('td', { className: 'mono' }, s.sessionId),
       el('td', {}, fmtAgo(s.lastActive)),
@@ -928,6 +955,7 @@
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
+      api('/api/notes'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -939,6 +967,7 @@
     if (results[6].status === 'fulfilled') renderQuota(results[6].value);
     if (results[7].status === 'fulfilled') renderMemory(results[7].value);
     if (results[8].status === 'fulfilled' && results[8].value) renderTriggers(results[8].value);
+    if (results[9].status === 'fulfilled') renderNotes(results[9].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -1115,6 +1144,22 @@
       await refresh();
     } catch (error) {
       alert('重置失敗：' + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('note-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-note-id]');
+    if (!button) return;
+    if (!confirm('刪掉這條筆記？模型之後就看不到了。')) return;
+    button.disabled = true;
+    try {
+      await api('/api/notes/delete', { method: 'POST', body: JSON.stringify({ id: button.dataset.noteId }) });
+      await refresh();
+    } catch (error) {
+      alert('刪除失敗：' + error.message);
+      await refresh();
     } finally {
       button.disabled = false;
     }
