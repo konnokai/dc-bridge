@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   COMPACT_NOTICE,
@@ -41,7 +41,8 @@ import {
   stripBotMention,
   isSkippedMessage,
 } from './core/discord-core.mjs';
-import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
+import { formatQuote, formatRecentContext, formatTimeContext, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
+import { bySnowflake, scanHistoryMessages } from './core/discord-history.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
@@ -887,9 +888,11 @@ async function main() {
   const toolError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
   const HISTORY_MAX = 50;
   const HISTORY_MAX_CHARS = 6000;
-  const SEARCH_PAGES = 3; // search_history 往回掃幾頁（每頁 100 則）
+  const SEARCH_PAGES = 3; // search_history 一次最多掃幾頁（每頁 100 則）
   const SEARCH_RESULTS_MAX = 20;
   const VIEW_TEXT_MAX = 1500;
+  // snowflake 從這時起算；更早的時間夾到這裡，代表「從最早的訊息開始」。
+  const DISCORD_EPOCH_MS = Date.UTC(2015, 0, 1);
 
   /** 模型給的 #編號 → 這個會話頻道裡的 Discord 訊息；只查這個 key 的編號表。 */
   async function fetchByRef(key, ref, { force = false } = {}) {
@@ -1061,7 +1064,15 @@ async function main() {
     visibleName(member?.displayName, message.author?.displayName, message.author?.username) || '未知';
   // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
   const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
-  const shortTime = (date) => (date ? date.toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+  const shortTime = (date) => (date ? date.toLocaleString('zh-TW', {
+    hour12: false,
+    // 讀到去年的訊息時，只有月日分不出是哪一年。
+    ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' }),
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }) : '');
   const urlFileName = (url) => { try { return path.posix.basename(new URL(url).pathname) || 'embed'; } catch { return 'embed'; } };
 
   /** read_history／search_history 的一行：#編號 時間 名字（你）：內容。 */
@@ -1076,6 +1087,20 @@ async function main() {
 
   /** search_history 比對的文字：內文、貼圖名稱、連結預覽的標題。 */
   const searchableText = (message) => [resolveMentions(withStickers(message), message), ...(message.embeds ?? []).map((embed) => resolveMentions(embed.title, message))].join(' ');
+
+  /** read_history／search_history 的 date → 起點 snowflake；沒有 date 回 null，格式錯回 400。 */
+  function historyDate(body) {
+    const text = textArg(body.date, 40);
+    if (!text) return null;
+    const at = parseHistoryDate(text);
+    if (!at) throw toolError(`date 格式要 YYYY-MM-DD 或 YYYY-MM-DD HH:mm（跟【現在】同一時區），收到「${text}」`, 400);
+    return {
+      text,
+      at,
+      // 比 Discord 還早的時間夾到紀元：那之後的訊息就是全部。
+      id: String(SnowflakeUtil.generate({ timestamp: Math.max(at.getTime(), DISCORD_EPOCH_MS), increment: 0n })),
+    };
+  }
 
   /**
    * 記憶工具的共同關卡：令牌、開關、私聊／NSFW、每輪上限、#編號 → 發言者。
@@ -1211,20 +1236,31 @@ async function main() {
       return agentSender.history(body.token, async ({ key, channel }) => {
         const limit = Math.min(HISTORY_MAX, Math.max(1, Number(body.limit) || 20));
         const before = textArg(body.before);
+        const date = historyDate(body);
+        if (date && before) throw toolError('date 和 before 只能給一個', 400);
         const beforeId = before ? messageRefs.lookup(key, before) : null;
         if (before && !beforeId) throw toolError(`找不到訊息 ${before}：before 要用出現過的 #編號`, 404);
-        const fetched = await channel.messages.fetch({ limit, ...(beforeId ? { before: beforeId } : {}) });
+        // 未來沒有訊息；比 Discord 還早的時間在 historyDate 裡已夾到紀元。
+        if (date && date.at.getTime() >= Date.now()) return { text: '還沒有訊息。' };
+        const fetched = await channel.messages.fetch({
+          limit,
+          ...(beforeId ? { before: beforeId } : {}),
+          ...(date ? { after: date.id } : {}),
+        });
+        const messages = [...fetched.values()].sort(bySnowflake);
         const lines = [];
         let used = 0;
-        // 從新往舊裝，超過字數上限就停，再倒回舊→新。
-        for (const message of fetched.values()) {
+        // date 從指定時間往後讀；before 從最新往回裝，超過字數上限就停。
+        for (const message of date ? messages : messages.reverse()) {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
           const line = historyLine(key, message);
           if (used + line.length > HISTORY_MAX_CHARS) break;
           lines.push(line);
           used += line.length + 1;
         }
-        return { text: lines.length ? lines.reverse().join('\n') : '沒有更早的訊息了。' };
+        if (!date) lines.reverse();
+        if (lines.length) return { text: lines.join('\n') };
+        return { text: date ? '那個時間之後沒有訊息了。' : '沒有更早的訊息了。' };
       });
     },
     search: (body) => agentSender.history(body.token, async ({ key, channel }) => {
@@ -1232,28 +1268,31 @@ async function main() {
       const fromRef = textArg(body.from);
       const authorId = fromRef ? (await fetchByRef(key, fromRef)).author?.id : null;
       if (!terms.length && !authorId) throw toolError('query 和 from 至少要給一個', 400);
+      const date = historyDate(body);
+      if (date && date.at.getTime() >= Date.now()) return { text: '還沒有訊息。' };
       const limit = Math.min(SEARCH_RESULTS_MAX, Math.max(1, Number(body.limit) || 10));
-      const found = [];
-      let scanned = 0;
-      let before = null;
-      // 往回一頁一頁掃；cache: false 免得 300 則塞進快取。只登記找到的編號，不然會把 prompt 裡的編號擠掉。
-      for (let page = 0; page < SEARCH_PAGES && found.length < limit; page += 1) {
-        const fetched = await channel.messages.fetch({ limit: 100, cache: false, ...(before ? { before } : {}) });
-        for (const message of fetched.values()) {
-          scanned += 1;
-          if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
-          if (authorId && message.author?.id !== authorId) continue;
-          if (terms.length && !matchesTerms(searchableText(message), terms)) continue;
-          found.push(message);
-          if (found.length >= limit) break;
-        }
-        if (fetched.size < 100) break;
-        before = fetched.lastKey();
-      }
+      const { found, scanned } = await scanHistoryMessages({
+        direction: date ? 'forward' : 'backward',
+        pages: SEARCH_PAGES,
+        limit,
+        startAfter: date?.id ?? null,
+        fetchPage: ({ before, after }) => channel.messages.fetch({
+          limit: 100,
+          cache: false,
+          ...(after ? { after } : before ? { before } : {}),
+        }),
+        matches: (message) => {
+          if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) return false;
+          if (authorId && message.author?.id !== authorId) return false;
+          if (terms.length && !matchesTerms(searchableText(message), terms)) return false;
+          return true;
+        },
+      });
+      const scope = date ? `從 ${date.text} 起 ${scanned} 則` : `最近 ${scanned} 則`;
       const note = cfg.discord.messageContentIntent ? '' : '\n（沒開 Message Content 意圖：別人的訊息讀不到文字，只找得到 @bot 的與你自己的）';
-      if (!found.length) return { text: `最近 ${scanned} 則裡沒有找到。${note}` };
-      const lines = found.reverse().map((message) => historyLine(key, message));
-      return { text: `最近 ${scanned} 則裡找到 ${found.length} 則（舊→新）：\n${lines.join('\n')}${note}` };
+      if (!found.length) return { text: `${scope}裡沒有找到。${note}` };
+      const lines = found.map((message) => historyLine(key, message));
+      return { text: `${scope}裡找到 ${found.length} 則（舊→新）：\n${lines.join('\n')}${note}` };
     }),
     async view(body) {
       const { key, channel } = await agentSender.resolve(body.token);

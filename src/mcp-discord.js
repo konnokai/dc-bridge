@@ -231,10 +231,11 @@ tool(
 
 tool(
   'read_history',
-  '往前讀這個頻道更早的訊息（被問到之前的事、或想知道前面在聊什麼時用）。只能讀目前這個頻道；和 search_history 合計一輪最多 3 次。',
+  '讀這個頻道的訊息：預設從最新往前讀；知道是哪一天就給 date，從那個時間往後讀。只能讀目前這個頻道；date 和 before 只能給一個。和 search_history 合計一輪最多 3 次。',
   {
     token: sessionToken,
-    before: messageRef('從哪一則往前讀，省略就從最新的開始').optional(),
+    before: messageRef('從哪一則往前讀（不能跟 date 一起給）').optional(),
+    date: z.string().optional().describe('從這個時間往後讀：YYYY-MM-DD 或 YYYY-MM-DD HH:mm（跟【現在】同一時區）。不能跟 before 一起給'),
     limit: z.number().int().min(1).max(50).optional().describe('讀幾則，預設 20，最多 50'),
   },
   '/history',
@@ -243,11 +244,12 @@ tool(
 
 tool(
   'search_history',
-  '在這個頻道最近 300 則裡找訊息：query 的每個詞都要出現；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。和 read_history 合計一輪最多 3 次；長時間的懶人包不要硬翻，先請對方縮小範圍。',
+  '在這個頻道找訊息：query 的每個詞都要出現；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。預設在最近 300 則裡往回找；給了 date 就從那天往後找。範圍太大就用 date 縮小，不要一次翻太多。和 read_history 合計一輪最多 3 次。',
   {
     token: sessionToken,
     query: z.string().optional().describe('關鍵字，用空白分開，每個都要出現'),
     from: messageRef('只找這則的發言者說過的').optional(),
+    date: z.string().optional().describe('從這個時間往後找：YYYY-MM-DD 或 YYYY-MM-DD HH:mm（跟【現在】同一時區），可省略'),
     limit: z.number().int().min(1).max(20).optional().describe('最多回幾則，預設 10，最多 20'),
   },
   '/search',

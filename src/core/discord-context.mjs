@@ -59,6 +59,21 @@ export function formatTimeContext({ now = Date.now(), messageAt = 0 } = {}) {
 }
 
 /**
+ * read_history／search_history 的 date：`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`，用 bridge 主機時區。
+ * 格式不對或日期不存在（例如 2 月 30 日）回 null。
+ */
+export function parseHistoryDate(value) {
+  const matched = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(String(value ?? '').trim());
+  if (!matched) return null;
+  const [, year, month, day, hour = '0', minute = '0'] = matched;
+  const at = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  // Date 會把 2 月 30 日自動進位成 3 月，回讀比對才擋得住。
+  if (at.getFullYear() !== Number(year) || at.getMonth() !== Number(month) - 1 || at.getDate() !== Number(day)
+    || at.getHours() !== Number(hour) || at.getMinutes() !== Number(minute)) return null;
+  return at;
+}
+
+/**
  * 最近訊息區塊。entries 依時間先後（舊→新）。
  * 從最新往回裝，超過 maxChars 就停；回傳空字串代表沒有可用內容。
  */

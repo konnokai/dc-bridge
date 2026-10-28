@@ -612,9 +612,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   貼圖、附件清單、連結預覽（embed 的標題、說明、網域、欄位）、投票（題目、選項、票數）、回覆的是哪一則、reaction 統計，
   再附上圖片（附件、貼圖、連結預覽的圖，最多 `media.maxCount` 張，走同一套下載與縮圖）。
   回覆的對象只讀同一個頻道的一般回覆；轉發只顯示轉發的文字，不讀別的頻道。連結預覽的圖只抓 Discord 代理過的網址
-- `mcp__discord__search_history`（`query`、`from`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道最近 300 則裡找訊息。
+- `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
+  預設從最近 300 則往回找；給了 `date`（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`，bridge 主機時區）就從那天往後掃 300 則。
   `query` 用空白分開的每個詞都要出現（不分大小寫、全形半形），比對文字、貼圖名稱、連結預覽標題；`from` 給某人說過的一則 #編號，只找他的。
-  Discord 的訊息搜尋 API 這裡沒用：這是往回一頁一頁掃（每頁 100 則、最多 3 頁），私聊也能用。最多回 20 則。
+  Discord 的訊息搜尋 API 這裡沒用：這是往回或往後一頁一頁掃（每頁 100 則、最多 3 頁），私聊也能用。最多回 20 則。
   和 `read_history` 合計一輪最多 3 次，超過回 429；沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
 - `mcp__discord__create_poll`（`question`、`answers`、`hours`／`multi` 可省略）：在這個頻道發一個 Discord 投票。
   題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。
@@ -631,8 +632,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   bridge 重啟就清掉
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
-- `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字；
-  和 `search_history` 合計一輪最多 3 次
+- `mcp__discord__read_history`（`before`、`date`、`limit` 都可省略）：讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字。
+  沒給時間就從最新往前讀；`before` 從那則往前；`date`（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`）從那個時間往後讀，兩個不能一起給。
+  未來的時間回「還沒有訊息」；和 `search_history` 合計一輪最多 3 次
 - `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、全域名稱、使用者名稱、身分組（含最高身分組顏色）、
   加入時間、帳號建立時間、加成起始日、禁言到期時間，以及記憶；另外附上頭像圖片（有伺服器專屬頭像就用那張，128px，
   經 `media` 設定的縮圖流程）。頭像抓不到時只少圖，文字照回。個人簡介、代名詞 Discord 不給 bot 讀；線上狀態要 Presence 特權 intent，沒開

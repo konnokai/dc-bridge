@@ -48,7 +48,8 @@ import {
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
-import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from '../src/core/discord-context.mjs';
+import { formatQuote, formatRecentContext, formatTimeContext, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
+import { scanHistoryMessages } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
@@ -935,6 +936,55 @@ console.log('## 7d2b. 訊息編號（#ref）');
     '撞號時新訊息改用 7 字編號，舊的照樣指向原本那則');
 }
 
+console.log('## 7d2c. 歷史翻頁');
+{
+  // 模擬 Discord：before 回游標前最新的一批、after 回游標後最舊的一批，兩者都是新→舊。
+  const channel = (count, sameMs = false) => {
+    const all = Array.from({ length: count }, (_, i) => ({
+      id: String(i + 1),
+      createdAt: sameMs ? new Date(2026, 0, 1) : new Date(2026, 0, 1, 0, 0, i),
+    }));
+    return ({ before = null, after = null } = {}) => {
+      let range = all;
+      if (before) range = range.filter((m) => Number(m.id) < Number(before));
+      if (after) range = range.filter((m) => Number(m.id) > Number(after));
+      const picked = after ? range.slice(0, 100) : range.slice(-100);
+      return new Map([...picked].reverse().map((m) => [m.id, m]));
+    };
+  };
+
+  const back = await scanHistoryMessages({
+    direction: 'backward', pages: 3, limit: 150, fetchPage: channel(250), matches: () => true,
+  });
+  ok(back.scanned === 150 && back.found[0].id === '101' && back.found.at(-1).id === '250',
+    '往前找跨頁時留最新 150 則，回傳舊→新');
+  ok(back.found.every((m, i, all) => i === 0 || Number(all[i - 1].id) < Number(m.id)), '往前找的回傳順序嚴格舊→新');
+
+  const midPage = await scanHistoryMessages({
+    direction: 'backward', pages: 3, limit: 15, fetchPage: channel(250), matches: () => true,
+  });
+  ok(midPage.found[0].id === '236' && midPage.found.at(-1).id === '250',
+    '名額在頁中途用完時留最新的幾則，不是最舊的');
+
+  const forward = await scanHistoryMessages({
+    direction: 'forward', pages: 3, limit: 20, startAfter: '50', fetchPage: channel(250), matches: () => true,
+  });
+  ok(forward.scanned === 20 && forward.found[0].id === '51' && forward.found.at(-1).id === '70',
+    'date 模式從指定時間往後讀，回傳舊→新');
+
+  const forwardCross = await scanHistoryMessages({
+    direction: 'forward', pages: 2, limit: 150, startAfter: '0', fetchPage: channel(250), matches: () => true,
+  });
+  ok(forwardCross.scanned === 150 && forwardCross.found[0].id === '1' && forwardCross.found.at(-1).id === '150',
+    'date 模式跨頁往後掃');
+
+  const sameMs = await scanHistoryMessages({
+    direction: 'backward', pages: 3, limit: 150, fetchPage: channel(200, true), matches: () => true,
+  });
+  ok(sameMs.found.length === 150 && new Set(sameMs.found.map((m) => m.id)).size === 150 && sameMs.found.at(-1).id === '200',
+    '同一毫秒的訊息不會在翻頁時重複');
+}
+
 console.log('## 7d3. 批次');
 {
   let clock = 0;
@@ -1731,6 +1781,16 @@ console.log('## 10. 引用、上下文、出站閘門');
   const late = formatTimeContext({ now: NOW, messageAt: NOW - 40 * 60_000 });
   ok(late.includes('40m 前發的') && late.includes('剛看到'), '40 分鐘前的訊息提醒先說剛看到');
   ok(formatTimeContext({ now: NOW }).includes('【現在】'), '沒有 messageAt 也能用');
+
+  const onlyDay = parseHistoryDate('2026-10-26');
+  ok(onlyDay?.getFullYear() === 2026 && onlyDay.getMonth() === 9 && onlyDay.getDate() === 26
+    && onlyDay.getHours() === 0 && onlyDay.getMinutes() === 0, 'date 只有日期時從當天 00:00 開始');
+  const withMinute = parseHistoryDate('2026-10-26 14:32');
+  ok(withMinute?.getHours() === 14 && withMinute.getMinutes() === 32, 'date 帶時分時用當地時區');
+  ok(parseHistoryDate('2026-10-26T14:32')?.getMinutes() === 32, 'date 用 T 分隔也收');
+  ok(parseHistoryDate('2026-02-30') === null, 'date 不存在的日期回 null（不會自動進位）');
+  ok(parseHistoryDate('2026-10-26 25:00') === null && parseHistoryDate('2026-10-26 12:60') === null, 'date 時分越界回 null');
+  ok(parseHistoryDate('昨天') === null && parseHistoryDate('') === null && parseHistoryDate(null) === null, 'date 不是格式就回 null');
 
   ok(findSensitive('C:\\Users\\admin\\secret.txt') === 'sensitive-pattern', 'Windows 路徑會攔');
   ok(findSensitive('看 /home/jun/.dsh/.credentials.yaml') === 'sensitive-pattern', 'POSIX 路徑會攔');
