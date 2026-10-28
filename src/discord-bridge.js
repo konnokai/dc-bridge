@@ -39,6 +39,7 @@ import {
   withDeniedUser,
   splitDiscordMessage,
   stripBotMention,
+  isSkippedMessage,
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
 import { findSensitive } from './core/discord-security.mjs';
@@ -1029,6 +1030,7 @@ async function main() {
         let used = 0;
         // 從新往舊裝，超過字數上限就停，再倒回舊→新。
         for (const message of fetched.values()) {
+          if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
           const line = historyLine(key, message);
           if (used + line.length > HISTORY_MAX_CHARS) break;
           lines.push(line);
@@ -1051,6 +1053,7 @@ async function main() {
         const fetched = await channel.messages.fetch({ limit: 100, cache: false, ...(before ? { before } : {}) });
         for (const message of fetched.values()) {
           scanned += 1;
+          if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
           if (authorId && message.author?.id !== authorId) continue;
           if (terms.length && !matchesTerms(searchableText(message), terms)) continue;
           found.push(message);
@@ -1074,7 +1077,7 @@ async function main() {
       ];
       try {
         const replied = await referencedMessage(target, true);
-        if (replied) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(withStickers(replied), 300) || '[沒有文字]'}`);
+        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(withStickers(replied), 300) || '[沒有文字]'}`);
       } catch { /* 被回覆的那則刪了就不寫 */ }
       for (const snapshot of target.messageSnapshots?.values() ?? []) {
         lines.push(`轉發的內容：${flat(withStickers(snapshot), 500) || '[沒有文字]'}`);
@@ -1959,7 +1962,7 @@ async function main() {
       let quote = '';
       try {
         const referenced = await referencedMessage(entry.message, entry.direct);
-        if (referenced) {
+        if (referenced && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
             author: authorName(referenced),
             content: withStickers(referenced),
@@ -1995,7 +1998,9 @@ async function main() {
           limit: Math.min(100, cfg.discord.context.messages + job.entries.length),
           before: job.entries.at(-1).id,
         });
-        const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id));
+        // 有 // 標記的訊息不進上下文，也不收黑話樣本。bot 自己的訊息不套這個規則。
+        const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id)
+          && (entry.author?.bot || !isSkippedMessage(entry.content, client.user.id)));
         // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）。
         for (const entry of history) {
           if (!entry.author?.bot && entry.content) collectSlangSample(entry, entry.content);
@@ -2374,6 +2379,11 @@ async function main() {
     const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
     const repliedUserId = message.mentions?.repliedUser?.id ?? null;
     const text = stripBotMention(message.content, client.user.id);
+    // `\//`（畫面顯示 `//`）開頭＝這則只給人看。標記優先於 @、指令和提問回答。
+    if (isSkippedMessage(message.content, client.user.id)) {
+      log(`跳過 ${key} user=${message.author.id}（// 標記）`);
+      return;
+    }
     // 有沒有在叫 bot：私聊一律算；頻道看 @ 或回覆。自由參與時沒叫 bot 的訊息也會進批次，
     // 但指令與提問回答都只認叫 bot 的訊息。
     const direct = !guildId

@@ -362,6 +362,15 @@ export function stripBotMention(content, botUserId) {
   return String(content ?? '').replace(new RegExp(`<@!?${botUserId}>`, 'g'), ' ').trim();
 }
 
+/**
+ * 這則訊息要不要整則跳過？開頭打 `\//` 就是「只給人看」。
+ * Discord 客戶端會攔截 `/` 開頭、跳出指令選單，所以實際要打 `\//`；
+ * 畫面會吃掉反斜線，其他人看到的是 `//`。`\o/` 這類顏文字不會中。
+ */
+export function isSkippedMessage(content, botUserId) {
+  return /^\\?\/\//.test(stripBotMention(content, botUserId).normalize('NFKC'));
+}
+
 /** 審批回答 → DSH 的 outcome；看不懂就回 null（呼叫端會再問一次）。 */
 export function parseApprovalAnswer(text) {
   const t = String(text ?? '').trim().toLowerCase();

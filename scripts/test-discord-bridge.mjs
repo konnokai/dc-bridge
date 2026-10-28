@@ -36,6 +36,7 @@ import {
   shouldHandleGuildMessage,
   splitDiscordMessage,
   stripBotMention,
+  isSkippedMessage,
 } from '../src/core/discord-core.mjs';
 import {
   collectImageAttachments,
@@ -271,6 +272,16 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
   ok(stripBotMention(`嗨 <@${BOT}> 你好`, BOT).replace(/\s+/g, ' ') === '嗨 你好', '只去 mention、不動其他內容');
+
+  ok(isSkippedMessage('\\//hi', BOT), '\\// 開頭 → 跳過');
+  ok(isSkippedMessage('//hi', BOT), '// 開頭 → 跳過');
+  ok(isSkippedMessage('＼／／hi', BOT), '全形 ＼／／ → 跳過');
+  ok(isSkippedMessage(`<@${BOT}> \\//hi`, BOT), '@bot 後面接 \\// → 跳過');
+  ok(!isSkippedMessage('\\o/', BOT), '顏文字 \\o/ 不跳過');
+  ok(!isSkippedMessage('\\(^o^)/', BOT), '顏文字 \\(^o^)/ 不跳過');
+  ok(!isSkippedMessage('a \\// b', BOT), '標記不在開頭 → 不跳過');
+  ok(!isSkippedMessage('加 http://', BOT), '結尾的 // → 不跳過');
+  ok(!isSkippedMessage('/reset', BOT), '/reset 不跳過');
 }
 
 console.log('## 4. 審批與提問');
