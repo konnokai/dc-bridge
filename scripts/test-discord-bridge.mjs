@@ -54,7 +54,7 @@ import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '.
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
-import { bumpEmojiUsage, countEmojiTags, formatEmojiLine, loadEmojiUsage, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, countEmojiTags, formatEmojiLine, loadEmojiUsage, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
   AGENT_MAX_CONTENT,
   REACT_PER_TURN_LIMIT,
@@ -2018,6 +2018,22 @@ console.log('## 11. 表情目錄與代換');
   ok(!loadEmojiUsage(usageFile).get('111').has('e9'), '存檔時丟掉目錄裡已經沒有的表情');
   fs.rmSync(usageDir, { recursive: true, force: true });
   ok(formatEmojiLine({ name: 'kekw', description: '大笑', usage: '好笑時' }) === 'kekw：大笑（好笑時）', '一行的格式');
+
+  const hintUsage = new Map([
+    ['111', new Map([['e1', 2]])],
+    ['222', new Map([['e3', 1], ['e4', 9]])],
+  ]);
+  const hint = buildEmojiHint(catalogs, { guildId: '111', usage: hintUsage, maxChars: 600 });
+  ok(hint.startsWith('【常用表情'), '常用表情有標題');
+  ok(hint.includes('- pat：安慰人時'), '跨伺服器的表情也會列，不限當前伺服器');
+  ok(hint.indexOf('pat') < hint.indexOf('kekw'), '使用次數高的排前面');
+  ok(hint.includes('- kekw：覺得好笑時') && hint.indexOf('kekw') === hint.lastIndexOf('kekw'), '跨服同名只列一次');
+  ok(!hint.includes('cry'), '沒用過的不列');
+  ok(buildEmojiHint(catalogs, { guildId: '111', usage: new Map() }) === '', '沒有使用紀錄就不注入');
+  ok(buildEmojiHint(catalogs, { guildId: '111', usage: hintUsage, maxChars: 20 }) === '', 'maxChars 太小就不注入');
+  const many = new Map([['9', { guildId: '9', entries: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, name: `m${i}`, usage: '測試' })) }]]);
+  const manyUsage = new Map([['9', new Map(Array.from({ length: 12 }, (_, i) => [`m${i}`, i + 1]))]]);
+  ok(buildEmojiHint(many, { guildId: '9', usage: manyUsage, maxChars: 600 }).split('\n').length === 9, '最多 8 個（加標題 9 行）');
 
   ok(substituteEmojiNames('笑死 :kekw:', { guildId: '111', catalogs }) === '笑死 <:kekw:e1>',
     '當前伺服器的同名優先');

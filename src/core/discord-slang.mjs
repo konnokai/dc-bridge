@@ -507,7 +507,7 @@ function hintText(header, entries, format, limit) {
 }
 
 // 同一個會話內容沒變、又還沒超過 refreshMs 就回空字串：每一批都帶只是燒 token。
-function onceInSession(shown, slot, text, now, refreshMs) {
+export function onceInSession(shown, slot, text, now, refreshMs) {
   if (!text || !shown) return text;
   const last = shown.get(slot);
   if (last && last.text === text && now - last.at < refreshMs) return '';

@@ -166,7 +166,7 @@ tool(
   {
     token: sessionToken,
     message: messageRef('要按 reaction 的那則訊息'),
-    emoji: z.string().describe('伺服器表情名稱（例如 kekw，先用 search_emojis 查）或一個 Unicode emoji（例如 😂）'),
+    emoji: z.string().describe('伺服器表情名稱（例如 kekw；【常用表情】有的就直接用）或一個 Unicode emoji（例如 😂）'),
   },
   '/react',
   () => '已按 reaction',
@@ -210,7 +210,7 @@ tool(
 
 tool(
   'search_emojis',
-  '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
+  '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。【常用表情】沒有的、或想找更貼的才查。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {
     token: sessionToken,
     query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),

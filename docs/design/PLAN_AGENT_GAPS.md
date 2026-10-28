@@ -392,6 +392,8 @@ S2 先不做（F1 目前略過）；S3 等 G2 選來源（第 5 節第 2 點）�
 第 4 次回答說「不要更多表情」，所以**不**在 prompt 多塞清單。最小做法：
 - `handleMessage` 統計各伺服器訊息裡出現的自訂表情（`<:name:id>`）次數，存進現有的表情狀態。
 - `search_emojis` 的 `query` 留空時，按使用次數排序。不增加 prompt 長度，也不新增工具。
+- v4（2026-10-28）：prompt 帶所有伺服器加起來前 8 個常用表情（名稱＋使用時機），
+  同會話 30 分鐘去重；`search_emojis` 退成找更貼的補充手段。
 
 **檔案**：`src/discord-bridge.js`（`handleMessage`、`emojis` handler）、`src/core/discord-emoji.mjs`（統計與排序）、
 `scripts/test-discord-bridge.mjs`、`docs/guides/DISCORD.md` 的表情段。

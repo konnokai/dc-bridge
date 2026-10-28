@@ -70,7 +70,7 @@ import {
   saveNotesFile,
 } from './core/discord-notes.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { bumpEmojiUsage, formatEmojiLine, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, formatEmojiLine, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -94,6 +94,7 @@ import {
   deleteSlang,
   loadSlangFile,
   lookupSlang,
+  onceInSession,
   parseExtractionJson,
   recordChannelTag,
   recordSlang,
@@ -400,6 +401,7 @@ async function main() {
   const noteWrites = new Map(); // key -> 這一輪寫了幾條頻道筆記
   const slangWrites = new Map(); // key -> 這一輪自己收錄了幾次黑話／標籤
   const slangShown = new Map(); // key -> Map：這個會話帶過的黑話（逐條）和頻道風格區塊
+  const emojiShown = new Map(); // key -> Map：這個會話帶過的【常用表情】
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
   const turnUsers = new Map(); // key -> 目前回合的觸發者
   const turnTriggerRecorded = new Set(); // key -> 這個回合已經記過觸發
@@ -558,7 +560,7 @@ async function main() {
   const emojiDir = cfg.discord.emoji.dir ? path.resolve(ROOT, cfg.discord.emoji.dir) : path.join(STATE_DIR, 'discord-emoji');
   let emojiCatalogs = loadCatalogs(emojiDir);
   let emojiLoadedAt = Date.now();
-  // 表情使用次數：只影響 query 留空時的排序，壞檔就從空的重建。
+  // 表情使用次數：影響 query 留空時的排序，也是【常用表情】的來源；壞檔就從空的重建。
   const emojiUsage = loadEmojiUsage(EMOJI_USAGE_FILE);
   let emojiUsageDirty = false;
   let emojiUsageTimer = null;
@@ -792,6 +794,7 @@ async function main() {
     noteWrites.delete(key);
     slangWrites.delete(key);
     slangShown.delete(key);
+    emojiShown.delete(key);
     pendingUsers.delete(key);
     turnUsers.delete(key);
     turnTriggerRecorded.delete(key);
@@ -2428,6 +2431,17 @@ async function main() {
       });
     }
 
+    // 常用表情：跨伺服器按使用次數取前 8 個；同會話帶過、沒變就不重帶。
+    let emojiHint = '';
+    if (cfg.discord.emoji.enabled && guild) {
+      if (!emojiShown.has(key)) emojiShown.set(key, new Map());
+      emojiHint = onceInSession(emojiShown.get(key), 'emoji', buildEmojiHint(emojiCatalogs, {
+        guildId: job.guildId,
+        usage: emojiUsage,
+        maxChars: cfg.discord.emoji.maxChars,
+      }), Date.now(), MEMORY_REFRESH_MS);
+    }
+
     // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
     const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
     const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
@@ -2437,7 +2451,7 @@ async function main() {
       formatActivityLine(activity.stats(key)),
     ].filter(Boolean).join('\n');
     return {
-      text: [feedback, context, slangHint, styleHint, notesHint, memory, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, batch, time].filter(Boolean).join('\n'),
       images,
       feedbackEntries,
     };

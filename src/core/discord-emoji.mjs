@@ -1,6 +1,6 @@
 // Discord 自訂表情目錄：挑選、格式化、把 `:名稱:` 換成真正的 emoji tag。
 //
-// 表情不再整張塞進 prompt：模型想用表情時呼叫 search_emojis 工具查，背後就是 retrieveEmojis。
+// prompt 只帶常用前 8 個（跨伺服器、按使用次數）；其餘用 search_emojis 查，背後是 retrieveEmojis。
 // v1 用關鍵字（中文 bigram）排序，不碰 embedding；之後要換成向量檢索時，
 // 只需替換 retrieveEmojis 的實作，工具介面與 `:名稱:` 協定都不用改。
 //
@@ -12,6 +12,8 @@ import path from 'node:path';
 const ASCII_TOKEN = /[a-z0-9_]{2,}/g;
 const CJK_RUN = /[\u3400-\u9fff]+/g;
 const EMOJI_TOKEN = /(?<![\w:]):([a-zA-Z0-9_]{2,32}):(?![\w:])/g;
+// 當前伺服器的加分：同名表情多一個伺服器時，先挑本地那張。
+const CURRENT_GUILD_BONUS = 6;
 // 單字比對用的停用字：只留有意義的字，避免「的/了/是」把每個描述都命中。
 const CJK_STOP = new Set('的了是我你他她它不在有和就都一這那個們嗎呢吧啊很太也還又但所以如果'.split(''));
 
@@ -111,9 +113,9 @@ export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, ma
   for (const [id, catalog] of catalogs) {
     for (const entry of catalog.entries ?? []) {
       if (!entry?.id || !entry?.name) continue;
-      let score = current && id === current ? 6 : 0;
+      let score = current !== null && id === current ? CURRENT_GUILD_BONUS : 0;
       // 只有「query 留空」才按使用次數排：關鍵字查詢時命中程度才是重點。
-      if (browsing && current && id === current) score += Number(usage?.get?.(String(entry.id))) || 0;
+      if (browsing && current !== null && id === current) score += Number(usage?.get?.(String(entry.id))) || 0;
       let keywordScore = 0;
       const hay = haystackOf(entry);
       for (const token of tokens) {
@@ -143,6 +145,44 @@ export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, ma
     used += line.length + 1;
   }
   return out;
+}
+
+const HINT_HEADER = '【常用表情（句子裡寫 :名稱:，reaction 直接寫名稱）】';
+const HINT_MAX = 8;
+
+/**
+ * prompt 的【常用表情】：所有目錄按使用次數取前 8 個，只留名稱與使用時機。
+ * 跨伺服器的表情也能用，所以不局限當前伺服器；同名只列一次，本地版本加分。
+ * 沒有使用紀錄就不注入：純目錄順序跟當下無關。
+ */
+export function buildEmojiHint(catalogs, { guildId = null, usage = null, max = HINT_MAX, maxChars = 600 } = {}) {
+  if (!catalogs?.size || !usage?.size) return '';
+  const current = guildId === null || guildId === undefined ? null : String(guildId);
+  const rows = [];
+  for (const [id, catalog] of catalogs) {
+    for (const entry of catalog.entries ?? []) {
+      if (!entry?.id || !entry?.name) continue;
+      const count = Number(usage.get(id)?.get?.(String(entry.id))) || 0;
+      if (count <= 0) continue;
+      rows.push({ entry, score: count + (current !== null && id === current ? CURRENT_GUILD_BONUS : 0) });
+    }
+  }
+  rows.sort((a, b) => b.score - a.score || String(a.entry.name).localeCompare(String(b.entry.name)));
+
+  const lines = [];
+  const seen = new Set();
+  let used = HINT_HEADER.length + 1;
+  for (const { entry } of rows) {
+    if (lines.length >= max) break;
+    const key = String(entry.name).toLowerCase();
+    if (seen.has(key)) continue;
+    const line = `- ${entry.name}：${String(entry.usage || entry.description || '').replace(/\s+/g, ' ').trim().slice(0, 40)}`;
+    if (used + line.length + 1 > maxChars) break;
+    seen.add(key);
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.length ? `${HINT_HEADER}\n${lines.join('\n')}` : '';
 }
 
 /**
@@ -196,7 +236,7 @@ export function ownReaction(message, identifier) {
 }
 
 // ── 使用次數（README 工作包 K） ─────────────────────────────────────────────
-// 只為了讓 search_emojis 的 query 留空時把常用的排前面；不進 prompt、不是評分。
+// 讓 search_emojis 的 query 留空時把常用的排前面，也是【常用表情】的排序依據；不是評分。
 // 檔案壞掉就從空的重建：這只是排序提示，不值得為它停機或備份。
 
 const EMOJI_TAG = /<a?:\w{2,32}:(\d{15,25})>/g;

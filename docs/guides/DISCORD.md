@@ -109,10 +109,10 @@ pm2 logs dc-bridge
 | `security.blockSensitive` | 回覆含本機路徑／憑證／已知令牌時整條攔截，預設 `true` |
 | `queue.max` | DSH 連不上時每個會話最多排幾批，預設 50 |
 | `queue.retryMs` | 恢復後的重試間隔，預設 10000 |
-| `emoji.enabled` | `search_emojis` 是否查自訂表情、是否代換 `:名稱:`，預設 `true` |
+| `emoji.enabled` | `search_emojis`、每批【常用表情】與 `:名稱:` 代換的總開關，預設 `true` |
 | `emoji.dir` | 表情目錄位置，預設 `state/discord-emoji/` |
 | `emoji.maxCandidates` | `search_emojis` 一次最多回幾個表情，預設 12（3~30） |
-| `emoji.maxChars` | `search_emojis` 表情結果的字數上限，預設 600 |
+| `emoji.maxChars` | `search_emojis` 結果與【常用表情】的字數上限，預設 600 |
 | `reactions.enabled` | 對「沒叫 bot」的頻道訊息偶爾加 reaction，預設 `false` |
 | `reactions.probability` | 命中後實際加 reaction 的機率，預設 0.15 |
 | `reactions.cooldownMs` | 同一頻道兩次 reaction 的最短間隔，預設 10 分鐘 |
@@ -400,17 +400,20 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
    建置期間卡片會顯示「更新中…（已完成/總數）」與日誌尾巴，子程序的輸出一併進
    控制台「日誌」與 pm2 log，不用等建置結束才看得到進度。
 
-2. **模型自己查**：prompt 不附表情清單。模型想用表情時呼叫 `mcp__discord__search_emojis`
-   用關鍵字查：當前伺服器 +6 分、名稱命中 +4、中文 bigram 關鍵字命中 +2，只回命中關鍵字的，
-   最多 `emoji.maxCandidates` 個、受 `emoji.maxChars` 限制；query 留空就列當前伺服器的，
-   並按群友實際使用的次數排序（次數存在 `state/discord-emoji-usage.json`，只計伺服器頻道裡
-   出現過的自訂表情、同一則訊息同一個表情只算一次，不進 prompt）。
+2. **常用表情提示**：prompt 只附**所有伺服器**加起來使用次數前 8 個（名稱＋使用時機；
+   當前伺服器 +6 分）。同一個會話 30 分鐘最多帶一次，沒用過的不列，內容沒變就不重複帶。
+   其他表情用 `mcp__discord__search_emojis` 查：當前伺服器 +6 分、名稱命中 +4、
+   中文 bigram 關鍵字命中 +2，只回命中關鍵字的，最多 `emoji.maxCandidates` 個、
+   受 `emoji.maxChars` 限制；query 留空就列當前伺服器的，並按群友實際使用的次數排序
+   （次數存在 `state/discord-emoji-usage.json`，只計伺服器頻道裡出現過的自訂表情、
+   同一則訊息同一個表情只算一次）。
    貼圖另外用 `mcp__discord__search_stickers` 查：比對名稱、說明、tags，最多 30 張；
    query 留空或沒有符合的就列出全部（一個伺服器的貼圖不多，列全部比回「沒找到」好）。
    以前兩種混在同一個工具裡，模型想找貼圖卻常只看到表情。
 
-3. **模型輸出 `:名稱:`**，橋接在送出前換成 `<:名稱:id>`（動畫用 `<a:…>`）。同名時
-   當前伺服器優先；找不到就保留原文。這樣 prompt 不用塞長長的 ID，也不會抄錯。
+3. **模型輸出 `:名稱:`**，橋接在送出前換成 `<:名稱:id>`（動畫用 `<a:…>`）。目錄裡有的名稱
+   都能用，不限當前伺服器；同名時當前伺服器優先。找不到就保留原文，`:名稱:` 會原樣送出，
+   不會變成表情。這樣 prompt 不用塞長長的 ID，也不會抄錯。
 
 跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
 就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
