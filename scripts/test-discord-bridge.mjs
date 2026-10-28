@@ -48,7 +48,7 @@ import {
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
-import { formatQuote, formatRecentContext, formatTimeContext, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
+import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
@@ -1791,6 +1791,13 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(parseHistoryDate('2026-02-30') === null, 'date 不存在的日期回 null（不會自動進位）');
   ok(parseHistoryDate('2026-10-26 25:00') === null && parseHistoryDate('2026-10-26 12:60') === null, 'date 時分越界回 null');
   ok(parseHistoryDate('昨天') === null && parseHistoryDate('') === null && parseHistoryDate(null) === null, 'date 不是格式就回 null');
+
+  ok(linkPaths('<https://x.com/yuki/status/2115384926258487458?s=46>').join() === '/yuki/status/2115384926258487458',
+    '連結只看路徑：去掉 <> 和查詢字串');
+  ok(linkPaths('https://fxtwitter.com/yuki/status/2115384926258487458').join() === '/yuki/status/2115384926258487458',
+    '換網域的修復連結路徑不變');
+  ok(linkPaths('https://example.com/a').length === 0, '只有一段的路徑不拿來比對');
+  ok(linkPaths('沒有連結').length === 0, '沒有連結回空');
 
   ok(findSensitive('C:\\Users\\admin\\secret.txt') === 'sensitive-pattern', 'Windows 路徑會攔');
   ok(findSensitive('看 /home/jun/.dsh/.credentials.yaml') === 'sensitive-pattern', 'POSIX 路徑會攔');

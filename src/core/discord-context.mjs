@@ -59,6 +59,21 @@ export function formatTimeContext({ now = Date.now(), messageAt = 0 } = {}) {
 }
 
 /**
+ * 訊息裡的連結「身分」：只看路徑，至少要有兩段。X／Facebook／Threads／IG 的修復服務
+ * 常把網域換掉（fxtwitter、fixupx、ddinstagram…），路徑不變，所以用路徑認出同一條連結。
+ * 只留兩段以上，避免不同網站剛好同一個短路徑也被當成同一條。
+ */
+export function linkPaths(text) {
+  return [...String(text ?? '').matchAll(/https?:\/\/\S+/g)]
+    .map((match) => {
+      try {
+        return new URL(match[0].replace(/[)>）\]，。]+$/, '')).pathname.replace(/\/+$/, '');
+      } catch { return ''; }
+    })
+    .filter((path) => path.indexOf('/', 1) > 1);
+}
+
+/**
  * read_history／search_history 的 date：`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`，用 bridge 主機時區。
  * 格式不對或日期不存在（例如 2 月 30 日）回 null。
  */

@@ -611,7 +611,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__discord__view_message`（`message`）：看這個頻道一則訊息的完整內容：發言者、時間、有沒有編輯過、全文（最多 1500 字）、
   貼圖、附件清單、連結預覽（embed 的標題、說明、網域、欄位）、投票（題目、選項、票數）、回覆的是哪一則、reaction 統計，
   再附上圖片（附件、貼圖、連結預覽的圖，最多 `media.maxCount` 張，走同一套下載與縮圖）。
-  回覆的對象只讀同一個頻道的一般回覆；轉發只顯示轉發的文字，不讀別的頻道。連結預覽的圖只抓 Discord 代理過的網址
+  回覆的對象只讀同一個頻道的一般回覆；轉發只顯示轉發的文字，不讀別的頻道。連結預覽的圖只抓 Discord 代理過的網址。
+  訊息裡有連結時，也會讀後面幾則由機器人補上的同一個連結預覽（X、Facebook、Threads、bilibili、IG 這類修復 bot；
+  只換網域的改寫連結也算同一條，例如 fxtwitter、fixupx、ddinstagram），
+  因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
   預設從最近 300 則往回找；給了 `date`（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`，bridge 主機時區）就從那天往後掃 300 則。
   `query` 用空白分開的每個詞都要出現（不分大小寫、全形半形），比對文字、貼圖名稱、連結預覽標題；`from` 給某人說過的一則 #編號，只找他的。
@@ -696,6 +699,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **改和收回只認自己送的**：模型被 prompt injection 也改不了審批提示（例如改成「回通過繼續」騙管理員），也刪不掉別人的訊息。
   不用 discord.js 的 `deletable`：bot 有 Manage Messages 時它對別人的訊息也是 true。
 - **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。只按了 reaction 或只收回訊息不算。
+  有人叫 bot 的回合（★）若模型只輸出文字、沒呼叫任何會送到 Discord 的工具（發送、reaction、修改、收回），
+  橋接會在同一個會話補一句提醒，請它用工具回話（每 10 分鐘最多一次；提醒自己的回合不會再觸發），
+  免得群友以為被忽略。模型收到提醒後仍然可以不說話。
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello` 與
