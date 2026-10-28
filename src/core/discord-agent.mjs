@@ -409,7 +409,7 @@ export async function startAgentApi({ file, handlers, log = () => {} }) {
         }
         if (!announced) {
           announced = true;
-          log('mcp-discord 已連上：模型可以自己決定要不要發訊息');
+          log('MCP 已連上橋接端點（mcp-discord／mcp-slang 共用）');
         }
         if (route === 'hello') {
           sendJson(res, 200, { ok: true });

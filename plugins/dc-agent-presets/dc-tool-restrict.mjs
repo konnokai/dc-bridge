@@ -49,8 +49,9 @@ const DANGEROUS = [
   'dev_stage_promote', 'dev_uninject_plugin',
 ]
 
-// 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）與 mcp-discord（發訊息與頻道動作）；
-// 新增 MCP 時把命名空間前綴或精確工具名加在這裡，並同步更新 docs/guides/DISCORD.md。
+// 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）、mcp-discord（發訊息與頻道動作）
+// 與 mcp-slang（自己查詞、收黑話與頻道標籤）；新增 MCP 時把命名空間前綴或精確工具名加在這裡，
+// 並同步更新 docs/guides/DISCORD.md。
 const SAFE_PREFIXES = ['mcp__web-search-safe__']
 const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-safe__web_search']
 // 逐一列精確名稱，不放 mcp__discord__ 前綴：mcp-discord 新增工具時要有人看過才放行。
@@ -72,6 +73,12 @@ const DISCORD_TOOLS = [
   'mcp__discord__remember_user',
   'mcp__discord__forget_user_fact',
 ]
+// 黑話／頻道標籤也走橋接，跟 Discord 工具同一組開關：學習會話是純抽取器，不需要也不准寫詞庫。
+const SLANG_TOOLS = [
+  'mcp__slang__lookup_slang',
+  'mcp__slang__record_slang',
+  'mcp__slang__record_channel_tag',
+]
 
 const SAFE_EXACT = new Set([
   'ask_user_question', // 提問轉到 Discord
@@ -92,10 +99,10 @@ export function apply(ctx, config = {}) {
   const denyList = [
     ...DANGEROUS,
     ...(allowWebSearch ? [] : WEB_SEARCH_TOOLS),
-    ...(allowDiscordSend ? [] : DISCORD_TOOLS),
+    ...(allowDiscordSend ? [] : [...DISCORD_TOOLS, ...SLANG_TOOLS]),
   ]
   const exact = new Set(SAFE_EXACT)
-  if (allowDiscordSend) for (const tool of DISCORD_TOOLS) exact.add(tool)
+  if (allowDiscordSend) for (const tool of [...DISCORD_TOOLS, ...SLANG_TOOLS]) exact.add(tool)
   const failed = []
   for (const tool of denyList) {
     try {

@@ -287,6 +287,7 @@ const PROGRESS_LINES_MAX = 6;
 const PROGRESS_SILENT = new Set([
   'mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
+  'mcp__slang__lookup_slang', 'mcp__slang__record_slang', 'mcp__slang__record_channel_tag',
 ]);
 const PROGRESS_LABELS = {
   'mcp__web-search-safe__web_search': ['🔍 搜尋', (args) => args.query],

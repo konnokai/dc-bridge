@@ -86,6 +86,7 @@ const DISCORD_TOOL_NAMES = [
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'remember_user', 'forget_user_fact',
 ].map((name) => `mcp__discord__${name}`);
+const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
 const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|edit_message|delete_message|create_poll/;
 
 console.log('## 1. 設定收斂');
@@ -131,6 +132,7 @@ console.log('## 1. 設定收斂');
     ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
     ok(others.every((name) => !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
+    ok(SLANG_TOOL_NAMES.every((name) => describeToolCall(name, '{}') === null), '黑話工具不列進度（背景筆記）');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
 
     const text = formatProgress(['🔍 搜尋：a', '🌐 讀取網頁：b']);
@@ -353,10 +355,10 @@ console.log('## 7. dc-chat preset 與守衛');
   mod.apply({ tools: { restrict: ({ deny }) => restricted.push(...deny), guard: (fn) => { guard = fn; } } });
   ok(restricted.includes('pwsh') && restricted.includes('read') && restricted.includes('plugin_manager'),
     'restrict 名單含 shell／檔案／外掛裝載');
-  for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES]) {
+  for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES, ...SLANG_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
-  ok(true, `白名單放行無害模型側工具、只讀搜尋與 ${DISCORD_TOOL_NAMES.length} 個 Discord 工具`);
+  ok(true, `白名單放行無害模型側工具、只讀搜尋、${DISCORD_TOOL_NAMES.length} 個 Discord 工具與 ${SLANG_TOOL_NAMES.length} 個黑話工具`);
   for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
@@ -386,9 +388,11 @@ console.log('## 7. dc-chat preset 與守衛');
     },
   }, { allowWebSearch: false, allowDiscordSend: false });
   ok(learnerRestricted.includes('mcp__web-search-safe__web_search'), '註冊期把 web search 從工具清單移除');
-  ok(DISCORD_TOOL_NAMES.every((name) => learnerRestricted.includes(name)), '註冊期把所有 Discord 工具從清單移除');
+  ok([...DISCORD_TOOL_NAMES, ...SLANG_TOOL_NAMES].every((name) => learnerRestricted.includes(name)),
+    '註冊期把所有 Discord 工具與黑話工具從清單移除');
   ok(typeof learnerGuard({ name: 'mcp__web-search-safe__web_search' }) === 'string', '執行期也拒絕 web search');
-  ok(DISCORD_TOOL_NAMES.every((name) => typeof learnerGuard({ name }) === 'string'), '執行期也拒絕所有 Discord 工具（含唯讀的）');
+  ok([...DISCORD_TOOL_NAMES, ...SLANG_TOOL_NAMES].every((name) => typeof learnerGuard({ name }) === 'string'),
+    '執行期也拒絕所有 Discord 工具與黑話工具（含唯讀的）');
   ok(learnerGuard({ name: 'todo_write' }) === undefined, '無害的 todo 仍然放行');
 }
 
@@ -1134,6 +1138,84 @@ console.log('## 7e. Discord MCP 發送工具');
       arguments: { token: 'bad', content: '嗨' },
     });
     ok(failed.isError === true && String(failed.content?.[0]?.text).includes('令牌'), '橋接拒絕時工具回 isError（模型不會以為送成功）');
+  } finally {
+    await client.close().catch(() => {});
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log('## 7f. 黑話 MCP');
+{
+  const http = await import('node:http');
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (req.headers['x-agent-token'] !== 'tok') {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: '端點令牌不對' }));
+        return;
+      }
+      if (parsed.token === 'bad') {
+        res.writeHead(403, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: '會話令牌不對' }));
+        return;
+      }
+      received.push({ url: req.url, ...parsed });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, text: `來自 ${req.url}` }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-slang-mcp-'));
+  const endpointFile = path.join(dir, 'agent.json');
+  fs.writeFileSync(endpointFile, JSON.stringify({
+    url: `http://127.0.0.1:${server.address().port}`,
+    token: 'tok',
+  }));
+
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [path.join(REPO_ROOT, 'src', 'mcp-slang.js')],
+    cwd: REPO_ROOT,
+    env: { ...process.env, DC_AGENT_FILE: endpointFile },
+    stderr: 'pipe',
+  });
+  const client = new Client({ name: 'test', version: '0.0.0' });
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    ok(tools.map((t) => `mcp__slang__${t.name}`).sort().join() === [...SLANG_TOOL_NAMES].sort().join(),
+      `黑話 MCP 註冊的工具剛好就是白名單裡那 ${SLANG_TOOL_NAMES.length} 個`);
+    ok(tools.every((t) => (t.inputSchema?.required ?? []).includes('token')), '黑話工具每個都要 token');
+
+    const lookup = await client.callTool({ name: 'lookup_slang', arguments: { token: 't', term: '難繃' } });
+    ok(received.at(-1)?.url === '/slang-lookup' && received.at(-1)?.term === '難繃'
+      && String(lookup.content?.[0]?.text) === '來自 /slang-lookup', 'lookup_slang 打到 /slang-lookup 並把原文交給模型');
+
+    const record = await client.callTool({
+      name: 'record_slang',
+      arguments: { token: 't', term: '難繃', meaning: '受不了', usage: '看到爛操作', examples: ['太難繃了'] },
+    });
+    ok(received.at(-1)?.url === '/slang-record' && received.at(-1)?.meaning === '受不了'
+      && received.at(-1)?.examples?.[0] === '太難繃了', 'record_slang 把詞、意思、用法與例句帶到橋接');
+    ok(String(record.content?.[0]?.text) === '來自 /slang-record', 'record_slang 把橋接回覆原樣交給模型');
+
+    const tag = await client.callTool({
+      name: 'record_channel_tag',
+      arguments: { token: 't', tag: '回覆長度', description: '大家都一兩句' },
+    });
+    ok(received.at(-1)?.url === '/tag-record' && received.at(-1)?.tag === '回覆長度', 'record_channel_tag 打到 /tag-record');
+    ok(String(tag.content?.[0]?.text) === '來自 /tag-record', '頻道標籤工具把橋接回覆原樣交給模型');
+
+    const failed = await client.callTool({ name: 'lookup_slang', arguments: { token: 'bad', term: 'x' } });
+    ok(failed.isError === true && String(failed.content?.[0]?.text).includes('令牌'), '橋接拒絕時黑話工具回 isError');
   } finally {
     await client.close().catch(() => {});
     server.close();

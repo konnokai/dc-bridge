@@ -7,7 +7,7 @@
 //        @deepseek-ai/dsh-agent-preset 行；~/.dsh/.agent-presets/ 目录已不再被读取）
 //   2. 在 DSH profile 的 cordis.patch.yml 中挂载 MCP server：
 //      QQ：mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
-//      Discord：mcp-web-search-safe / mcp-discord（模型自己决定要不要发讯息）
+//      Discord：mcp-web-search-safe / mcp-discord / mcp-slang（模型自己决定要不要发讯息、自己收黑话）
 //   3. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
 //
 // 用法：
@@ -130,11 +130,11 @@ function yamlSingleQuote(s) {
 /**
  * 由桥接托管的 MCP 条目 id。
  *
- * Discord 装 web-search-safe（只读搜索）与 mcp-discord（发讯息）；SnowLuma 的两个是
+ * Discord 装 web-search-safe（只读搜索）、mcp-discord（发讯息）与 mcp-slang（黑话／频道标签）；SnowLuma 的两个是
  * QQ 专用，装进 Discord profile 只会多出一堆连不上的工具。
  */
 const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
-const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord'];
+const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord', 'mcp-slang'];
 const managedMcpIds = () => (DISCORD_ONLY ? DISCORD_MCP_IDS : MANAGED_MCP_IDS);
 
 function mcpEntries() {
@@ -143,6 +143,8 @@ function mcpEntries() {
     ...(DISCORD_ONLY ? {
       // 模型要自己決定什麼時候發訊息：工具打回橋接的 loopback 發送 API。
       'mcp-discord': { serverName: 'discord', script: path.join(REPO_ROOT, 'src', 'mcp-discord.js') },
+      // 模型自己查詞、收黑話與頻道標籤；跟 mcp-discord 共用同一個 loopback 端點。
+      'mcp-slang': { serverName: 'slang', script: path.join(REPO_ROOT, 'src', 'mcp-slang.js') },
     } : {
       'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
       'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },

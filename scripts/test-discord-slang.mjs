@@ -13,9 +13,12 @@ import {
   createSlangStore,
   deleteSlang,
   loadSlangFile,
+  lookupSlang,
   normalizeTerm,
   parseExtractionJson,
   pruneSlang,
+  recordChannelTag,
+  recordSlang,
   rejectSlang,
   saveSlangFile,
   slangStats,
@@ -330,6 +333,71 @@ console.log('## 5. 頻道風格');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+console.log('## 7. 模型自己查與收錄');
+{
+  const store = createSlangStore();
+  upsertCandidates(store, {
+    guildId: GUILD,
+    now: NOW,
+    items: [
+      { term: '難繃', meaning: '受不了／很好笑', usage: '看到離譜的事時' },
+      { term: '水水', meaning: '漂亮' },
+    ],
+  });
+  confirmSlang(store, store.entries.find((entry) => entry.term === '難繃').id, {}, NOW + 1);
+  rejectSlang(store, store.entries.find((entry) => entry.term === '水水').id, NOW + 1);
+
+  const exact = lookupSlang(store, ' 難繃 ');
+  ok(exact.length === 1 && exact[0].meaning === '受不了／很好笑', '查詞：全半形與空白不影響');
+  ok(lookupSlang(store, '這操作太難繃了吧').some((entry) => entry.term === '難繃'), '拿一整句來查也找得到');
+  ok(lookupSlang(store, '沒收錄過').length === 0, '查不到回空陣列');
+  ok(lookupSlang(store, '水水', { guildId: GUILD })[0]?.status === SLANG_STATUS.REJECTED,
+    '同服的已拒絕也看得到（模型才知道不要用）');
+  ok(lookupSlang(store, '水水').length === 0, '沒有伺服器身分（私聊）只查已確認');
+
+  let recorded = recordSlang(store, { guildId: GUILD, term: 'YYDS', meaning: '永遠的神', now: NOW + 2 });
+  ok(recorded && !recorded.existing && recorded.entry.status === SLANG_STATUS.CANDIDATE, '收錄新詞是候選');
+  ok(recorded.entry.seen === 1, '新詞 seen = 1');
+
+  recorded = recordSlang(store, { guildId: GUILD, term: 'yyds', meaning: '改別的意思', now: NOW + 3 });
+  ok(recorded?.existing === true && recorded.entry.meaning === '永遠的神' && recorded.entry.seen === 1,
+    '已收錄過：回 existing，不改意思也不累加 seen');
+
+  recorded = recordSlang(store, { guildId: GUILD, term: '水水', meaning: '想復活', now: NOW + 4 });
+  ok(recorded?.existing === true && recorded.entry.status === SLANG_STATUS.REJECTED, '已拒絕的詞只回報，不復活');
+  ok(recordSlang(store, { term: '', meaning: 'x' }) === null, '空詞不收');
+  ok(recordSlang(store, { term: 'x', meaning: '' }) === null, '空意思不收');
+
+  upsertCandidates(store, {
+    guildId: GUILD,
+    now: NOW + 8,
+    items: [{ term: 'gg', meaning: 'good game' }, { term: '草', meaning: '笑' }],
+  });
+  ok(lookupSlang(store, 'eggs', { guildId: GUILD }).every((entry) => entry.term !== 'gg'), '英文詞不做子字串命中（gg 不中 eggs）');
+  ok(lookupSlang(store, '草叢', { guildId: GUILD }).every((entry) => entry.term !== '草'), '一個字的詞不做子字串命中');
+  ok(lookupSlang(store, '草', { guildId: GUILD }).some((entry) => entry.term === '草'), '完全相同的單字詞查得到');
+
+  const hidden = createSlangStore();
+  upsertCandidates(hidden, {
+    guildId: OTHER_GUILD,
+    now: NOW + 20,
+    items: [{ term: '他服梗', meaning: '只有他服看得到' }],
+  });
+  ok(lookupSlang(hidden, '他服梗', { guildId: GUILD }).length === 0, '別服的候選不給查');
+  ok(lookupSlang(hidden, '他服梗', { guildId: OTHER_GUILD }).length === 1, '同服的候選查得到');
+  const hiddenRecord = recordSlang(hidden, { guildId: GUILD, term: '他服梗', meaning: '換個意思' });
+  ok(hiddenRecord?.existing === true && hiddenRecord.hidden === true, '別服候選只回已收錄過，不帶意思');
+  confirmSlang(hidden, hidden.entries[0].id, {}, NOW + 21);
+  ok(lookupSlang(hidden, '他服梗', { guildId: GUILD }).length === 1, '已確認的詞跨伺服器共用');
+
+  let tag = recordChannelTag(store, { guildId: GUILD, channelId: CHANNEL, tag: '回覆長度', description: '大家都一兩句', now: NOW + 5 });
+  ok(tag && !tag.existing && tag.entry.kind === 'style' && tag.entry.channelId === CHANNEL, '頻道標籤按頻道存');
+  tag = recordChannelTag(store, { guildId: GUILD, channelId: CHANNEL, tag: '回覆長度', description: '改描述', now: NOW + 6 });
+  ok(tag?.existing === true && tag.entry.meaning === '大家都一兩句', '同頻道同標籤只回報，不改描述');
+  const other = recordChannelTag(store, { guildId: GUILD, channelId: '555', tag: '回覆長度', description: '都寫長文', now: NOW + 7 });
+  ok(other && !other.existing, '不同頻道可以有同名標籤');
 }
 
 console.log(failures === 0 ? '\n✅ Discord 黑話詞庫離線回歸通過' : `\n❌ ${failures} 項失敗`);

@@ -68,7 +68,7 @@ pm2 logs dc-bridge
 看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
 
 > `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-learner` preset（`plugins/dc-agent-presets`）與
-> `mcp-web-search-safe` / `mcp-discord` 兩個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
+> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` 三個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
 > profile 裡你自己加的其它 MCP。
 
 ## 設定（`config.json` 的 `discord` 段）
@@ -462,6 +462,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **prompt injection**：頻道訊息會轉義後包進 `<chat>`，prompt 明講只當語料。學習會話用
   `dc-learner`（短 prompt），並在註冊期把 profile 掛的唯讀 web-search MCP 一起移除；
   `request/header` 的 `tools` 是 0 個，模型沒有工具可呼叫。
+- **模型自己查與收錄**：`dc-chat` 另外掛了 `mcp-slang`。模型看到不懂的詞可以用 `lookup_slang` 查詞庫
+  （狀態、出現次數、意思、用法都回），不用等下一批注入；確定意思後用 `record_slang` 收成候選。
+  查詞時已確認的詞全部伺服器共用；候選與已拒絕只回同一個伺服器的（私聊只看得到已確認）。
+  同一個詞已經有就只回「已收錄過」，不改意思、不累加次數，也不會復活已拒絕的詞。
+  頻道風格用 `record_channel_tag` 記，同頻道同名標籤也一樣只回報。一輪最多呼叫 3 次（重送也算），私聊不給寫。
+  這條路不用等 `extractMinMessages`，少見的詞看到就能收；學習會話照舊跑，兩邊寫到同一個詞會合併。
 
 開啟：
 
@@ -493,7 +499,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
 
-模型能用的工具就是下面這些（2026-10-27 從線上會話最新一次 `request/header` 的 `tools` 取出）。
+模型能用的工具就是下面這些（2026-10-28 從線上會話最新一次 `request/header` 的 `tools` 取出）。
 `dc-chat` 的 `dc-tool-restrict` 會藏掉 DSH 其他內建工具（讀寫檔、shell 等）。
 `mcp__discord__*` 每個都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道），下面只列其他參數：
 
@@ -527,13 +533,19 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   加成等級、頻道與身分組數量、自訂表情與貼圖數量、bot 在這裡的暱稱，以及目前頻道的名稱、主題、是否 NSFW。私聊回錯誤
 - `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
 - `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條
+- `mcp__slang__lookup_slang`（`term`）：查黑話詞庫；`term` 也可以是一小句，只要包含那個詞就查得到。
+  回每個詞的狀態（候選／已確認／已拒絕）、出現次數、意思與用法；沒收錄就回沒有
+- `mcp__slang__record_slang`（`term`、`meaning`，`usage`／`examples` 可省略）：收成候選。已經有同一個詞就回「已收錄過」，
+  不改意思、不累加次數，也不復活已拒絕的詞；一輪最多呼叫 3 次（重送也算），私聊不給寫
+- `mcp__slang__record_channel_tag`（`tag`、`description`）：把這個頻道的風格記成候選；同頻道同名標籤同樣只回「已收錄過」
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
 - `mcp__web-search-safe__web_fetch`（`url`）：只讀抓網頁正文，最多 50000 字，擋內網與本機位址
 - `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 
-`mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，
-兩個都由 `node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
+`mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__slang__*` 來自 `src/mcp-slang.js`，
+`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，三個都由
+`node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
 前面都有一個 `#k7f3ab` 這種 6 字代號，`read_history` 的結果也有。
@@ -643,7 +655,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 3. **白名單**：預設全擋。`deny` 優先於 `allow`；`deny.channels` 也擋母頻道底下的討論串。
 4. **審批只有 `ownerIds` 能回**；管理命令同理（slash command 選單只給伺服器管理員看，執行時再驗 `ownerIds`）。
 5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
-6. **發送端點只在本機**：`mcp-discord` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`
+6. **發送端點只在本機**：`mcp-discord` 與 `mcp-slang` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`
    （`state/discord-agent.json`，0600）加會話令牌；沒帶令牌的請求一律 401，不會因為漏帶而
    升級成別的身分。端點只開 `POST /hello` 與上面列的工具路徑；每個工具都先過同一個令牌檢查
    （會話還活著、頻道在白名單內），唯讀工具也一樣，而且只能讀令牌自己的頻道。
@@ -655,9 +667,10 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
 - **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、10 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
-  `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去），加上只讀的
-  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把 10 個 Discord 工具全部拿掉。
+- 模型側工具有 `ask_user_question`、`todo_write`、15 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
+  `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
+  （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
+  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。

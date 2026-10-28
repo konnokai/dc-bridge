@@ -50,6 +50,10 @@ function isStatus(value) {
     || value === SLANG_STATUS.REJECTED;
 }
 
+function statusRank(entry) {
+  return entry.status === SLANG_STATUS.CONFIRMED ? 2 : (entry.status === SLANG_STATUS.CANDIDATE ? 1 : 0);
+}
+
 function iso(ms) {
   // 存檔裡是 ISO 字串，Number() 會變 NaN；以前每次載入都把時間重設成現在，已拒絕的詞永遠不會過期。
   const n = typeof ms === 'string' ? Date.parse(ms) : Number(ms);
@@ -152,8 +156,7 @@ export function loadSlangFile(file) {
  */
 export function pruneSlang(store, { maxCandidates = 200, maxConfirmed = 500, now = Date.now(), rejectTtlDays = 30 } = {}) {
   const list = Array.isArray(store?.entries) ? store.entries : [];
-  const rank = (entry) => (entry.status === SLANG_STATUS.CONFIRMED ? 2 : (entry.status === SLANG_STATUS.CANDIDATE ? 1 : 0));
-  const sorted = [...list].sort((a, b) => rank(b) - rank(a)
+  const sorted = [...list].sort((a, b) => statusRank(b) - statusRank(a)
     || (Number(b?.seen) || 0) - (Number(a?.seen) || 0)
     || String(b?.updatedAt ?? '').localeCompare(String(a?.updatedAt ?? '')));
 
@@ -261,6 +264,105 @@ export function upsertCandidates(store, { guildId = '', channelId = '', items = 
     stats.added += 1;
   }
   return stats;
+}
+
+/**
+ * 找同一個黑話詞（正規化後）。共用前可能有多筆，優先回不是 rejected 的那筆。
+ */
+export function findSlangEntry(store, term) {
+  const key = normalizeTerm(term);
+  if (!key) return null;
+  const same = (store?.entries ?? []).filter((entry) => entry.kind === 'slang' && normalizeTerm(entry.term) === key);
+  return same.find((entry) => entry.status !== SLANG_STATUS.REJECTED) ?? same[0] ?? null;
+}
+
+/** 找同一個頻道的同一個風格標籤；rejected 也回，才知道不要復活。 */
+export function findStyleEntry(store, channelId, tag) {
+  const cid = clean(channelId, 24);
+  const key = normalizeTerm(tag);
+  if (!cid || !key) return null;
+  const same = (store?.entries ?? []).filter((entry) => entry.kind === 'style'
+    && entry.channelId === cid
+    && normalizeTerm(entry.term) === key);
+  return same.find((entry) => entry.status !== SLANG_STATUS.REJECTED) ?? same[0] ?? null;
+}
+
+/**
+ * 查詞：完全相同的排前面，其次詞面互相包含（模型拿一整句來問也查得到）。
+ * 同一個詞只回一筆，已確認優先。`limit` 是回傳上限，避免一次倒出整個詞庫。
+ * 已確認的詞全部伺服器共用；候選／已拒絕只給同一個伺服器（`guildId` 留空時只回已確認）。
+ */
+export function lookupSlang(store, query, { limit = 5, guildId = '' } = {}) {
+  const key = clean(query, 200).normalize('NFKC').toLowerCase();
+  if (!key) return [];
+  const gid = clean(guildId, 24);
+  const byTerm = new Map();
+  for (const entry of store?.entries ?? []) {
+    if (entry.kind !== 'slang' || !entry.term) continue;
+    if (entry.status !== SLANG_STATUS.CONFIRMED && (!gid || entry.guildId !== gid)) continue;
+    const term = normalizeTerm(entry.term);
+    if (!term) continue;
+    if (term !== key && (key.length < 2 || (!saidTerm(key, term) && !saidTerm(term, key)))) continue;
+    const current = byTerm.get(term);
+    if (!current
+      || statusRank(entry) > statusRank(current)
+      || (statusRank(entry) === statusRank(current) && (entry.seen || 0) > (current.seen || 0))) {
+      byTerm.set(term, entry);
+    }
+  }
+  const max = Math.max(1, Math.min(20, Number(limit) || 5));
+  return [...byTerm.values()]
+    .sort((a, b) => (normalizeTerm(a.term) === key ? -1 : 0) - (normalizeTerm(b.term) === key ? -1 : 0)
+      || statusRank(b) - statusRank(a)
+      || (b.seen || 0) - (a.seen || 0)
+      || String(b.updatedAt).localeCompare(String(a.updatedAt)))
+    .slice(0, max);
+}
+
+/**
+ * 模型自己收錄黑話。已經有同一個詞就原樣回傳：不累加 seen、不改意思、不復活 rejected。
+ * 別服的候選／已拒絕不帶意思回來（`hidden: true`），避免未確認的內容跨伺服器洩漏。
+ * @returns {{entry: object, existing: boolean, hidden: boolean}|null} 詞或意思空白時回 null
+ */
+export function recordSlang(store, { guildId = '', term, meaning, usage = '', examples = [], now = Date.now() } = {}) {
+  const cleanedTerm = clean(term, FIELD.term);
+  const cleanedMeaning = clean(meaning, FIELD.meaning);
+  if (!cleanedTerm || !cleanedMeaning) return null;
+  const existing = findSlangEntry(store, cleanedTerm);
+  if (existing) {
+    const gid = clean(guildId, 24);
+    const hidden = existing.status !== SLANG_STATUS.CONFIRMED && (!gid || existing.guildId !== gid);
+    return { entry: existing, existing: true, hidden };
+  }
+  upsertCandidates(store, {
+    guildId,
+    items: [{ term: cleanedTerm, meaning: cleanedMeaning, usage, examples }],
+    samples: [],
+    now,
+  });
+  const entry = findSlangEntry(store, cleanedTerm);
+  return entry ? { entry, existing: false, hidden: false } : null;
+}
+
+/**
+ * 模型自己收錄頻道風格標籤。同頻道同標籤已存在就原樣回傳，不復活 rejected。
+ * @returns {{entry: object, existing: boolean}|null}
+ */
+export function recordChannelTag(store, { guildId = '', channelId, tag, description, now = Date.now() } = {}) {
+  const cid = clean(channelId, 24);
+  const cleanedTag = clean(tag, FIELD.term);
+  const cleanedDescription = clean(description, FIELD.meaning);
+  if (!cid || !cleanedTag || !cleanedDescription) return null;
+  const existing = findStyleEntry(store, cid, cleanedTag);
+  if (existing) return { entry: existing, existing: true };
+  upsertCandidates(store, {
+    guildId,
+    channelId: cid,
+    items: [{ kind: 'style', term: cleanedTag, meaning: cleanedDescription }],
+    now,
+  });
+  const entry = findStyleEntry(store, cid, cleanedTag);
+  return entry ? { entry, existing: false } : null;
 }
 
 /** 確認候選；可順便修正詞／義／用法。找不到回 null。 */
