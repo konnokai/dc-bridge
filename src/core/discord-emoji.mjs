@@ -12,8 +12,12 @@ import path from 'node:path';
 const ASCII_TOKEN = /[a-z0-9_]{2,}/g;
 const CJK_RUN = /[\u3400-\u9fff]+/g;
 const EMOJI_TOKEN = /(?<![\w:]):([a-zA-Z0-9_]{2,32}):(?![\w:])/g;
+const CUSTOM_EMOJI_TAG = /<a?:([a-zA-Z0-9_]{2,32}):(\d{15,25})>/g;
 // 當前伺服器的加分：同名表情多一個伺服器時，先挑本地那張。
 const CURRENT_GUILD_BONUS = 6;
+const EMPTY_INDEX = new Map();
+// emojiCatalogs 重新載入時會換成新的 Map；WeakMap 讓舊快取自己消失。
+const EMOJI_INDEX_CACHE = new WeakMap();
 // 單字比對用的停用字：只留有意義的字，避免「的/了/是」把每個描述都命中。
 const CJK_STOP = new Set('的了是我你他她它不在有和就都一這那個們嗎呢吧啊很太也還又但所以如果'.split(''));
 
@@ -183,6 +187,50 @@ export function buildEmojiHint(catalogs, { guildId = null, usage = null, max = H
     used += line.length + 1;
   }
   return lines.length ? `${HINT_HEADER}\n${lines.join('\n')}` : '';
+}
+
+function emojiIndex(catalogs) {
+  if (!catalogs?.size) return EMPTY_INDEX;
+  const cached = EMOJI_INDEX_CACHE.get(catalogs);
+  if (cached) return cached;
+  const byId = new Map();
+  for (const catalog of catalogs.values()) {
+    for (const entry of catalog.entries ?? []) {
+      if (entry?.id && entry?.name) byId.set(String(entry.id), entry);
+    }
+  }
+  EMOJI_INDEX_CACHE.set(catalogs, byId);
+  return byId;
+}
+
+/**
+ * 進來的 `<:名稱:id>` / `<a:名稱:id>` → `[表情：名稱（目錄描述）]`。
+ * 目錄有的用目錄名稱與外觀描述（視覺模型寫的），沒有就只留名稱。
+ * 同一則訊息同一個表情只描述一次；描述裡的換行與括號會清掉，避免偽造標籤邊界。
+ * 冒號字面詞、Unicode emoji、時間與 URL 不會命中。
+ * 已知限制：程式碼區塊或跳脫過的 `<:名稱:id>` 也會被換掉；這種訊息很少，不特別處理。
+ */
+export function labelEmojiTags(text, catalogs) {
+  const value = String(text ?? '');
+  if (!value.includes('<')) return value;
+  const byId = emojiIndex(catalogs);
+  const seen = new Set();
+  return value.replace(CUSTOM_EMOJI_TAG, (match, name, id) => {
+    const entry = byId.get(id);
+    const label = String(entry?.name || name);
+    // 洗表情時不要把同一段描述貼好幾次，正文才有空間。
+    if (seen.has(id)) return `[表情：${label}]`;
+    seen.add(id);
+    const desc = String(entry?.description || entry?.usage || '')
+      .replace(/[\[\]［］（）()【】]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60);
+    if (!desc) return `[表情：${label}]`;
+    // 目錄用拼圖格看動圖，描述常寫「六格」；先講是動圖，模型才不會當成六連圖。
+    const animated = match.startsWith('<a:') || entry?.animated;
+    return `[表情：${label}（${animated ? '動圖；' : ''}${desc}）]`;
+  });
 }
 
 /**

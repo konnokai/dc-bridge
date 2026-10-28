@@ -70,7 +70,7 @@ import {
   saveNotesFile,
 } from './core/discord-notes.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { bumpEmojiUsage, buildEmojiHint, formatEmojiLine, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, formatEmojiLine, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -1083,7 +1083,7 @@ async function main() {
 
   /** read_history／search_history 的一行：#編號 時間 名字（你）：內容。 */
   function historyLine(key, message) {
-    const text = flat(resolveMentions(withStickers(message), message), 300)
+    const text = flat(labelEmojiTags(resolveMentions(withStickers(message), message), emojiCatalogs), 300)
       || (message.attachments?.size ? '[圖片]' : '[沒有文字]');
     const self = message.author?.id === client.user.id ? '（你）' : '';
     const replyTo = repliedName(message);
@@ -1327,14 +1327,14 @@ async function main() {
       const self = target.author?.id === client.user.id ? '（你）' : '';
       const lines = [
         `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
-        `內容：${flat(resolveMentions(withStickers(target), target), VIEW_TEXT_MAX) || '（沒有文字）'}`,
+        `內容：${flat(labelEmojiTags(resolveMentions(withStickers(target), target), emojiCatalogs), VIEW_TEXT_MAX) || '（沒有文字）'}`,
       ];
       try {
         const replied = await referencedMessage(target, true);
-        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(resolveMentions(withStickers(replied), replied), 300) || '[沒有文字]'}`);
+        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
       } catch { /* 被回覆的那則刪了就不寫 */ }
       for (const snapshot of target.messageSnapshots?.values() ?? []) {
-        lines.push(`轉發的內容：${flat(resolveMentions(withStickers(snapshot), snapshot), 500) || '[沒有文字]'}`);
+        lines.push(`轉發的內容：${flat(labelEmojiTags(resolveMentions(withStickers(snapshot), snapshot), emojiCatalogs), 500) || '[沒有文字]'}`);
       }
       for (const attachment of target.attachments?.values() ?? []) {
         lines.push(`附件：${flat(attachment.name, 80)}（${attachment.contentType ?? '不明類型'}，${Math.ceil((attachment.size ?? 0) / 1024)} KB）`);
@@ -2320,7 +2320,7 @@ async function main() {
         if (referenced && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
             author: authorName(referenced),
-            content: resolveMentions(withStickers(referenced), referenced),
+            content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
             hasImage: referenced.attachments?.size > 0,
           });
         }
@@ -2330,6 +2330,7 @@ async function main() {
       entries.push({
         author: entry.author,
         text: entry.text,
+        rawText: entry.rawText ?? entry.text,
         direct: entry.direct,
         isOwner: entry.isOwner,
         ref: messageRefs.register(key, entry.id),
@@ -2366,7 +2367,7 @@ async function main() {
           history.reverse().map((entry) => ({
             ref: messageRefs.register(key, entry.id),
             author: authorName(entry),
-            content: resolveMentions(withStickers(entry), entry),
+            content: labelEmojiTags(resolveMentions(withStickers(entry), entry), emojiCatalogs),
             replyName: repliedName(entry),
             bot: entry.author?.id === client.user.id,
             hasImage: entry.attachments?.size > 0,
@@ -2418,7 +2419,7 @@ async function main() {
     if (cfg.discord.slang.enabled && guild) {
       if (!slangShown.has(key)) slangShown.set(key, new Map());
       slangHint = buildSlangHint(slangStore, {
-        text: entries.map((entry) => `${entry.text}\n${entry.quote}`).join('\n'),
+        text: entries.map((entry) => `${entry.rawText ?? entry.text}\n${entry.quote}`).join('\n'),
         max: cfg.discord.slang.injectMax,
         maxChars: cfg.discord.slang.maxChars,
         shown: slangShown.get(key),
@@ -2810,7 +2811,7 @@ async function main() {
             .map((message) => ({
               at: message.createdTimestamp,
               author: `${authorName(message)}${message.author?.id === client.user.id ? '（你）' : ''}`,
-              text: flat(resolveMentions(withStickers(message), message), 300) || (message.attachments?.size ? '[圖片]' : ''),
+              text: flat(labelEmojiTags(resolveMentions(withStickers(message), message), null), 300) || (message.attachments?.size ? '[圖片]' : ''),
             }))
             .filter((message) => message.text);
           if (messages.length < SUMMARY_MIN_MESSAGES) continue;
@@ -3049,7 +3050,9 @@ async function main() {
       guildId,
       userId: message.author.id,
       author,
-      text: [text, stickers].filter(Boolean).join(' '),
+      text: [labelEmojiTags(text, emojiCatalogs), stickers].filter(Boolean).join(' '),
+      // 黑話比對用原文：表情描述是目錄產生的字，不該被當成群友講的話。
+      rawText: [text, stickers].filter(Boolean).join(' '),
       direct,
       isOwner,
       media,
