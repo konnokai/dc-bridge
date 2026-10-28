@@ -16,6 +16,7 @@
     "test:discord": "node scripts/test-discord-bridge.mjs",
     "test:discord-memory": "node scripts/test-discord-memory.mjs",
     "test:discord-slang": "node scripts/test-discord-slang.mjs",
+    "test:discord-triggers": "node scripts/test-discord-trigger-stats.mjs",
     "test:audit": "node scripts/test-audit.mjs",
     "test:token": "node scripts/test-token-economy.mjs && node scripts/test-reply-wait.mjs && node scripts/test-qq-model-view.mjs && node scripts/test-qq-preset-contract.mjs",
     "test:tokens": "node scripts/test-token-usage.mjs",

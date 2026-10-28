@@ -108,6 +108,7 @@
     <button role="tab" id="tabbtn-overview" aria-controls="tab-overview" data-tab="overview">總覽</button>
     <button role="tab" id="tabbtn-usage" aria-controls="tab-usage" data-tab="usage">花費</button>
     <button role="tab" id="tabbtn-slang" aria-controls="tab-slang" data-tab="slang">黑話</button>
+    <button role="tab" id="tabbtn-triggers" aria-controls="tab-triggers" data-tab="triggers">對話</button>
     <button role="tab" id="tabbtn-memory" aria-controls="tab-memory" data-tab="memory">記憶</button>
     <button role="tab" id="tabbtn-sessions" aria-controls="tab-sessions" data-tab="sessions">會話</button>
     <button role="tab" id="tabbtn-settings" aria-controls="tab-settings" data-tab="settings">設定</button>
@@ -244,6 +245,23 @@
   </section>
   </div>
 
+  <div class="tab-panel" role="tabpanel" id="tab-triggers" aria-labelledby="tabbtn-triggers" hidden>
+  <section class="card">
+    <h2>對話次數 <span id="trigger-summary" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型真的送出訊息才算一次；同一個回合只算一次。只記名字、次數與時間，不記聊天內容。</p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="trigger-search" type="search" aria-label="搜尋群友" placeholder="搜尋名稱或 user id" style="max-width:260px">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>群友</th><th class="num">次數</th><th>最後頻道</th><th>最後觸發</th><th>第一次</th></tr></thead>
+        <tbody id="trigger-rows"></tbody>
+      </table>
+    </div>
+    <div class="row pager" id="trigger-pager"></div>
+  </section>
+  </div>
+
   <div class="tab-panel" role="tabpanel" id="tab-memory" aria-labelledby="tabbtn-memory" hidden>
   <section class="card">
     <h2>群友記憶 <span id="memory-count" class="muted"></span></h2>
@@ -305,6 +323,7 @@
     }
     if (focus) target.focus();
     if (location.hash !== '#' + target.dataset.tab) history.replaceState(null, '', '#' + target.dataset.tab);
+    if (target.dataset.tab === 'triggers') void refreshTriggers();
   }
   document.getElementById('tabs').addEventListener('click', (event) => {
     const button = event.target.closest('[role="tab"]');
@@ -382,6 +401,9 @@
       el('span', { className: 'pill' }, '上線 ' + fmtUptime(s.uptimeSec)),
     );
 
+    const topTriggers = (s.triggers?.top ?? [])
+      .map((user) => (user.name || user.userId) + ' ' + user.count)
+      .join('、');
     const items = [
       ['Bot', s.bot ? s.bot.tag + '（' + s.bot.id + '）' : '—'],
       ['DSH', s.dsh.baseUrl],
@@ -395,6 +417,9 @@
       ['圖片', s.media.enabled ? ('≤' + Math.round(s.media.maxBytes / 1048576) + 'MB，長邊 ≤' + s.media.maxLongEdge + '，最多 ' + s.media.maxCount + ' 張') : '關閉'],
       ['表情目錄', (s.emoji?.entries ?? 0) + ' 條／' + (s.emoji?.guilds ?? 0) + ' 個伺服器'],
       ['黑話', s.slang ? (s.slang.enabled ? ('待確認 ' + s.slang.candidate + '｜已確認 ' + s.slang.confirmed) : '關閉') : '—'],
+      ['觸發對話', s.triggers
+        ? ('今天 ' + s.triggers.todayUsers + ' 人｜總計 ' + s.triggers.totalUsers + ' 人（' + s.triggers.totalTriggers + ' 次）' + (topTriggers ? '｜最常：' + topTriggers : ''))
+        : '—'],
       ['控制台', s.console.host + ':' + s.console.port],
     ];
     $('status').replaceChildren(...items.map(([k, v]) => el('div', {},
@@ -697,6 +722,9 @@
   // 自動重新整理每 5 秒重畫一次，過濾和頁碼放在這裡才不會被重設。
   const listView = { slang: { status: 'all', page: 1 }, style: { status: 'all', page: 1, channel: 'all' } };
   const LIST_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']];
+  let triggerData = { users: [] };
+  let triggerSearch = '';
+  let triggerPage = 1;
 
   function entryActions(entry) {
     return el('div', { className: 'row' },
@@ -786,6 +814,33 @@
     });
   }
 
+  function renderTriggers(data) {
+    triggerData = data ?? { users: [] };
+    const users = triggerData.users ?? [];
+    $('trigger-summary').textContent = `（今天 ${triggerData.todayUsers ?? 0} 人｜總計 ${triggerData.totalUsers ?? 0} 人｜${triggerData.totalTriggers ?? 0} 次）`;
+    const query = triggerSearch.trim().toLowerCase();
+    const filtered = query
+      ? users.filter((user) => String(user.name ?? '').toLowerCase().includes(query) || String(user.userId).includes(query))
+      : users;
+    const pages = Math.max(1, Math.ceil(filtered.length / LIST_PAGE_SIZE));
+    triggerPage = Math.min(Math.max(1, triggerPage), pages);
+    const rows = filtered.slice((triggerPage - 1) * LIST_PAGE_SIZE, triggerPage * LIST_PAGE_SIZE);
+    $('trigger-rows').replaceChildren(...(rows.length ? rows.map((user) => el('tr', {},
+      el('td', {},
+        el('strong', {}, user.name || user.userId),
+        el('div', { className: 'muted', style: 'font-size:11px' }, user.userId)),
+      el('td', { className: 'num' }, String(user.count ?? 0)),
+      el('td', { className: 'muted' }, user.channelName || '—'),
+      el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(user.lastAt)),
+      el('td', { className: 'muted', style: 'white-space:nowrap' }, user.firstAt ? new Date(user.firstAt).toLocaleString() : '—'),
+    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, query ? '沒有符合的人。' : '還沒有對話紀錄。'))]));
+    $('trigger-pager').replaceChildren(...(pages > 1 ? [
+      el('button', { type: 'button', className: 'ghost', dataset: { page: String(triggerPage - 1) }, textContent: '上一頁', disabled: triggerPage <= 1 }),
+      el('span', { className: 'muted' }, `第 ${triggerPage} / ${pages} 頁（${filtered.length} 人）`),
+      el('button', { type: 'button', className: 'ghost', dataset: { page: String(triggerPage + 1) }, textContent: '下一頁', disabled: triggerPage >= pages }),
+    ] : []));
+  }
+
   function renderMemory(data) {
     const rows = data?.users ?? [];
     $('memory-count').textContent = data?.enabled
@@ -841,10 +896,17 @@
     configLoaded = true;
   }
 
+  async function refreshTriggers() {
+    try {
+      renderTriggers(await api('/api/triggers'));
+    } catch { /* 5 秒後的 refresh 會再試 */ }
+  }
+
   async function refresh() {
+    const triggersPromise = !$('tab-triggers').hidden ? api('/api/triggers') : Promise.resolve(null);
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
-      api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'),
+      api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -855,6 +917,7 @@
     if (results[5].status === 'fulfilled') renderUsage(results[5].value);
     if (results[6].status === 'fulfilled') renderQuota(results[6].value);
     if (results[7].status === 'fulfilled') renderMemory(results[7].value);
+    if (results[8].status === 'fulfilled' && results[8].value) renderTriggers(results[8].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -871,6 +934,18 @@
     showGate('');
   });
   $('refresh').addEventListener('click', () => refresh());
+
+  $('trigger-search').addEventListener('input', () => {
+    triggerSearch = $('trigger-search').value;
+    triggerPage = 1;
+    renderTriggers(triggerData);
+  });
+  $('trigger-pager').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-page]');
+    if (!button) return;
+    triggerPage = Number(button.dataset.page) || 1;
+    renderTriggers(triggerData);
+  });
 
   $('usage-range').addEventListener('click', (event) => {
     const button = event.target.closest('button[data-range]');

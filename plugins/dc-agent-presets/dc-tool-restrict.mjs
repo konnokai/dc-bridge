@@ -70,6 +70,7 @@ const DISCORD_TOOLS = [
   'mcp__discord__view_message',
   'mcp__discord__user_info',
   'mcp__discord__server_info',
+  'mcp__discord__conversation_stats',
   'mcp__discord__remember_user',
   'mcp__discord__forget_user_fact',
 ]

@@ -266,17 +266,19 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 控制台：http://127.0.0.1:3110/?token=<自動產生的 token>
 ```
 
-頁面分成 7 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
+頁面分成 8 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
 可以用滑鼠點，也可以在分頁列上用左右方向鍵切換。
 
 - **總覽**（`#overview`）
-  - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批
+  - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批，
+    以及觸發對話人數（今天／總計／次數與最常觸發的人）
   - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的已用百分比與重置時間（見「OpenCode Go 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
 - **黑話**（`#slang`）：「黑話詞庫」和「頻道風格」兩張卡片分開列。各自可以按狀態（全部／待確認／已確認／已拒絕）過濾，
   每頁 20 筆、可換頁；每筆可確認、拒絕、編輯、刪除。「頻道風格」多一個頻道下拉選單（預設「全部頻道」），
   選項顯示 `#頻道名（筆數）`，橋接查不到頻道名稱時退回頻道 id，有同名頻道時後面補 id；
   頻道和狀態兩個過濾一起作用，換頻道會回到第 1 頁
+- **對話**（`#triggers`）：誰觸發過對話、各自幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
 - **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
 - **設定**（`#settings`）
@@ -495,6 +497,17 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 > `dc-learner` 由 `node scripts/setup-dsh.mjs --discord` 安裝（跟 `dc-chat` 同一個 bundle）。
 > 如果 DSH 的 preset 清單沒有它，學習會記一行錯誤並跳過，聊天不受影響；重跑安裝再重啟 DSH 即可。
 
+### 觸發對話統計
+
+- 只有模型真的送出訊息（`send_message`／`send_sticker`／`create_poll`）才記一次；
+  同一個回合送好幾則只算一次，避免模型連發把數字洗高。
+- 這批訊息有 ★ 就只記叫 bot 的人；沒有 ★（自由參與）記整批的發言者；同一個人只算一次。
+- 存在 `state/discord-triggers.json`（`state/` 已被 gitignore）。控制台總覽顯示今天人數、總人數、
+  總次數與最常觸發的 3 人；「對話」分頁列出全部人，可搜尋名稱／user id、每頁 20 人。
+- 只記使用者 id、顯示名稱、次數與最後觸發時間，不記聊天內容；超過 5000 人丟最久沒觸發的。
+- 當事人用 `/forget`（或 `!forget`）會把記憶和觸發統計一起刪掉；私聊的 `!forget` 沒有記憶可刪，但會刪觸發統計。
+- 模型可以呼叫 `mcp__discord__conversation_stats` 自己撈同一份統計（全部伺服器加總的今天／總計／總次數；前 5 名只列同一個伺服器的人，私聊只回數字）。
+
 ## 誰決定要不要發訊息（MCP）
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
@@ -531,6 +544,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   經 `media` 設定的縮圖流程）。頭像抓不到時只少圖，文字照回。個人簡介、代名詞 Discord 不給 bot 讀；線上狀態要 Presence 特權 intent，沒開
 - `mcp__discord__server_info`（沒有其他參數）：查目前這個伺服器與頻道：伺服器名稱、簡介、建立日期、擁有者、成員數、
   加成等級、頻道與身分組數量、自訂表情與貼圖數量、bot 在這裡的暱稱，以及目前頻道的名稱、主題、是否 NSFW。私聊回錯誤
+- `mcp__discord__conversation_stats`（沒有其他參數）：查對話次數統計：全部伺服器加總的今天人數／總人數／總次數，
+  以及這個伺服器最常找 bot 的前 5 人（私聊只回數字，不列名字）
 - `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
 - `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條
 - `mcp__slang__lookup_slang`（`term`）：查黑話詞庫；`term` 也可以是一小句，只要包含那個詞就查得到。
@@ -667,7 +682,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
 - **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、15 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、16 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。

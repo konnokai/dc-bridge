@@ -84,7 +84,7 @@ const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
   'send_message', 'send_sticker', 'add_reaction', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
-  'user_info', 'server_info', 'remember_user', 'forget_user_fact',
+  'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
 const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|edit_message|delete_message|create_poll/;
@@ -1100,6 +1100,7 @@ console.log('## 7e. Discord MCP 發送工具');
       read_history: ['/history', { limit: 5 }],
       user_info: ['/user', { message: '#k7f3ab' }],
       server_info: ['/server', {}],
+      conversation_stats: ['/stats', {}],
       edit_message: ['/edit', { message: '#k7f3ab', content: '改' }],
       delete_message: ['/delete', { message: '#k7f3ab' }],
       create_poll: ['/poll', { question: '吃什麼', answers: ['拉麵', '咖哩'] }],
@@ -1377,6 +1378,12 @@ console.log('## 9. 控制台');
       usageReset: () => { usageWasReset = true; },
       quota: async () => ({ ok: true, windows: [{ key: 'rolling', percent: 3 }] }),
       memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
+      triggers: () => ({
+        todayUsers: 1,
+        totalUsers: 2,
+        totalTriggers: 3,
+        users: [{ userId: '2', name: '小明', count: 2, channelName: '#閒聊' }],
+      }),
       resetSession: async (key) => { resetKey = key; return true; },
       config: () => ({ allow: { guilds: [], channels: [], users: [] }, deny: { guilds: [], channels: [], users: [] }, ownerIds: [], media: {} }),
       updateConfig: async (patch) => {
@@ -1426,6 +1433,11 @@ console.log('## 9. 控制台');
   ok((await fetch(`${base}/api/memory`)).status === 401, '沒有 token 讀不到群友記憶');
   const memoryResponse = await fetch(`${base}/api/memory`, { headers: authed });
   ok(memoryResponse.status === 200 && (await memoryResponse.json()).users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');
+  ok((await fetch(`${base}/api/triggers`)).status === 401, '沒有 token 讀不到對話統計');
+  const triggersResponse = await fetch(`${base}/api/triggers`, { headers: authed });
+  const triggersBody = await triggersResponse.json();
+  ok(triggersResponse.status === 200 && triggersBody.totalTriggers === 3
+    && triggersBody.users[0].channelName === '#閒聊', '對話統計端點回 handler 的結果');
 
   const sessions = await (await fetch(`${base}/api/sessions`, { headers: { 'x-console-token': 'test-token' } })).json();
   ok(sessions.sessions[0].key === 'ch:1', 'x-console-token 也通');

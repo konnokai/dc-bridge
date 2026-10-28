@@ -86,8 +86,9 @@ import {
 } from './core/discord-media.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, createTurnGate, defang, formatBatch, isVisible, visibleName } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch, isVisible, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
+import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -97,6 +98,7 @@ const STATE_DIR = path.join(ROOT, 'state');
 const CONFIG_FILE = path.join(ROOT, 'config.json');
 const SESSIONS_FILE = path.join(STATE_DIR, 'discord-sessions.json');
 const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
+const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
@@ -302,11 +304,45 @@ async function main() {
     }
   }
 
+  // 觸發對話統計：模型送出訊息時，記下這批訊息裡叫 bot 的人。
+  const triggerLoaded = loadTriggerFile(TRIGGER_FILE);
+  const triggerStore = triggerLoaded.store;
+  if (triggerLoaded.warning) log(`⚠️ 觸發統計：${triggerLoaded.warning}`);
+  let triggerDirty = false;
+  let triggerSaveTimer = null;
+
+  function markTriggerDirty() {
+    triggerDirty = true;
+    if (triggerSaveTimer) return;
+    triggerSaveTimer = setTimeout(() => {
+      triggerSaveTimer = null;
+      flushTriggers();
+    }, 2000);
+    triggerSaveTimer.unref?.();
+  }
+
+  function flushTriggers() {
+    if (!triggerDirty) return;
+    try {
+      const { dropped } = saveTriggerFile(TRIGGER_FILE, triggerStore);
+      triggerDirty = false;
+      if (dropped > 0) log(`觸發統計已滿，丟棄 ${dropped} 位最久沒觸發的人`);
+    } catch (error) {
+      log(`觸發統計存檔失敗：${error?.message ?? error}`);
+    }
+  }
+
   const memoryShown = new Map(); // key -> Map<userId, { updatedAt, at }>：這個會話帶過誰的記憶
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
   const slangWrites = new Map(); // key -> 這一輪自己收錄了幾次黑話／標籤
   const slangShown = new Map(); // key -> Map：這個會話帶過的黑話（逐條）和頻道風格區塊
-  process.on('exit', () => { try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ } });
+  const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
+  const turnUsers = new Map(); // key -> 目前回合的觸發者
+  const turnTriggerRecorded = new Set(); // key -> 這個回合已經記過觸發
+  process.on('exit', () => {
+    try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
+  });
 
   // 黑話詞庫：候選靠學習會話產生，只有管理員在控制台確認過的才會注入 prompt。
   const slangLoaded = loadSlangFile(SLANG_FILE);
@@ -626,6 +662,9 @@ async function main() {
     memoryWrites.delete(key);
     slangWrites.delete(key);
     slangShown.delete(key);
+    pendingUsers.delete(key);
+    turnUsers.delete(key);
+    turnTriggerRecorded.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
     const entry = pending.get(key);
@@ -842,6 +881,24 @@ async function main() {
     deliverPoll,
   });
 
+  /** 模型真的送出訊息時記一次；同一個回合送好幾則只算一次。 */
+  function noteTrigger(key) {
+    if (turnTriggerRecorded.has(key)) return;
+    const users = turnUsers.get(key) ?? [];
+    if (users.length === 0) return;
+    turnTriggerRecorded.add(key);
+    if (recordTriggers(triggerStore, { users, key, at: Date.now() }) > 0) markTriggerDirty();
+  }
+
+  /** `/forget` 也把觸發統計一起刪：那個統計記著 user id 和顯示名稱。 */
+  function forgetTriggerUser(userId) {
+    const id = String(userId ?? '');
+    if (!id || !triggerStore.users?.[id]) return false;
+    delete triggerStore.users[id];
+    markTriggerDirty();
+    return true;
+  }
+
   const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
   const withStickers = (message) => [message.content, stickerLabel(message.stickers)].filter(Boolean).join(' ');
   const authorName = (message, member = message.member) =>
@@ -893,6 +950,7 @@ async function main() {
         replyTo: textArg(body.reply_to),
         sticker: textArg(body.sticker),
       });
+      noteTrigger(result.key);
       log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}）`);
       return result;
     },
@@ -916,6 +974,7 @@ async function main() {
         hours: body.hours,
         multi: body.multi === true,
       });
+      noteTrigger(result.key);
       log(`MCP 投票 ${result.key}（${Array.isArray(body.answers) ? body.answers.length : 0} 個選項）`);
       return result;
     },
@@ -1112,6 +1171,26 @@ async function main() {
         topicSource?.nsfw ? '這是 NSFW 頻道' : '',
       ];
       return { text: lines.filter(Boolean).join('\n') };
+    },
+    async stats(body) {
+      const { channel } = await agentSender.resolve(body.token);
+      const stats = triggerStats(triggerStore, { now: Date.now(), top: 0 });
+      if (stats.totalUsers === 0) return { text: '還沒有對話紀錄。' };
+      // 名單只列同一個伺服器的人：A 服的公開頻道不該看到 B 服或私聊的成員。
+      const guildId = channel.guildId ?? '';
+      const top = guildId
+        ? triggerUserList(triggerStore).filter((user) => {
+          const [kind, id] = String(user.lastKey ?? '').split(':');
+          return kind === 'ch' && client.channels.cache.get(id)?.guildId === guildId;
+        }).slice(0, 5)
+        : [];
+      return {
+        text: [
+          `今天 ${stats.todayUsers} 人｜總計 ${stats.totalUsers} 人｜共 ${stats.totalTriggers} 次（全部伺服器）`,
+          ...top.map((user, index) => `${index + 1}. ${flat(user.name || user.userId, 40)}：${user.count} 次`),
+          ...(top.length ? ['（上面是這個伺服器的人；次數是他在全部伺服器的總和）'] : []),
+        ].join('\n'),
+      };
     },
     async remember(body) {
       const { key, target, shown: name } = await memoryTarget(body, textArg(body.name, 40));
@@ -1526,6 +1605,9 @@ async function main() {
       collectors.set(frame.sessionId, collector);
       const queued = pendingDirect.get(key);
       turnDirect.set(key, queued?.length ? queued.shift() : defaultDirect(key));
+      const queuedUsers = pendingUsers.get(key);
+      turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
+      turnTriggerRecorded.delete(key);
     }
     const ended = collector ? collector.push(event) : null;
     if (!ended) {
@@ -1546,6 +1628,8 @@ async function main() {
     lastActive.set(key, Date.now());
     const direct = turnDirect.get(key) ?? defaultDirect(key);
     turnDirect.delete(key);
+    turnUsers.delete(key);
+    turnTriggerRecorded.delete(key);
 
     const reason = ended.reason ?? {};
     if (reason.kind === 'completed') {
@@ -1617,6 +1701,9 @@ async function main() {
         // 回合 ↔ 批次的對應也不可信了；之後的回合退回 defaultDirect。
         pendingDirect.clear();
         turnDirect.clear();
+        pendingUsers.clear();
+        turnUsers.clear();
+        turnTriggerRecorded.clear();
         // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
         turnGate.releaseAll();
         for (const key of [...typingTimers.keys()]) stopTyping(key);
@@ -1884,9 +1971,15 @@ async function main() {
     const queued = pendingDirect.get(key) ?? [];
     queued.push(job.direct);
     pendingDirect.set(key, queued);
+    const users = triggerUsers(job.entries);
+    const queuedUsers = pendingUsers.get(key) ?? [];
+    queuedUsers.push(users);
+    pendingUsers.set(key, queuedUsers);
     const unqueue = () => {
       const index = queued.lastIndexOf(job.direct);
       if (index >= 0) queued.splice(index, 1);
+      const userIndex = queuedUsers.lastIndexOf(users);
+      if (userIndex >= 0) queuedUsers.splice(userIndex, 1);
     };
     let accepted;
     try {
@@ -2196,10 +2289,14 @@ async function main() {
       // 有時根本送不出去；`!reset` 一定送得到。
       const command = /^[!/]/.test(text) ? text.slice(1).trim().toLowerCase() : null;
       if (command === 'forget') {
-        if (!guildId) { await sendLong(key, '私聊沒有群友記憶。'); return; }
+        const statsRemoved = forgetTriggerUser(message.author.id);
+        if (!guildId) {
+          await sendLong(key, statsRemoved ? '已刪除你的觸發統計（私聊沒有群友記憶）。' : '私聊沒有群友記憶。');
+          return;
+        }
         const removed = forgetUser(memoryStore, { userId: message.author.id });
         if (removed) markMemoryDirty();
-        await sendLong(key, removed
+        await sendLong(key, removed || statsRemoved
           ? '已刪除我記下的關於你的事，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
           : '我這邊沒有你的記憶。');
         return;
@@ -2277,8 +2374,9 @@ async function main() {
     if (interaction.commandName === 'forget') {
       const removed = forgetUser(memoryStore, { userId: interaction.user.id });
       if (removed) markMemoryDirty();
+      const statsRemoved = forgetTriggerUser(interaction.user.id);
       await interaction.reply({
-        content: removed
+        content: removed || statsRemoved
           ? '已刪除我記下的關於你的事，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
           : '我沒有你的記憶。',
         flags: MessageFlags.Ephemeral,
@@ -2613,6 +2711,7 @@ async function main() {
               today: slangDayKey === localDayKey() ? slangDayCount : 0,
               maxPerDay: cfg.discord.slang.maxPerDay,
             },
+            triggers: triggerStats(triggerStore, { now: Date.now(), top: 3 }),
             console: { host, port },
           }),
           sessions: sessionsInfo,
@@ -2627,6 +2726,17 @@ async function main() {
             enabled: cfg.discord.memory.enabled,
             users: memoryOverview(memoryStore),
           }),
+          triggers: () => {
+            const users = triggerUserList(triggerStore).map((entry) => {
+              const [kind, id] = String(entry.lastKey ?? '').split(':');
+              const channel = kind === 'ch' ? client.channels.cache.get(id) : null;
+              return {
+                ...entry,
+                channelName: kind === 'dm' ? '私聊' : (channel?.name ? `#${channel.name}` : (id || '—')),
+              };
+            });
+            return { ...triggerStats(triggerStore, { top: 0 }), users };
+          },
           usageTurns: (key, limit) => usage.ledger.conversation(key, { turnLimit: limit }),
           usageReset: () => {
             usage.ledger.reset();
@@ -2692,6 +2802,7 @@ async function main() {
     log(`收到 ${signal}，結束中…`);
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
     try { await agentApiHandle?.close(); } catch { /* 已經關了 */ }
     try { await consoleHandle?.close(); } catch { /* 已經關了 */ }
     try { await client.destroy(); } catch { /* 已斷線就算了 */ }
