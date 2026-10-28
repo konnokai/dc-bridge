@@ -23,6 +23,9 @@ export const SEND_PER_TURN_LIMIT = 5;
 /** reaction 一輪最多 3 個：真人不會一口氣對一串訊息按表情。 */
 export const REACT_PER_TURN_LIMIT = 3;
 
+/** 收回 reaction 一輪最多 3 個：跟按的分開算，按錯想重按不會被自己卡住。 */
+export const UNREACT_PER_TURN_LIMIT = 3;
+
 /** 收回一輪最多 2 則：被 prompt injection 也洗不掉自己一整串發言。 */
 export const DELETE_PER_TURN_LIMIT = 2;
 
@@ -108,6 +111,7 @@ export function createMessageRefs({ perKey = MESSAGE_REFS_PER_KEY } = {}) {
  * @param options.refs            createMessageRefs()：送出的訊息登記成 #編號，改／收回時查回 id
  * @param options.deliver         async (key, { content, replyTo, sticker }) => 送出的 Discord 訊息 id 陣列
  * @param options.deliverReaction async (key, { message, emoji }) => void
+ * @param options.deliverUnreact  async (key, { message, emoji }) => void
  * @param options.deliverEdit     async (key, { id, content }) => void
  * @param options.deliverDelete   async (key, { id }) => void
  * @param options.deliverPoll     async (key, { question, answers, hours, multi }) => 投票訊息的 id
@@ -122,19 +126,21 @@ export function createAgentSender({
   refs = createMessageRefs(),
   deliver,
   deliverReaction = async () => {},
+  deliverUnreact = async () => {},
   deliverEdit = async () => {},
   deliverDelete = async () => {},
   deliverPoll = async () => '',
   limit = SEND_PER_TURN_LIMIT,
   reactLimit = REACT_PER_TURN_LIMIT,
+  unreactLimit = UNREACT_PER_TURN_LIMIT,
 }) {
   const tokens = new Map(); // sessionId -> 會話令牌（只在記憶體，橋接重啟就換）
   const chains = new Map(); // key -> 串行化（同一輪的多個 tool call 不搶順序）
   const sentCounts = new Map(); // key -> 這一輪已經送出幾則
-  const usedCounts = new Map(); // key -> { react, remove, history }：這一輪各用了幾次
+  const usedCounts = new Map(); // key -> { react, unreact, remove, history }：這一輪各用了幾次
   const attempted = new Set(); // key -> 這一輪有沒有試過呼叫發送工具
   const owned = new Map(); // key -> Set(訊息 id)：模型自己用工具送出的，插入順序就是新舊順序
-  const usedLimits = { react: reactLimit, remove: DELETE_PER_TURN_LIMIT, history: HISTORY_PER_TURN_LIMIT };
+  const usedLimits = { react: reactLimit, unreact: unreactLimit, remove: DELETE_PER_TURN_LIMIT, history: HISTORY_PER_TURN_LIMIT };
 
   function tokenFor(sessionId) {
     let value = tokens.get(sessionId);
@@ -225,7 +231,7 @@ export function createAgentSender({
 
   /** 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。 */
   async function withQuota(key, kind, label, action) {
-    const counts = usedCounts.get(key) ?? { react: 0, remove: 0, history: 0 };
+    const counts = usedCounts.get(key) ?? { react: 0, unreact: 0, remove: 0, history: 0 };
     usedCounts.set(key, counts);
     if (counts[kind] >= usedLimits[kind]) throw statusError(`這一輪已經${label} ${usedLimits[kind]} 次，不能再${label}`, 429);
     counts[kind] += 1;
@@ -290,6 +296,12 @@ export function createAgentSender({
     return { key };
   }
 
+  async function unreact({ token, message, emoji }) {
+    const { key } = await resolve(token);
+    await withQuota(key, 'unreact', '收回 reaction', () => deliverUnreact(key, { message, emoji }));
+    return { key };
+  }
+
   /** read_history／search_history 的門：同一輪合計最多 3 次；參數錯或 Discord 出錯就退回名額。 */
   async function history(token, scan) {
     const resolved = await resolve(token);
@@ -306,6 +318,7 @@ export function createAgentSender({
     remove,
     poll,
     react,
+    unreact,
     history,
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },
@@ -314,7 +327,13 @@ export function createAgentSender({
     /** 回合結束：回傳這一輪送了幾則、按了幾個 reaction、收回幾則、有沒有試過呼叫工具，並歸零。 */
     finishTurn: (key) => {
       const used = usedCounts.get(key);
-      const result = { sent: sentCounts.get(key) ?? 0, reacted: used?.react ?? 0, removed: used?.remove ?? 0, attempted: attempted.has(key) };
+      const result = {
+        sent: sentCounts.get(key) ?? 0,
+        reacted: used?.react ?? 0,
+        unreacted: used?.unreact ?? 0,
+        removed: used?.remove ?? 0,
+        attempted: attempted.has(key),
+      };
       clearKey(key);
       return result;
     },

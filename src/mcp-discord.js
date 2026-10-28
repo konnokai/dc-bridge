@@ -164,6 +164,18 @@ tool(
 );
 
 tool(
+  'remove_reaction',
+  '收回你在某則訊息按過的表情反應。只能收回你自己按的，按錯或想換一個時用。',
+  {
+    token: sessionToken,
+    message: messageRef('要收回 reaction 的那則訊息'),
+    emoji: z.string().describe('要收回的表情：跟 add_reaction 用同一個名稱或 Unicode emoji'),
+  },
+  '/unreact',
+  () => '已收回 reaction',
+);
+
+tool(
   'search_emojis',
   '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {

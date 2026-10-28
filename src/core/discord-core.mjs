@@ -288,6 +288,7 @@ const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
   'mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
+  'mcp__discord__remove_reaction',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   'mcp__slang__lookup_slang', 'mcp__slang__record_slang', 'mcp__slang__record_channel_tag',
 ]);

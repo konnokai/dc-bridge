@@ -43,7 +43,7 @@ import {
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { formatEmojiLine, loadCatalogs, matchStickers, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { formatEmojiLine, loadCatalogs, matchStickers, ownReaction, reactionKey, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -776,12 +776,15 @@ async function main() {
   const VIEW_TEXT_MAX = 1500;
 
   /** 模型給的 #編號 → 這個會話頻道裡的 Discord 訊息；只查這個 key 的編號表。 */
-  async function fetchByRef(key, ref) {
+  async function fetchByRef(key, ref, { force = false } = {}) {
     const id = messageRefs.lookup(key, ref);
     if (!id) throw toolError(`找不到訊息 ${ref}：只能用這個頻道 prompt 或 read_history 裡出現過的 #編號`, 404);
     const channel = await resolveChannel(key);
     try {
-      return await channel.messages.fetch(id);
+      if (force) channel.messages.cache.delete(id);
+      return force
+        ? await channel.messages.fetch({ message: id, force: true })
+        : await channel.messages.fetch(id);
     } catch {
       throw toolError(`訊息 ${ref} 已經不存在（可能被刪了）`, 404);
     }
@@ -862,6 +865,27 @@ async function main() {
     }
   }
 
+  async function deliverUnreact(key, { message, emoji }) {
+    // Discord 的 reaction 事件沒開，快取不會自己更新；強制重抓才有正確的 me。
+    const target = await fetchByRef(key, message, { force: true });
+    const name = String(emoji ?? '').trim().replace(/^:|:$/g, '');
+    refreshEmojiCatalogs();
+    const rendered = substituteEmojiNames(`:${name}:`, { guildId: target.guildId ?? null, catalogs: emojiCatalogs });
+    const identifier = reactionKey(rendered, name);
+    if (!identifier) throw toolError(`找不到表情「${emoji}」：自訂表情先用 search_emojis 查名稱，或直接給一個 Unicode emoji`, 404);
+    const reaction = ownReaction(target, identifier);
+    if (!reaction) throw toolError(`這則訊息上沒有你按過的「${emoji}」：你沒按過，或已經收回了`, 404);
+    try {
+      await reaction.users.remove(client.user.id);
+    } catch (error) {
+      if (error?.code === 50013) throw toolError('bot 沒有權限收回這個 reaction', 403);
+      if (error?.code === 10014 || error?.status === 404) {
+        throw toolError(`這則訊息上沒有你按過的「${emoji}」：你沒按過，或已經收回了`, 404);
+      }
+      throw error;
+    }
+  }
+
   const messageRefs = createMessageRefs();
 
   function isChannelAllowed(key, channel) {
@@ -886,6 +910,7 @@ async function main() {
     refs: messageRefs,
     deliver: deliverAgentMessage,
     deliverReaction,
+    deliverUnreact,
     deliverEdit,
     deliverDelete,
     deliverPoll,
@@ -970,6 +995,11 @@ async function main() {
     async react(body) {
       const result = await agentSender.react({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
       log(`MCP reaction ${result.key}（${textArg(body.message)} ${textArg(body.emoji)}）`);
+      return result;
+    },
+    async unreact(body) {
+      const result = await agentSender.unreact({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
+      log(`MCP 收回 reaction ${result.key}（${textArg(body.message)} ${textArg(body.emoji)}）`);
       return result;
     },
     async edit(body) {
@@ -1699,7 +1729,7 @@ async function main() {
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
-      if (/^mcp__discord__(send_message|send_sticker|add_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
+      if (/^mcp__discord__(send_message|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
       const state = progress.get(key);
       if (state && /^mcp__discord__(send_message|send_sticker|create_poll)$/.test(name)) state.replied = true;
       const line = state ? describeToolCall(name, event.data?.arguments) : null;
@@ -1757,9 +1787,9 @@ async function main() {
     const ttftMs = ttftTimeouts.get(key);
     ttftTimeouts.delete(key);
     if (reason.kind === 'completed') {
-      const { sent, reacted, removed, attempted } = agentSender.finishTurn(key);
-      // 只按 reaction 或只收回訊息也算回應了，不是「忘了用工具」。
-      if (sent > 0 || reacted > 0 || removed > 0) return;
+      const { sent, reacted, unreacted, removed, attempted } = agentSender.finishTurn(key);
+      // 只按／收回 reaction 或只收回訊息也算回應了，不是「忘了用工具」。
+      if (sent > 0 || reacted > 0 || unreacted > 0 || removed > 0) return;
       // 沒有呼叫工具就真的不送。回合文字可能只是思考，不是要發出去的內容，
       // 所以這裡不代送；只留一行日誌方便追「模型忘了用工具」。
       const text = String(ended.text ?? '').trim();

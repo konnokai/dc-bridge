@@ -407,7 +407,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 有兩條路：
 
-- **模型自己按**：`mcp__discord__add_reaction`，一輪最多 3 個（見下面「誰決定要不要發訊息」）。
+- **模型自己按**：`mcp__discord__add_reaction`，一輪最多 3 個；按錯或想換一個時用 `mcp__discord__remove_reaction`
+  收回同一個表情，一輪最多 3 個（跟按的分開算，只能收回自己按的）。
 - **橋接自動按**（下面這段）：不呼叫模型。
 
 自動 reaction 只看「沒有 @ bot、也沒有回覆 bot」的**頻道訊息**；
@@ -562,6 +563,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。
   文字過敏感資訊閘門，佔「一輪 5 則」的名額。bot 沒有「建立投票」權限時回錯誤
 - `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
+- `mcp__discord__remove_reaction`（`message`、`emoji`）：收回你在那則訊息按過的同一個表情。
+  只能收回自己按的；沒按過或已經收回時回 404，一輪最多 3 次（跟 `add_reaction` 分開算）
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
 - `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字；
@@ -605,7 +608,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 令牌是 10 個小寫字母與數字，不含 `0 o 1 l i v w` 這些容易抄錯的字；模型多帶空白或改成大寫也認得。
 Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫它）都要接到（回一句或按 reaction），
 好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的。沒有 ★ 的訊息三選一：有話想接就說、有感覺但沒話就按 reaction、
-真的無感才跳過；reaction 不佔說話頻率，persona 叫它一輪最多按 2 個，並列了該按與不該按的情況。
+真的無感才跳過；reaction 不佔說話頻率，persona 叫它通常按 1 個、一輪最多 3 個，並列了該按與不該按的情況。
 沒有 ★ 的訊息裡的「你」，persona 規定當成在對前面說話的人，不是對 bot（群友說「你是小丑」不會被當成在罵它）。
 **沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
 
@@ -616,7 +619,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   遇到 `/reset` 也會被擋下來，不會送進新的會話。
 - **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
   模型不會誤以為已送出。
-- **一輪最多 5 則**（訊息、貼圖、投票、修改合計），**reaction 最多 3 個**，**收回最多 2 則**，**歷史查詢最多 3 次（`read_history` + `search_history` 合計）**，**記憶寫入最多 3 次**；
+- **一輪最多 5 則**（訊息、貼圖、投票、修改合計），**按 reaction 最多 3 個**、**收回 reaction 最多 3 個（跟按的分開算）**，**收回訊息最多 2 則**，**歷史查詢最多 3 次（`read_history` + `search_history` 合計）**，**記憶寫入最多 3 次**；
   同一會話的訊息照順序送，超過 2000 字由橋接切段。
 - **改和收回只認自己送的**：模型被 prompt injection 也改不了審批提示（例如改成「回通過繼續」騙管理員），也刪不掉別人的訊息。
   不用 discord.js 的 `deletable`：bot 有 Manage Messages 時它對別人的訊息也是 true。

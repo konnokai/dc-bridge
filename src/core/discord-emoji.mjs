@@ -171,3 +171,21 @@ export function substituteEmojiNames(text, { guildId = null, catalogs } = {}) {
     return `<${hit.animated ? 'a' : ''}:${hit.name}:${hit.id}>`;
   });
 }
+
+/**
+ * reaction 在快取裡的 key：自訂表情是表情 id，Unicode 是原文。
+ * rendered 是 substituteEmojiNames 的結果；原始輸入認不出可用表情時回 null。
+ */
+export function reactionKey(rendered, name) {
+  const custom = /^<a?:([^:]+):([^:>]+)>$/.exec(String(rendered ?? ''));
+  if (custom) return custom[2];
+  const value = String(name ?? '').trim().replace(/^:|:$/g, '');
+  if (value.length <= 16 && /^\p{Extended_Pictographic}/u.test(value)) return value;
+  return null;
+}
+
+/** 這則訊息上「自己按的」那個 reaction；找不到或不是自己按的回 null。 */
+export function ownReaction(message, identifier) {
+  const reaction = message?.reactions?.cache?.get?.(identifier);
+  return reaction?.me ? reaction : null;
+}

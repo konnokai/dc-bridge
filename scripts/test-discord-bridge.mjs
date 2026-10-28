@@ -50,10 +50,11 @@ import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from '../src/core/discord-context.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
-import { formatEmojiLine, matchStickers, queryTokens, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
+import { formatEmojiLine, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
   AGENT_MAX_CONTENT,
   REACT_PER_TURN_LIMIT,
+  UNREACT_PER_TURN_LIMIT,
   SEND_PER_TURN_LIMIT,
   DELETE_PER_TURN_LIMIT,
   HISTORY_PER_TURN_LIMIT,
@@ -83,12 +84,12 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_sticker', 'add_reaction', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
-const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|edit_message|delete_message|create_poll/;
+const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
 
 console.log('## 1. 設定收斂');
 {
@@ -663,6 +664,7 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   const reverse = new Map([['sess-a', 'ch:100'], ['sess-b', 'dm:200']]);
   const delivered = [];
   const reactions = [];
+  const unreacts = [];
   let allowed = true;
   let gate = null;
   const sender = createAgentSender({
@@ -679,6 +681,10 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
     deliverReaction: async (key, { message, emoji }) => {
       if (message === '#gone') throw Object.assign(new Error('找不到訊息'), { statusCode: 404 });
       reactions.push({ key, message, emoji });
+    },
+    deliverUnreact: async (key, { message, emoji }) => {
+      if (message === '#gone') throw Object.assign(new Error('找不到訊息'), { statusCode: 404 });
+      unreacts.push({ key, message, emoji });
     },
   });
   const tokenA = sender.tokenFor('sess-a');
@@ -722,6 +728,21 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
     `並行 reaction 也只按 ${REACT_PER_TURN_LIMIT} 個（失敗的那次不佔名額）`);
   const reactTurn = sender.finishTurn('ch:100');
   ok(reactTurn.sent === 0 && reactTurn.reacted === REACT_PER_TURN_LIMIT, '回合結束回傳按了幾個 reaction（只按 reaction 不算沒回應）');
+
+  sender.startTurn('ch:100');
+  await rejects(sender.unreact({ token: tokenA, message: '#gone', emoji: '😂' }), /找不到/, '收回 reaction 失敗回錯誤');
+  const unreactBurst = await Promise.allSettled(
+    Array.from({ length: UNREACT_PER_TURN_LIMIT + 2 }, () => sender.unreact({ token: tokenA, message: '#a', emoji: '😂' })),
+  );
+  ok(unreactBurst.filter((r) => r.status === 'fulfilled').length === UNREACT_PER_TURN_LIMIT,
+    `並行收回 reaction 也只收 ${UNREACT_PER_TURN_LIMIT} 次`);
+  const mixed = await Promise.allSettled(
+    Array.from({ length: REACT_PER_TURN_LIMIT }, () => sender.react({ token: tokenA, message: '#a', emoji: '😂' })),
+  );
+  ok(mixed.every((r) => r.status === 'fulfilled'), '收回 reaction 不佔按 reaction 的名額');
+  const unreactTurn = sender.finishTurn('ch:100');
+  ok(unreactTurn.unreacted === UNREACT_PER_TURN_LIMIT && unreactTurn.reacted === REACT_PER_TURN_LIMIT,
+    '回合結束分開回傳收回與按了幾個 reaction');
 
   sender.startTurn('ch:100');
   const burst = await Promise.allSettled(
@@ -1154,6 +1175,7 @@ console.log('## 7e. Discord MCP 發送工具');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
+      remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
       search_emojis: ['/emojis', { query: '笑' }],
       search_stickers: ['/stickers', { query: '貓' }],
       read_history: ['/history', { limit: 5 }],
@@ -1667,6 +1689,16 @@ console.log('## 11. 表情目錄與代換');
   ok(substituteEmojiNames(':nope:', { guildId: '111', catalogs }) === ':nope:', '未知名稱保留原文');
   ok(substituteEmojiNames('12:30 與 http://x:y:', { guildId: '111', catalogs }) === '12:30 與 http://x:y:',
     '時間與 URL 不被誤換');
+  ok(reactionKey('<:kekw:e1>', 'kekw') === 'e1', '自訂表情的 reaction key 是表情 id');
+  ok(reactionKey('<a:pat:e4>', 'pat') === 'e4', '動畫表情的 reaction key 也是表情 id');
+  ok(reactionKey('😂', '😂') === '😂', 'Unicode emoji 的 reaction key 用原文');
+  ok(reactionKey('❤️', '❤️') === '❤️', '帶變體選擇子的 emoji 照原文');
+  ok(reactionKey(':nope:', 'nope') === null, '認不出的名稱不當成表情');
+  const mine = { me: true };
+  const fakeReactions = { reactions: { cache: new Map([['e1', mine], ['😂', { me: false }]]) } };
+  ok(ownReaction(fakeReactions, 'e1') === mine, '只收回自己按過的 reaction');
+  ok(ownReaction(fakeReactions, '😂') === null, '不是自己按的不能收回');
+  ok(ownReaction(fakeReactions, 'nope') === null, '快取裡沒有就回 null');
 }
 
 console.log(failures === 0 ? '\n✅ Discord 橋接離線回歸通過' : `\n❌ ${failures} 項失敗`);
