@@ -121,6 +121,11 @@ pm2 logs dc-bridge
 | `memory.enabled` | 群友記憶開關，預設 `false`（要在 `config.json` 明確打開） |
 | `memory.maxFacts` | 每個人最多記幾條，滿了丟最舊的，預設 20（5~50） |
 | `memory.maxChars` | 注入區塊的字數上限，預設 800（200~3000） |
+| `notes.enabled` | 頻道筆記開關，預設 `false`（會保存頻道文字；每天摘要會另外花 token） |
+| `notes.injectMax` | 每批最多注入幾條筆記，預設 5（1~20） |
+| `notes.maxChars` | 筆記注入區塊的字數上限，預設 600（100~3000） |
+| `notes.dailySummary.enabled` | 每天自動產生頻道摘要，預設 `false`（另開背景模型會話） |
+| `notes.dailySummary.hour` | 幾點之後才做當天摘要，預設 4（bridge 主機時區，0~23） |
 | `slang.enabled` | 黑話學習開關，預設 `false`（會把頻道文字送去模型） |
 | `slang.extractMinMessages` | 同一頻道累積幾則才抽一次，預設 20（5~200） |
 | `slang.extractCooldownMs` | 兩次抽取的最短間隔，預設 10 分鐘 |
@@ -473,6 +478,33 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 > `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。格式是第 3 版（`users` 以 user id 為鍵）；
 > 其他版本的檔案會被當成不支援的版本，改名備份後從空的重建。
 
+## 頻道筆記（選用）
+
+記「群裡發生過什麼」：約定、決定、反覆被提起的事件、梗的由來。跟群友記憶分開，關於某個人的事還是用
+`remember_user`。
+
+- **工具**：`note_event`（一句最多 150 字，`days` 預設 30、最多 180）、`search_notes`（`query`／`days` 可省略）、
+  `forget_note`（用 `search_notes` 回傳的編號）。私聊不能記，一輪最多寫 2 條。
+- **注入**：開啟後，每批 prompt 會帶這個頻道最近 `injectMax` 條（受 `maxChars` 限制），
+  放在群友記憶之前；同一會話帶過、沒變的筆記不重複帶（30 分鐘後或筆記更新才會再帶）。
+- **上限**：每個頻道 100 條，滿了丟最舊的；過期的筆記不注入也查不到。
+- **敏感資訊**：跟其他工具一樣過閘門（本機路徑、憑證、已知令牌）；命中就不記。
+- **控制台**：`GET /api/notes` 看全部、`POST /api/notes/delete`（`{ id }`）刪一條；畫面之後再做。
+- **每天摘要（v2）**：`notes.dailySummary.enabled` 打開後，每天 `hour` 點之後（bridge 主機時區），對每個有活動的頻道
+  讀最近 24 小時（最多 100 則），用 `dc-learner` 背景會話寫一條 300 字以內的摘要筆記，7 天後過期。
+  少於 10 則不做；每天每個頻道只試一次，失敗不會當天重試（bridge 重啟後記憶體重來，同一天可能再試一次）。
+  摘要會花一次模型會話的 token，預設關閉；命中敏感資訊閘門的摘要不記。
+- **檔案**：`state/discord-notes.json`，壞檔備份成 `.corrupt-<timestamp>` 後從空的重建。
+
+```json
+"notes": {
+  "enabled": true,
+  "injectMax": 5,
+  "maxChars": 600,
+  "dailySummary": { "enabled": false, "hour": 4 }
+}
+```
+
 ## 黑話學習（選用）
 
 從允許的頻道收集語料 → 學習會話抽候選 → 管理員在控制台確認 → 下一則 prompt 才看得到。
@@ -587,6 +619,11 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   以及這個伺服器最常找 bot 的前 5 人（私聊只回數字，不列名字）
 - `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
 - `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條
+- `mcp__discord__note_event`（`text`、`days` 可省略）：記一條這個頻道發生的事（約定、決定、反覆被提起的事件、梗的由來），
+  最多 150 字；`days` 幾天後過期，預設 30、最多 180。一輪最多 2 條，私聊不能記
+- `mcp__discord__search_notes`（`query`／`days` 可省略）：查這個頻道的筆記；`query` 的每個詞都要出現，
+  `days` 只看最近幾天。回傳的編號給 `forget_note` 用
+- `mcp__discord__forget_note`（`number`）：刪掉這個頻道第 `number` 條筆記（舊→新的編號）
 - `mcp__slang__lookup_slang`（`term`）：查黑話詞庫；`term` 也可以是一小句，只要包含那個詞就查得到。
   回每個詞的狀態（候選／已確認／已拒絕）、出現次數、意思與用法；沒收錄就回沒有
 - `mcp__slang__record_slang`（`term`、`meaning`，`usage`／`examples` 可省略）：收成候選。已經有同一個詞就回「已收錄過」，
@@ -670,6 +707,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   「這則是 X 前發的」，模型才不會把排隊很久的舊訊息當成剛發生。
 - **群友記憶**：開啟 `memory.enabled` 後，這一批說話的人（最多 5 位）被記下的事，會放在黑話與頻道風格之後、
   【新訊息】之前（什麼時候帶見「群友記憶」）。
+- **頻道筆記**：開啟 `notes.enabled` 後，最近幾條筆記放在群友記憶之前（見「頻道筆記」）。
 - **黑話**：開啟 `slang.enabled` 後，管理員確認過的詞會放在頻道上下文之後；只有候選時不會注入。
   確認過的頻道風格接在黑話之後（見「頻道風格」）。
 - **DSH 斷線**：連不上時每個會話最多排 `queue.max` 批（記憶體，重啟消失；`/reset` 會清掉），每 `queue.retryMs`
@@ -686,7 +724,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - 送出時 `allowedMentions: { parse: [], repliedUser: false }`，模型輸出不會不小心 @everyone，回覆也不 ping 對方。
 - DSH 重啟後事件流會自動重連，並重新 follow `state/discord-sessions.json` 裡的會話。
 - **會話標題**：新會話建好、送第一批之前，橋接用 `session/rename` 把標題設成
-  `Discord #頻道名｜伺服器名` 或 `Discord 私聊｜使用者名`（名字查不到就用 ID）；黑話學習的會話是 `Discord 黑話學習`。
+  `Discord #頻道名｜伺服器名` 或 `Discord 私聊｜使用者名`（名字查不到就用 ID）；黑話學習的會話是 `Discord 黑話學習`，
+  每日頻道摘要的會話是 `Discord #頻道名｜頻道摘要`。
   使用者設的標題會鎖住，DSH 不會再用模型生摘要標題，每個新會話也少一次模型請求。
   改名失敗只記日誌，不影響投遞。之前建的會話不會自動改名。
 - **上下文壓縮**：context 越長，首字回應越慢（實測 8k 約 2.5 秒、64k 約 14 秒、166k 約 22 秒；

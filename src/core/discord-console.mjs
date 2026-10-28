@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, memory, triggers, sessions, resetSession, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, memory, notes, deleteNote, triggers, sessions, resetSession, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -138,6 +138,21 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
       }
       if (req.method === 'GET' && url.pathname === '/api/memory') {
         sendJson(res, 200, handlers.memory());
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/notes') {
+        sendJson(res, 200, handlers.notes());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/notes/delete') {
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        if (!id) {
+          sendJson(res, 400, { error: '缺少筆記 id' });
+          return;
+        }
+        const removed = handlers.deleteNote(id);
+        sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這條筆記' });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/triggers') {

@@ -45,6 +45,28 @@ import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage 
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
+import {
+  NOTE_DAYS_DEFAULT,
+  NOTE_DAYS_MAX,
+  NOTE_MAX_CHARS,
+  NOTES_PER_CHANNEL,
+  SUMMARY_DAYS_DEFAULT,
+  SUMMARY_MAX_CHARS,
+  buildSummaryPrompt,
+  channelNotes,
+  cleanSummary,
+  dayKey,
+  deleteNoteById,
+  forgetNote,
+  formatNoteList,
+  formatNotesBlock,
+  hasSummaryToday,
+  loadNotesFile,
+  notesOverview,
+  pruneNotes,
+  recordNote,
+  saveNotesFile,
+} from './core/discord-notes.mjs';
 import { findSensitive } from './core/discord-security.mjs';
 import { formatEmojiLine, loadCatalogs, matchStickers, ownReaction, reactionKey, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
@@ -104,6 +126,7 @@ const SESSIONS_FILE = path.join(STATE_DIR, 'discord-sessions.json');
 const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
 const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
+const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
@@ -115,8 +138,13 @@ const HELD_MAX = 50; // 回合進行中壓住的訊息最多幾則（★ 那幾�
 const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重啟就沒了）
 const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
 const MEMORY_WRITES_PER_TURN = 3; // 記憶會留存、又是群友文字推動的，一輪寫幾次要有上限
+const NOTE_WRITES_PER_TURN = 2; // 頻道筆記也是群友文字推動的，一輪最多記 2 條
 const SLANG_WRITES_PER_TURN = 3; // 模型自己收錄黑話／標籤也一樣，避免每一批都往詞庫塞
 const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一次（DSH 可能已經壓縮掉了）
+const SUMMARY_MIN_MESSAGES = 10; // 少於這個量不做每日摘要，省 token
+const SUMMARY_MAX_MESSAGES = 100; // 每日摘要最多讀幾則（Discord 單次上限 100）
+const SUMMARY_TRANSCRIPT_CHARS = 6000; // 每日摘要的聊天記錄上限
+const SUMMARY_INTERVAL_MS = 30 * 60 * 1000; // 每 30 分鐘檢查一次今天要不要做摘要
 const AUTO_COMPACT_COOLDOWN_MS = 10 * 60 * 1000; // 同一會話兩次自動壓縮的最短間隔
 const SLANG_STATUS_TEXT = {
   [SLANG_STATUS.CANDIDATE]: '候選',
@@ -308,6 +336,33 @@ async function main() {
     }
   }
 
+  // 頻道筆記：模型記下的群裡事件，加上每天自動產生的頻道摘要。
+  const notesLoaded = loadNotesFile(NOTES_FILE);
+  const notesStore = notesLoaded.store;
+  if (notesLoaded.warning) log(`⚠️ 頻道筆記：${notesLoaded.warning}`);
+  let notesDirty = false;
+  let notesSaveTimer = null;
+
+  function markNotesDirty() {
+    notesDirty = true;
+    if (notesSaveTimer) return;
+    notesSaveTimer = setTimeout(() => {
+      notesSaveTimer = null;
+      flushNotes();
+    }, 2000);
+    notesSaveTimer.unref?.();
+  }
+
+  function flushNotes() {
+    if (!notesDirty) return;
+    try {
+      saveNotesFile(NOTES_FILE, notesStore);
+      notesDirty = false;
+    } catch (error) {
+      log(`頻道筆記存檔失敗：${error?.message ?? error}`);
+    }
+  }
+
   // 觸發對話統計：模型送出訊息時，記下這批訊息裡叫 bot 的人。
   const triggerLoaded = loadTriggerFile(TRIGGER_FILE);
   const triggerStore = triggerLoaded.store;
@@ -338,6 +393,8 @@ async function main() {
 
   const memoryShown = new Map(); // key -> Map<userId, { updatedAt, at }>：這個會話帶過誰的記憶
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
+  const notesShown = new Map(); // key -> Map<noteId, { at, shownAt }>：這個會話帶過哪些頻道筆記
+  const noteWrites = new Map(); // key -> 這一輪寫了幾條頻道筆記
   const slangWrites = new Map(); // key -> 這一輪自己收錄了幾次黑話／標籤
   const slangShown = new Map(); // key -> Map：這個會話帶過的黑話（逐條）和頻道風格區塊
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
@@ -348,6 +405,7 @@ async function main() {
   const ttftAbandonedTurns = new Map(); // key -> Set(turn)：保底放行後，等遲到的 turn/end 時不要重放 gate
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
   });
 
@@ -364,7 +422,7 @@ async function main() {
   let slangLastRunAt = 0;
   let slangDayKey = '';
   let slangDayCount = 0;
-  let slangWorkspaceId = null;
+  let backgroundWorkspaceId = null;
   let slangDirty = false;
   let slangSaveTimer = null;
 
@@ -373,20 +431,30 @@ async function main() {
   // 逐輪明細由 assistant/message 的 usage 折疊；金額在讀取時才按價目表折算。
   const priceTable = resolvePriceTable(cfg.pricing);
   const learnerSessions = new Set(); // 學習會話（用來歸到 internal:黑話學習）
+  const summarySessions = new Set(); // 每日摘要會話（用來歸到 internal:頻道摘要）
   const usage = createUsageTracker({
     file: USAGE_FILE,
     priceTable,
     log,
     reverse,
     learnerSessions,
+    summarySessions,
     nominalModel: cfg.dsh.model,
     provider: cfg.dsh.provider,
   });
 
-  /** 學習會話只會愈開愈多；記住最近 200 個就夠歸屬，舊的 key 已存在帳本裡。 */
+  /** 背景會話只會愈開愈多；記住最近 200 個就夠歸屬，舊的 key 已存在帳本裡。 */
+  function rememberSession(set, sessionId) {
+    set.add(sessionId);
+    if (set.size > 200) set.delete(set.values().next().value);
+  }
+
   function rememberLearnerSession(sessionId) {
-    learnerSessions.add(sessionId);
-    if (learnerSessions.size > 200) learnerSessions.delete(learnerSessions.values().next().value);
+    rememberSession(learnerSessions, sessionId);
+  }
+
+  function rememberSummarySession(sessionId) {
+    rememberSession(summarySessions, sessionId);
   }
 
   function usageInfo({ range = '24h', limit = 200 } = {}) {
@@ -686,6 +754,8 @@ async function main() {
     reactionInbox.clear(key);
     memoryShown.delete(key);
     memoryWrites.delete(key);
+    notesShown.delete(key);
+    noteWrites.delete(key);
     slangWrites.delete(key);
     slangShown.delete(key);
     pendingUsers.delete(key);
@@ -728,8 +798,8 @@ async function main() {
   // ── Discord 送出 ─────────────────────────────────────────────────────────
 
   /** 在第一批送進去之前設好標題；失敗只記日誌，標題不值得擋住投遞。 */
-  async function renameSession(sessionId, key) {
-    let title = 'Discord 黑話學習';
+  async function renameSession(sessionId, key = null, fallbackTitle = 'Discord 黑話學習') {
+    let title = fallbackTitle;
     try {
       if (key) {
         const channel = await resolveChannel(key).catch(() => null);
@@ -1306,6 +1376,65 @@ async function main() {
       log(`MCP 刪記憶 ${key}（${textArg(body.message)} 第 ${body.number} 條，剩 ${facts.length} 條）`);
       return { text: facts.length ? `已刪除。現在記著：${numberFacts(facts)}` : '已刪除，這個人現在沒有記憶了。' };
     },
+    // 頻道筆記：記的是群裡發生的事，不是某個人的事；人還是用 remember_user。
+    async note(body) {
+      const { key, channel, sessionId } = await agentSender.resolve(body.token);
+      if (!cfg.discord.notes.enabled) throw toolError('頻道筆記沒開（config.json 的 discord.notes.enabled）', 403);
+      if (!channel.guildId) throw toolError('私聊不記頻道筆記', 403);
+      const used = noteWrites.get(key) ?? 0;
+      if (used >= NOTE_WRITES_PER_TURN) throw toolError(`一輪最多記 ${NOTE_WRITES_PER_TURN} 條頻道筆記，下一輪再記`, 429);
+      const raw = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!raw) throw toolError('text 是空的', 400);
+      if (raw.length > NOTE_MAX_CHARS) throw toolError(`筆記最多 ${NOTE_MAX_CHARS} 字`, 400);
+      agentSender.checkSensitive(sessionId, raw);
+      const days = body.days === undefined ? NOTE_DAYS_DEFAULT : Math.round(Number(body.days));
+      if (!Number.isInteger(days) || days < 1 || days > NOTE_DAYS_MAX) {
+        throw toolError(`days 要在 1~${NOTE_DAYS_MAX} 之間`, 400);
+      }
+      const note = recordNote(notesStore, {
+        guildId: channel.guildId,
+        channelId: channel.id,
+        text: raw,
+        days,
+        maxChars: NOTE_MAX_CHARS,
+        maxPerChannel: NOTES_PER_CHANNEL,
+      });
+      if (!note) throw toolError('記不進去：內容或頻道不對', 400);
+      noteWrites.set(key, used + 1);
+      markNotesDirty();
+      log(`MCP 記頻道筆記 ${key}（${flat(raw, 40)}，${days} 天）`);
+      return { text: `已記下這條頻道筆記（${days} 天後過期）。` };
+    },
+    async 'notes-search'(body) {
+      const { channel } = await agentSender.resolve(body.token);
+      if (!cfg.discord.notes.enabled) throw toolError('頻道筆記沒開（config.json 的 discord.notes.enabled）', 403);
+      if (!channel.guildId) throw toolError('私聊沒有頻道筆記', 403);
+      if (pruneNotes(notesStore) > 0) markNotesDirty();
+      let list = channelNotes(notesStore, { channelId: channel.id });
+      if (body.days !== undefined) {
+        const days = Math.round(Number(body.days));
+        if (!Number.isInteger(days) || days < 1 || days > NOTE_DAYS_MAX) throw toolError(`days 要在 1~${NOTE_DAYS_MAX} 之間`, 400);
+        const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+        list = list.filter((note) => Date.parse(note.at) >= cutoff);
+      }
+      const terms = searchTerms(body.query);
+      if (terms.length) list = list.filter((note) => matchesTerms(note.text, terms));
+      if (list.length === 0) return { text: '這個頻道沒有符合的筆記。' };
+      return { text: `這個頻道的筆記（舊→新，共 ${list.length} 條；編號給 forget_note 用）：\n${formatNoteList(list)}` };
+    },
+    async 'note-forget'(body) {
+      const { key, channel } = await agentSender.resolve(body.token);
+      if (!cfg.discord.notes.enabled) throw toolError('頻道筆記沒開（config.json 的 discord.notes.enabled）', 403);
+      if (!channel.guildId) throw toolError('私聊沒有頻道筆記', 403);
+      const number = Math.round(Number(body.number));
+      if (!Number.isInteger(number) || number < 1) throw toolError('number 要大於 0', 400);
+      const result = forgetNote(notesStore, { channelId: channel.id, number });
+      if (!result) throw toolError(`這個頻道沒有第 ${number} 條筆記：先用 search_notes 看清單`, 404);
+      const { removed, notes: left } = result;
+      markNotesDirty();
+      log(`MCP 刪頻道筆記 ${key}（第 ${number} 條「${flat(removed.text, 60)}」，剩 ${left.length} 條）`);
+      return { text: left.length ? `已刪除「${flat(removed.text, 60)}」。剩下的筆記：\n${formatNoteList(left)}` : `已刪除「${flat(removed.text, 60)}」，這個頻道沒有筆記了。` };
+    },
     // 模型自己查詞／收錄。收錄只建立候選，管理員確認後才會注入；已經有的只回報，不改內容。
     async 'slang-lookup'(body) {
       const { channel } = await agentSender.resolve(body.token);
@@ -1738,6 +1867,7 @@ async function main() {
       clearTtftTimer(frame.sessionId);
       agentSender.startTurn(key);
       memoryWrites.delete(key);
+      noteWrites.delete(key);
       slangWrites.delete(key);
       ttftTimeouts.delete(key);
     }
@@ -2130,6 +2260,20 @@ async function main() {
       });
     }
 
+    // 頻道筆記：最近幾條；同一會話帶過、沒變的不重複帶。
+    let notesHint = '';
+    if (cfg.discord.notes.enabled && guild) {
+      if (pruneNotes(notesStore) > 0) markNotesDirty();
+      if (!notesShown.has(key)) notesShown.set(key, new Map());
+      notesHint = formatNotesBlock(notesStore, {
+        channelId: job.channel.id,
+        injectMax: cfg.discord.notes.injectMax,
+        maxChars: cfg.discord.notes.maxChars,
+        shown: notesShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+      });
+    }
+
     // 已確認的黑話與頻道風格：只有管理員在控制台按過「確認」的才會進來；同一會話帶過的不重複帶。
     // 黑話全部伺服器共用，這批訊息講到的詞優先。
     let slangHint = '';
@@ -2159,7 +2303,7 @@ async function main() {
       formatActivityLine(activity.stats(key)),
     ].filter(Boolean).join('\n');
     return {
-      text: [feedback, context, slangHint, styleHint, memory, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, notesHint, memory, batch, time].filter(Boolean).join('\n'),
       images,
       feedbackEntries,
     };
@@ -2333,27 +2477,31 @@ async function main() {
     void drainSlangQueue();
   }
 
-  /** 學習會話：建一個獨立 session、只收文字、結束就歸檔（不進 reverse，不會送回 Discord）。 */
-  async function runSlangExtraction(samples, labels) {
-    const conf = cfg.discord.slang;
-    await requirePreset(conf.learnerPreset);
+  /**
+   * 背景會話：建一個獨立 session、只收文字、結束就歸檔（不進 reverse，不會送回 Discord）。
+   * 黑話抽取和每日頻道摘要共用；preset 用 dc.slang.learnerPreset（沒有 Discord 工具）。
+   */
+  async function runBackgroundPrompt({ prompt, timeoutMs, label, title, key = null, usageKind = 'learner' }) {
+    const learnerPreset = cfg.discord.slang.learnerPreset;
+    await requirePreset(learnerPreset);
 
-    if (!slangWorkspaceId) {
+    if (!backgroundWorkspaceId) {
       const dir = cfg.discord.sessionDir || path.join(STATE_DIR, 'discord-agents');
       fs.mkdirSync(dir, { recursive: true });
       const workspace = unwrap(await api.workspace.create({ path: dir }), 'workspace.create');
-      slangWorkspaceId = workspace.workspace.workspaceId;
+      backgroundWorkspaceId = workspace.workspace.workspaceId;
     }
     const created = unwrap(await api.sessions.create({
-      workspaceId: slangWorkspaceId,
-      agentPreset: conf.learnerPreset,
+      workspaceId: backgroundWorkspaceId,
+      agentPreset: learnerPreset,
     }), 'session.create');
     const sessionId = created.sessionId;
-    rememberLearnerSession(sessionId);
-    await renameSession(sessionId);
+    if (usageKind === 'summary') rememberSummarySession(sessionId);
+    else rememberLearnerSession(sessionId);
+    await renameSession(sessionId, key, title);
 
     try {
-      // 抽取不需要深度推理；模型不支援 low 時沿用預設，不讓整個學習失敗。
+      // 背景整理不需要深度推理；模型不支援 low 時沿用預設，不讓整個工作失敗。
       try {
         unwrap(await api.sessions.selectModel({
           sessionId,
@@ -2362,7 +2510,7 @@ async function main() {
           reasoningEffort: 'low',
         }), 'session.selectModel');
       } catch (error) {
-        log(`黑話學習：選模型失敗（沿用預設）：${error?.message ?? error}`);
+        log(`${label}：選模型失敗（沿用預設）：${error?.message ?? error}`);
       }
       api.events.follow(sessionId);
 
@@ -2377,7 +2525,7 @@ async function main() {
           learnerWaiters.delete(sessionId);
           fn(value);
         };
-        timer = setTimeout(() => settle(reject, new Error('學習回合逾時')), conf.timeoutMs);
+        timer = setTimeout(() => settle(reject, new Error(`${label}回合逾時`)), timeoutMs);
         timer.unref?.();
         learnerWaiters.set(sessionId, {
           collector,
@@ -2392,7 +2540,7 @@ async function main() {
       const accepted = await api.sessions.prompt({
         sessionId,
         mode: 'queue',
-        content: [{ type: 'text', text: buildExtractionPrompt(samples, { styleLabels: labels }) }],
+        content: [{ type: 'text', text: prompt }],
       });
       if (!accepted.result?.ok) {
         const error = accepted.result?.error;
@@ -2400,13 +2548,108 @@ async function main() {
       }
       const result = await ended;
       if (result.reason?.kind !== 'completed') {
-        throw new Error(`學習回合結束於 ${result.reason?.kind ?? 'unknown'}`);
+        throw new Error(`${label}回合結束於 ${result.reason?.kind ?? 'unknown'}`);
       }
-      return parseExtractionJson(result.text, { max: 5 });
+      return result.text;
     } finally {
-      learnerWaiters.get(sessionId)?.fail(new Error('學習回合收尾'));
+      learnerWaiters.get(sessionId)?.fail(new Error(`${label}回合收尾`));
       try { await withTimeout(api.stopSessionWork(sessionId), 15_000, 'stopSessionWork'); } catch { /* 已結束 */ }
       try { await withTimeout(api.workspace.archiveSession({ sessionId }), 15_000, 'archiveSession'); } catch { /* 已歸檔 */ }
+    }
+  }
+
+  async function runSlangExtraction(samples, labels) {
+    const text = await runBackgroundPrompt({
+      prompt: buildExtractionPrompt(samples, { styleLabels: labels }),
+      timeoutMs: cfg.discord.slang.timeoutMs,
+      label: '黑話學習',
+      title: 'Discord 黑話學習',
+    });
+    return parseExtractionJson(text, { max: 5 });
+  }
+
+  // ── 每日頻道摘要（v2） ───────────────────────────────────────────────────
+  let summaryTimer = null;
+  let summaryRunning = false;
+  const summaryTried = new Set(); // `${key}:${day}`：今天試過就不再重試，避免失敗一直燒 token
+
+  function summaryDue(now = Date.now()) {
+    const conf = cfg.discord.notes;
+    return conf.enabled && conf.dailySummary.enabled && new Date(now).getHours() >= conf.dailySummary.hour;
+  }
+
+  function scheduleSummaryCheck(delay = 60_000) {
+    if (summaryTimer) clearTimeout(summaryTimer);
+    summaryTimer = setTimeout(() => {
+      summaryTimer = null;
+      void runDailySummaries().finally(() => scheduleSummaryCheck(SUMMARY_INTERVAL_MS));
+    }, delay);
+    summaryTimer.unref?.();
+  }
+
+  async function runDailySummaries() {
+    if (summaryRunning || !summaryDue()) return;
+    summaryRunning = true;
+    try {
+      for (const key of Object.keys(sessions)) {
+        if (!key.startsWith('ch:')) continue;
+        const marker = `${key}:${dayKey()}`;
+        if (summaryTried.has(marker)) continue;
+        let channel;
+        try { channel = await resolveChannel(key); } catch { continue; }
+        if (!channel || !isChannelAllowed(key, channel)) continue;
+        if (hasSummaryToday(notesStore, { channelId: channel.id })) continue;
+        summaryTried.add(marker);
+        try {
+          const fetched = await channel.messages.fetch({ limit: SUMMARY_MAX_MESSAGES, cache: false });
+          const since = Date.now() - 24 * 60 * 60 * 1000;
+          const messages = [...fetched.values()]
+            .filter((message) => message.createdTimestamp >= since)
+            .filter((message) => !cfg.discord.deny.users.includes(message.author?.id))
+            .filter((message) => message.author?.bot || !isSkippedMessage(message.content, client.user.id))
+            .map((message) => ({
+              at: message.createdTimestamp,
+              author: `${authorName(message)}${message.author?.id === client.user.id ? '（你）' : ''}`,
+              text: flat(resolveMentions(withStickers(message), message), 300) || (message.attachments?.size ? '[圖片]' : ''),
+            }))
+            .filter((message) => message.text);
+          if (messages.length < SUMMARY_MIN_MESSAGES) continue;
+          const summary = cleanSummary(await runBackgroundPrompt({
+            prompt: buildSummaryPrompt({
+              channelName: channel.name,
+              messages,
+              maxChars: SUMMARY_TRANSCRIPT_CHARS,
+            }),
+            timeoutMs: cfg.discord.slang.timeoutMs,
+            label: '頻道摘要',
+            title: `Discord #${channel.name ?? '頻道'}｜頻道摘要`,
+            usageKind: 'summary',
+          }));
+          if (!summary) {
+            log(`頻道摘要 ${key}：沒有明顯重點，跳過`);
+            continue;
+          }
+          if (cfg.discord.security.blockSensitive && findSensitive(summary, agentSecrets())) {
+            log(`頻道摘要 ${key}：命中敏感資訊閘門，跳過`);
+            continue;
+          }
+          recordNote(notesStore, {
+            guildId: channel.guildId,
+            channelId: channel.id,
+            text: summary,
+            by: 'summary',
+            days: SUMMARY_DAYS_DEFAULT,
+            maxChars: SUMMARY_MAX_CHARS,
+            maxPerChannel: NOTES_PER_CHANNEL,
+          });
+          markNotesDirty();
+          log(`頻道摘要 ${key}：已寫入筆記（${summary.length} 字）`);
+        } catch (error) {
+          log(`頻道摘要 ${key} 失敗：${error?.message ?? error}`);
+        }
+      }
+    } finally {
+      summaryRunning = false;
     }
   }
 
@@ -2825,6 +3068,7 @@ async function main() {
   // 啟動失敗就讓它失敗：沒有發送端點，模型就完全無法回話，比直接掛掉更難查。
   agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: agentHandlers, log });
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
+  scheduleSummaryCheck();
 
   // ── 控制台 ───────────────────────────────────────────────────────────────
   /** 邀請連結：slash `/invite` 與控制台共用同一份權限清單。 */
@@ -2994,6 +3238,18 @@ async function main() {
             enabled: cfg.discord.memory.enabled,
             users: memoryOverview(memoryStore),
           }),
+          notes: () => ({
+            enabled: cfg.discord.notes.enabled,
+            notes: notesOverview(notesStore).map((note) => ({
+              ...note,
+              channelName: client.channels.cache.get(note.channelId)?.name ?? note.channelId,
+            })),
+          }),
+          deleteNote: (id) => {
+            const removed = deleteNoteById(notesStore, id);
+            if (removed) markNotesDirty();
+            return removed;
+          },
           triggers: () => {
             const users = triggerUserList(triggerStore).map((entry) => {
               const [kind, id] = String(entry.lastKey ?? '').split(':');
@@ -3069,9 +3325,11 @@ async function main() {
   const shutdown = async (signal) => {
     log(`收到 ${signal}，結束中…`);
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
     clearAllTtftTimers();
+    if (summaryTimer) clearTimeout(summaryTimer);
     try { await agentApiHandle?.close(); } catch { /* 已經關了 */ }
     try { await consoleHandle?.close(); } catch { /* 已經關了 */ }
     try { await client.destroy(); } catch { /* 已斷線就算了 */ }

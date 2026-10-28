@@ -323,6 +323,7 @@ export function createAgentSender({
   return {
     tokenFor,
     resolve,
+    checkSensitive,
     send,
     edit,
     remove,

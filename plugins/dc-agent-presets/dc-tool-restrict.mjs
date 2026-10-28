@@ -75,6 +75,9 @@ const DISCORD_TOOLS = [
   'mcp__discord__conversation_stats',
   'mcp__discord__remember_user',
   'mcp__discord__forget_user_fact',
+  'mcp__discord__note_event',
+  'mcp__discord__search_notes',
+  'mcp__discord__forget_note',
 ]
 // 黑話／頻道標籤也走橋接，跟 Discord 工具同一組開關：學習會話是純抽取器，不需要也不准寫詞庫。
 const SLANG_TOOLS = [

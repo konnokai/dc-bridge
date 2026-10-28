@@ -15,6 +15,7 @@
     "build:emojis": "node scripts/build-discord-emojis.mjs",
     "test:discord": "node scripts/test-discord-bridge.mjs",
     "test:discord-memory": "node scripts/test-discord-memory.mjs",
+    "test:discord-notes": "node scripts/test-discord-notes.mjs",
     "test:discord-slang": "node scripts/test-discord-slang.mjs",
     "test:discord-triggers": "node scripts/test-discord-trigger-stats.mjs",
     "test:audit": "node scripts/test-audit.mjs",

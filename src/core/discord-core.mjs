@@ -166,6 +166,16 @@ export function normalizeDiscordConfig(raw) {
       maxFacts: clamp(src.memory?.maxFacts, 20, 5, 50),
       maxChars: clamp(src.memory?.maxChars, 800, 200, 3000),
     },
+    notes: {
+      // 頻道事件筆記：預設關閉（會保存頻道文字；自動摘要還會另外花 token）。
+      enabled: src.notes?.enabled === true,
+      injectMax: clamp(src.notes?.injectMax, 5, 1, 20),
+      maxChars: clamp(src.notes?.maxChars, 600, 100, 3000),
+      dailySummary: {
+        enabled: src.notes?.dailySummary?.enabled === true,
+        hour: clamp(src.notes?.dailySummary?.hour, 4, 0, 23),
+      },
+    },
     slang: {
       // 黑話學習：從允許的頻道收集語料，學習會話產生候選，人工確認後才注入。
       // 預設關閉：會把頻道文字送去模型（成本 + 隱私），要開再開。
@@ -305,6 +315,9 @@ const PROGRESS_LABELS = {
   'mcp__discord__search_stickers': ['🖼️ 找貼圖'],
   'mcp__discord__remember_user': ['📝 記下群友的事'],
   'mcp__discord__forget_user_fact': ['🗑️ 刪掉一條記憶'],
+  'mcp__discord__note_event': ['📝 記下頻道事件'],
+  'mcp__discord__search_notes': ['📝 查頻道筆記', (args) => args.query],
+  'mcp__discord__forget_note': ['🗑️ 刪頻道筆記'],
 };
 
 /** 一次工具呼叫在 Discord 進度訊息裡的那一行；不用列的回 null。args 是 DSH 事件裡的 JSON 字串。 */

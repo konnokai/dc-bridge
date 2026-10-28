@@ -90,6 +90,7 @@ const DISCORD_TOOL_NAMES = [
   'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
+  'note_event', 'search_notes', 'forget_note',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
 const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
@@ -102,6 +103,10 @@ console.log('## 1. 設定收斂');
   ok(cfg.requireMentionInGuild === true, '頻道預設要 @bot');
   ok(cfg.messageContentIntent === true, '預設申請 Message Content 意圖');
   ok(cfg.maxMessageChars === DISCORD_MAX_CHARS, '單則上限預設 2000');
+  ok(cfg.notes.enabled === false && cfg.notes.injectMax === 5 && cfg.notes.maxChars === 600,
+    '頻道筆記預設關閉，注入 5 條、600 字');
+  ok(cfg.notes.dailySummary.enabled === false && cfg.notes.dailySummary.hour === 4,
+    '每日摘要預設關閉，4 點後才做');
   ok(cfg.questionTimeoutMs === 300_000, '提問等待預設 5 分鐘');
   ok(cfg.autoCompactTokens === 80_000, '自動壓縮門檻預設 8 萬');
   ok(normalizeDiscordConfig({ autoCompactTokens: 0 }).autoCompactTokens === 0, 'autoCompactTokens: 0 = 關閉');
@@ -1258,6 +1263,9 @@ console.log('## 7e. Discord MCP 發送工具');
       view_message: ['/view', { message: '#k7f3ab' }],
       remember_user: ['/remember', { message: '#k7f3ab', name: '小明', fact: '在準備考試' }],
       forget_user_fact: ['/forget-fact', { message: '#k7f3ab', number: 1 }],
+      note_event: ['/note', { text: '週五晚上約好一起打牌' }],
+      search_notes: ['/notes-search', { query: '週五' }],
+      forget_note: ['/note-forget', { number: 1 }],
     };
     for (const [name, [route, args]] of Object.entries(routes)) {
       const before = received.length;
@@ -1528,6 +1536,8 @@ console.log('## 9. 控制台');
       usageReset: () => { usageWasReset = true; },
       quota: async () => ({ ok: true, windows: [{ key: 'rolling', percent: 3 }] }),
       memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
+      notes: () => ({ enabled: true, notes: [{ id: 'n1', text: '週五打球' }] }),
+      deleteNote: (id) => id === 'n1',
       triggers: () => ({
         todayUsers: 1,
         totalUsers: 2,
@@ -1583,6 +1593,16 @@ console.log('## 9. 控制台');
   ok((await fetch(`${base}/api/memory`)).status === 401, '沒有 token 讀不到群友記憶');
   const memoryResponse = await fetch(`${base}/api/memory`, { headers: authed });
   ok(memoryResponse.status === 200 && (await memoryResponse.json()).users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');
+  ok((await fetch(`${base}/api/notes`)).status === 401, '沒有 token 讀不到頻道筆記');
+  const notesResponse = await fetch(`${base}/api/notes`, { headers: authed });
+  ok(notesResponse.status === 200 && (await notesResponse.json()).notes[0].id === 'n1', '筆記端點回 handler 的結果');
+  const noteHeaders = { ...authed, 'content-type': 'application/json' };
+  const noteDelete = await fetch(`${base}/api/notes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: 'n1' }) });
+  ok(noteDelete.status === 200 && (await noteDelete.json()).ok === true, '刪筆記端點會呼叫 handler');
+  const noteMissing = await fetch(`${base}/api/notes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: 'nope' }) });
+  ok(noteMissing.status === 404, '不存在的筆記回 404');
+  const noteNoId = await fetch(`${base}/api/notes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({}) });
+  ok(noteNoId.status === 400, '缺少筆記 id 回 400');
   ok((await fetch(`${base}/api/triggers`)).status === 401, '沒有 token 讀不到對話統計');
   const triggersResponse = await fetch(`${base}/api/triggers`, { headers: authed });
   const triggersBody = await triggersResponse.json();

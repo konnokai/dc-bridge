@@ -16,6 +16,9 @@ export function usageHours(range) {
 /** 學習會話的歸屬名稱。與頻道分開，才看得出黑話學習自己花掉多少。 */
 export const LEARNER_USAGE_KEY = 'internal:黑話學習';
 
+/** 每日頻道摘要的歸屬名稱：跟黑話學習分開，才看得出 v2 每天花多少。 */
+export const SUMMARY_USAGE_KEY = 'internal:頻道摘要';
+
 /**
  * 建立用量追蹤器。
  * @param options.file            帳本檔（JSONL）
@@ -23,6 +26,7 @@ export const LEARNER_USAGE_KEY = 'internal:黑話學習';
  * @param options.log             日誌函式
  * @param options.reverse         sessionId -> 會話 key（橋接的 reverse Map）
  * @param options.learnerSessions 黑話學習用過的 sessionId 集合
+ * @param options.summarySessions 每日頻道摘要用過的 sessionId 集合
  * @param options.nominalModel    沒收到模型事件時的保底模型（config 的 dsh.model）
  * @param options.provider
  */
@@ -32,6 +36,7 @@ export function createUsageTracker({
   log = () => {},
   reverse,
   learnerSessions,
+  summarySessions = new Set(),
   nominalModel,
   provider,
 }) {
@@ -42,7 +47,8 @@ export function createUsageTracker({
     // 查不到就回 undefined：帳本會沿用它記住的舊歸屬（/reset 後的舊會話、重啟後的學習會話）。
     // 回一個固定字串會蓋掉舊歸屬；從沒歸屬過的 session，帳本自己顯示成「未归属:<id>」。
     resolveKey: (sessionId) => reverse.get(sessionId)
-      ?? (learnerSessions.has(sessionId) ? LEARNER_USAGE_KEY : undefined),
+      ?? (learnerSessions.has(sessionId) ? LEARNER_USAGE_KEY : undefined)
+      ?? (summarySessions.has(sessionId) ? SUMMARY_USAGE_KEY : undefined),
   });
 
   /** sessionId -> { model, provider }：換模型會讓單價差好幾倍，所以按會話記最近一次。 */

@@ -314,4 +314,40 @@ tool(
   (result) => String(result.text ?? ''),
 );
 
+tool(
+  'note_event',
+  '記一條這個頻道發生的事：約定、決定、反覆被提起的事件、梗的由來。記的是「群裡的事」，關於某個人的事仍用 remember_user。之後的批次會出現在【頻道筆記】。',
+  {
+    token: sessionToken,
+    text: z.string().max(150).describe('一句短話，最多 150 字，例如「週五晚上約好一起打牌」'),
+    days: z.number().int().min(1).max(180).optional().describe('幾天後過期，預設 30，最多 180'),
+  },
+  '/note',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'search_notes',
+  '查這個頻道的筆記。query 用空白分開的每個詞都要出現；days 只看最近幾天。回傳的編號給 forget_note 用。',
+  {
+    token: sessionToken,
+    query: z.string().optional().describe('關鍵字，用空白分開，每個都要出現'),
+    days: z.number().int().min(1).max(180).optional().describe('只看最近幾天，省略就查全部'),
+  },
+  '/notes-search',
+  (result) => String(result.text ?? ''),
+  10_000,
+);
+
+tool(
+  'forget_note',
+  '刪掉這個頻道第 number 條筆記（記錯了、事情變了）。編號用 search_notes 回傳的清單；刪完回傳剩下的。',
+  {
+    token: sessionToken,
+    number: z.number().int().min(1).describe('要刪第幾條（舊→新的編號）'),
+  },
+  '/note-forget',
+  (result) => String(result.text ?? ''),
+);
+
 await server.connect(new StdioServerTransport());

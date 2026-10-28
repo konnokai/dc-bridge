@@ -78,6 +78,15 @@
       "maxFacts": 20,
       "maxChars": 800
     },
+    "notes": {
+      "enabled": false,
+      "injectMax": 5,
+      "maxChars": 600,
+      "dailySummary": {
+        "enabled": false,
+        "hour": 4
+      }
+    },
     "slang": {
       "enabled": false,
       "extractMinMessages": 20,
