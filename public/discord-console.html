@@ -291,7 +291,7 @@
     <h2>會話 <span id="session-count" class="muted"></span></h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>等待中</th><th></th></tr></thead>
+        <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>安靜到</th><th>等待中</th><th></th></tr></thead>
         <tbody id="sessions"></tbody>
       </table>
     </div>
@@ -877,11 +877,12 @@
       el('td', { className: 'mono' }, s.key),
       el('td', { className: 'mono' }, s.sessionId),
       el('td', {}, fmtAgo(s.lastActive)),
+      el('td', { className: 'muted' }, s.quietUntil ? new Date(s.quietUntil).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'),
       el('td', {}, s.pending ? (s.pending === 'question' ? '提問' : '審批') : '—'),
       el('td', {}, el('button', {
         className: 'danger', dataset: { key: s.key }, textContent: '重置',
       })),
-    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, '還沒有任何會話'))]));
+    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有任何會話'))]));
   }
 
   function renderLogs(logs) {

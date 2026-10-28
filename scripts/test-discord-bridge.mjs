@@ -49,6 +49,9 @@ import {
 import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from '../src/core/discord-context.mjs';
+import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
+import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
+import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
 import { formatEmojiLine, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
@@ -84,7 +87,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
 ].map((name) => `mcp__discord__${name}`);
@@ -133,7 +136,7 @@ console.log('## 1. 設定收斂');
     }
     ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
-    ok(others.every((name) => !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
+    ok(others.every((name) => name === 'mcp__discord__set_quiet' || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
     ok(SLANG_TOOL_NAMES.every((name) => describeToolCall(name, '{}') === null), '黑話工具不列進度（背景筆記）');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
 
@@ -665,6 +668,7 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   const delivered = [];
   const reactions = [];
   const unreacts = [];
+  let sentSeq = 0;
   let allowed = true;
   let gate = null;
   const sender = createAgentSender({
@@ -677,6 +681,8 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
     deliver: async (key, { content, replyTo, sticker }) => {
       if (gate) await gate;
       delivered.push({ key, content, replyTo, sticker });
+      sentSeq += 1;
+      return [`id-${sentSeq}`];
     },
     deliverReaction: async (key, { message, emoji }) => {
       if (message === '#gone') throw Object.assign(new Error('找不到訊息'), { statusCode: 404 });
@@ -700,6 +706,11 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
 
   const result = await sender.send({ token: tokenA, content: '哈囉' });
   ok(delivered.at(-1)?.key === 'ch:100' && result.key === 'ch:100', '令牌反查出自己的頻道（模型指定不了別的）');
+  ok(sender.ownedKey(`id-${delivered.length}`) === 'ch:100',
+    '查得出這則訊息是不是自己送的');
+  ok(sender.ownedKey('not-mine') === null, '不是自己送的訊息回 null');
+  sender.forgetKey('ch:100');
+  ok(sender.ownedKey(`id-${delivered.length}`) === null, 'reset 後舊訊息不再算自己的');
   await rejects(sender.send({ token: 'nope', content: 'x' }), /最新一則【發送】/, '舊令牌回可重試的錯誤');
   await rejects(sender.send({ token: tokenA, content: '外洩 SECRET-DISCORD-TOKEN' }), /敏感資訊/, '已知令牌被攔截');
   await rejects(sender.send({ token: tokenA, content: `抄 ${tokenA}` }), /敏感資訊/, '會話令牌本身也被攔截');
@@ -1100,6 +1111,61 @@ console.log('## 7d3. 批次');
     '私聊的回覆也標出在回誰');
 }
 
+console.log('## 7d4. 發言頻率、安靜、reaction 回饋');
+{
+  let now = 1_000_000;
+  const activity = createActivityTracker({ now: () => now });
+  activity.record('ch:1');
+  activity.record('ch:1');
+  ok(formatActivityLine(activity.stats('ch:1')) === '', '少於 3 則不顯示比例');
+  activity.record('ch:1', { bot: true });
+  ok(formatActivityLine(activity.stats('ch:1')) === '你最近 10 分鐘送了 1 則；這段時間頻道共 3 則',
+    '發言頻率含 bot 自己的訊息與頻道總數');
+  now += ACTIVITY_WINDOW_MS + 1;
+  ok(activity.stats('ch:1').total === 0 && formatActivityLine(activity.stats('ch:1')) === '',
+    '超過 10 分鐘的訊息不算');
+
+  now = new Date(2026, 9, 28, 9, 0).getTime();
+  const quiet = createQuietState({ now: () => now });
+  ok(quiet.state('ch:1').until === null, '預設沒有安靜');
+  const quietSet = quiet.set('ch:1', 30);
+  ok(quietSet.until === now + 30 * 60_000 && quiet.state('ch:1').until === quietSet.until, '設 30 分鐘安靜');
+  ok(formatQuietUntil(quietSet.until) === '09:30', '安靜時間格式 HH:MM');
+  now += 30 * 60_000;
+  const expired = quiet.state('ch:1');
+  ok(expired.until === null && expired.expired === true, '時間到就自己結束');
+  quiet.set('ch:1', 60);
+  ok(quiet.set('ch:1', 0).ended === true && quiet.state('ch:1').until === null, 'minutes=0 提早結束');
+  ok(quiet.set('ch:1', 999).until === now + 120 * 60_000, '最多安靜 120 分鐘');
+  ok(isQuietBatchSkipped({ direct: false, quietUntil: 1 }) === true, '安靜時沒叫 bot 的批次不送');
+  ok(isQuietBatchSkipped({ direct: true, quietUntil: 1 }) === false, '安靜時叫 bot 的批次照常送');
+  ok(isQuietBatchSkipped({ direct: false, quietUntil: null }) === false, '沒安靜就不丟批次');
+
+  const inbox = createReactionInbox({ maxMessages: 2 });
+  inbox.add('ch:1', 'm1', '😂', 1);
+  inbox.add('ch:1', 'm1', '😂', 3);
+  inbox.add('ch:1', 'm1', ':kekw:', 1);
+  const peeked = inbox.peek('ch:1');
+  ok(peeked.length === 1 && peeked[0].emojis.find((e) => e.emoji === '😂').count === 3,
+    '同一則訊息的反應合併，次數取大的');
+  ok(formatReactionInbox(peeked, (id) => (id === 'm1' ? 'aaa' : '')) === '【你的訊息收到的反應】\n#aaa 😂×3、:kekw:×1',
+    'reaction 區塊格式');
+  inbox.add('ch:1', 'm2', '👍', 1);
+  inbox.add('ch:1', 'm3', '👍', 1);
+  ok(inbox.peek('ch:1').length === 2 && !inbox.peek('ch:1').some((e) => e.messageId === 'm1'),
+    '每個 key 最多留 2 則，丟最舊的');
+  const taken = inbox.peek('ch:1');
+  inbox.clear('ch:1', taken);
+  ok(taken.length === 2 && inbox.peek('ch:1').length === 0, 'clear 清掉已寫進 prompt 的那幾筆');
+  inbox.add('ch:1', 'm1', '😂', 1);
+  const seen = inbox.peek('ch:1');
+  inbox.add('ch:1', 'm1', '😂', 2);
+  inbox.clear('ch:1', seen);
+  ok(inbox.peek('ch:1')[0]?.emojis?.[0]?.count === 2, 'clear 後才變大的次數留到下一批');
+  inbox.clear('ch:1');
+  ok(formatReactionInbox([], () => 'x') === '', '沒有 reaction 回空字串');
+}
+
 console.log('## 7e. Discord MCP 發送工具');
 {
   const http = await import('node:http');
@@ -1170,12 +1236,15 @@ console.log('## 7e. Discord MCP 發送工具');
       arguments: { token: 't', content: '嗨', reply_to: '#k7f3ab' },
     });
     ok(result.isError !== true && String(result.content?.[0]?.text).includes('測試頻道'), '工具呼叫會打到橋接並回頻道名');
+    ok(String(result.content?.[0]?.text) === '已送出到 #測試頻道。這則的訊息編號是 #k7f3ab（之後改、收回、看反應用這個）',
+      '送出回饋帶頻道名與這則的編號');
     ok(received.length === 1 && received[0].url === '/send' && received[0].token === 't' && received[0].content === '嗨'
       && received[0].reply_to === '#k7f3ab', '橋接收到 token、內容與 reply_to');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
+      set_quiet: ['/quiet', { minutes: 30 }],
       search_emojis: ['/emojis', { query: '笑' }],
       search_stickers: ['/stickers', { query: '貓' }],
       read_history: ['/history', { limit: 5 }],
@@ -1585,6 +1654,10 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(await referencedMessage(replyTo('r1', { channelId: 'other' }), true) === null && fetches === 1,
     '引用別的頻道（可能不在白名單）→ 不帶，也不抓');
   ok(await referencedMessage(replyTo('r1', { type: 1 }), true) === null && fetches === 1, '轉發不是回覆 → 不帶');
+  const partialCache = replyTo('r1');
+  partialCache.channel.messages.cache.set('r1', { id: 'r1', partial: true, content: '' });
+  ok((await referencedMessage(partialCache, true))?.content === 'fetched' && fetches === 2,
+    '快取裡是 partial 就重新抓，不拿空訊息');
   ok(searchTerms('  期末考  ＡＢＣ ').join('|') === '期末考|abc', '搜尋詞：去空白、全形轉半形、轉小寫');
   ok(matchesTerms('明天ABC期末考', searchTerms('abc 期末考')), '每個詞都出現才算符合（不分大小寫）');
   ok(!matchesTerms('明天期末考', searchTerms('abc 期末考')), '少一個詞就不符合');

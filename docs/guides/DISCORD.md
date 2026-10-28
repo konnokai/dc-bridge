@@ -200,6 +200,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   沒有引用內容的回覆會顯示 `↪回覆 X`；有引用內容時維持 `[引用 X：…]`。
   【最近頻道訊息】、`read_history`、`search_history`、`view_message` 用同一套換法。
 
+- 每批的【現在】後面會多一行發言頻率：「你最近 10 分鐘送了 N 則；這段時間頻道共 M 則」。
+  M 少於 3 時不顯示，免得「頻道共 1 則」變噪音。
+- 模型上一次送出的訊息收到 reaction 時，下一批 prompt 開頭會出現 `【你的訊息收到的反應】#編號 😂×2、:kekw:×1`。
+  只出現一次，reaction 本身不會觸發模型回合。需要 `GuildMessageReactions`、`DirectMessageReactions` intent
+  （非特權，程式啟動時申請）和 `Message`、`Reaction` partial。
+
 - **`requireMentionInGuild: true`（預設）**：只有 @bot 或回覆 bot 的訊息會進批次，所以每一行都有 ★，
   模型照 persona 的規則一定會回。
 - **`requireMentionInGuild: false`（自由參與）**：頻道裡允許的訊息全部進批次。沒有 ★ 的是大家在聊，
@@ -544,9 +550,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 `mcp__discord__*` 每個都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道），下面只列其他參數：
 
 - `mcp__discord__send_message`（`content`、`reply_to` 可省略）：送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。
-  有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳送出那則的 #編號（太長切成好幾則就每則一個），
-  `edit_message`／`delete_message` 要用這個編號
-- `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，一樣回傳 #編號
+  有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
+  `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
+- `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
 - `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
   （送出時橋接記下的，每個頻道最近 200 則，橋接重啟就清空）；進度、壓縮提示、審批、提問、錯誤、指令回覆這些橋接自己發的不能改。
   改完要一則放得下（`maxMessageChars`），投票不能改。內容一樣過敏感資訊閘門，佔「一輪 5 則」的名額。改之前橋接把舊內容記進日誌
@@ -565,6 +571,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
 - `mcp__discord__remove_reaction`（`message`、`emoji`）：收回你在那則訊息按過的同一個表情。
   只能收回自己按的；沒按過或已經收回時回 404，一輪最多 3 次（跟 `add_reaction` 分開算）
+- `mcp__discord__set_quiet`（`minutes`、`reason` 可省略）：讓自己安靜 1~120 分鐘。這段時間**沒叫 bot** 的頻道訊息
+  不送進模型（省 token），叫 bot 的照常；黑話語料照收。`minutes=0` 提早結束。
+  安靜結束後的下一批會重新帶一次頻道上下文。狀態只在記憶體，bridge 重啟就清掉
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
 - `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字；

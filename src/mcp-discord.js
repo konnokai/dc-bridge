@@ -70,8 +70,14 @@ const server = new McpServer({ name: 'discord', version: '0.2.1-r1' });
 const sessionToken = z.string().describe('會話令牌（提示最後的【發送】行會給；照抄，不要自己編）');
 const messageRef = (what) => z.string().describe(`${what}：訊息前面的 #編號（例如 #k7f3ab），只能用這個頻道出現過的`);
 
-/** 送出結果帶上 #編號：edit_message／delete_message 只認這些。 */
-const sentRefs = (result) => (result.refs?.length ? `（${result.refs.map((ref) => `#${ref}`).join('、')}）` : '');
+/** 送出結果帶上 #編號：edit_message／delete_message／看反應都用這些。 */
+function sentDetail(result, verb) {
+  const where = result.channel === '私聊' ? '私聊' : `#${result.channel ?? 'Discord'}`;
+  const refs = result.refs ?? [];
+  if (refs.length === 1) return `已${verb}到 ${where}。這則的訊息編號是 #${refs[0]}（之後改、收回、看反應用這個）`;
+  if (refs.length > 1) return `已${verb}到 ${where}。訊息編號：${refs.map((ref) => `#${ref}`).join('、')}（之後改、收回、看反應用這些）`;
+  return `已${verb}到 ${where}`;
+}
 
 /**
  * 每個工具都是：post 到橋接 → 成功回文字，失敗回 isError（模型才不會以為做成了）。
@@ -98,7 +104,7 @@ tool(
     reply_to: messageRef('要用 Discord「回覆」功能接的那則訊息').optional(),
   },
   '/send',
-  (result) => `已送出到 ${result.channel ?? 'Discord'}${sentRefs(result)}`,
+  (result) => sentDetail(result, '送出'),
 );
 
 tool(
@@ -111,7 +117,7 @@ tool(
     reply_to: messageRef('要回覆的那則訊息').optional(),
   },
   '/send',
-  (result) => `已送出貼圖到 ${result.channel ?? 'Discord'}${sentRefs(result)}`,
+  (result) => sentDetail(result, '送出貼圖'),
 );
 
 tool(
@@ -148,7 +154,7 @@ tool(
     multi: z.boolean().optional().describe('可不可以複選，預設不行'),
   },
   '/poll',
-  (result) => `已發出投票到 ${result.channel ?? 'Discord'}${sentRefs(result)}`,
+  (result) => sentDetail(result, '發出投票'),
 );
 
 tool(
@@ -173,6 +179,18 @@ tool(
   },
   '/unreact',
   () => '已收回 reaction',
+);
+
+tool(
+  'set_quiet',
+  '讓自己安靜一段時間：這段時間沒叫你的頻道訊息不送進模型（叫你的照常），省 token。頻道很吵或你不想接話時用。',
+  {
+    token: sessionToken,
+    minutes: z.number().int().min(0).max(120).describe('安靜幾分鐘（1~120）；0 = 提早結束安靜'),
+    reason: z.string().optional().describe('為什麼安靜，寫給自己看的，可省略'),
+  },
+  '/quiet',
+  (result) => String(result.text ?? ''),
 );
 
 tool(

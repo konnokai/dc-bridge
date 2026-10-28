@@ -229,6 +229,16 @@ export function createAgentSender({
     return id;
   }
 
+  /** 這則訊息是不是模型自己用工具送出的；是的話回它的會話 key，否則 null。 */
+  function ownedKey(messageId) {
+    const id = String(messageId ?? '');
+    if (!id) return null;
+    for (const [key, set] of owned) {
+      if (set.has(id)) return key;
+    }
+    return null;
+  }
+
   /** 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。 */
   async function withQuota(key, kind, label, action) {
     const counts = usedCounts.get(key) ?? { react: 0, unreact: 0, remove: 0, history: 0 };
@@ -320,8 +330,11 @@ export function createAgentSender({
     react,
     unreact,
     history,
+    ownedKey,
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },
+    /** /reset：舊會話送出的訊息不能再改／收回，也不要再回報 reaction。 */
+    forgetKey: (key) => { owned.delete(key); },
     startTurn: clearKey,
     noteAttempt: (key) => { attempted.add(key); },
     /** 回合結束：回傳這一輪送了幾則、按了幾個 reaction、收回幾則、有沒有試過呼叫工具，並歸零。 */

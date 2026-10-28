@@ -34,7 +34,7 @@ export async function referencedMessage(message, direct) {
   const id = reference?.messageId;
   if (!id || (reference.type ?? 0) !== 0 || reference.channelId !== message.channelId) return null;
   const cached = message.channel?.messages?.cache?.get(id);
-  if (cached) return cached;
+  if (cached && !cached.partial) return cached;
   return direct ? message.channel.messages.fetch(id) : null;
 }
 

@@ -42,6 +42,9 @@ import {
   isSkippedMessage,
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
+import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
+import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
+import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import { findSensitive } from './core/discord-security.mjs';
 import { formatEmojiLine, loadCatalogs, matchStickers, ownReaction, reactionKey, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
@@ -462,6 +465,16 @@ async function main() {
   let consoleTokenValue = '';
   let agentApiHandle = null;
   const primedKeys = new Set(); // 自由參與：這次啟動後已經帶過頻道上下文的會話
+  const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
+  const quietState = createQuietState(); // key -> 安靜到什麼時候
+  const reactionInbox = createReactionInbox(); // key -> 自己的訊息收到的 reaction（下一批提示）
+
+  /** 安靜到什麼時候；剛結束就把 primedKeys 拿掉，下一批重新帶上下文。 */
+  function quietUntil(key) {
+    const state = quietState.state(key);
+    if (state.expired) primedKeys.delete(key);
+    return state.until;
+  }
   // 回合 ↔ 批次對應：DSH 依投遞順序跑回合，所以投遞時排進佇列、回合開始時取出。
   // 用來決定這個回合要不要亮輸入提示、出錯時要不要在頻道說（沒人叫 bot 的那批不說）。
   const pendingDirect = new Map(); // key -> boolean[]（已投遞、回合還沒開始）
@@ -668,6 +681,9 @@ async function main() {
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
     primedKeys.delete(key);
+    agentSender.forgetKey(key);
+    quietState.forget(key);
+    reactionInbox.clear(key);
     memoryShown.delete(key);
     memoryWrites.delete(key);
     slangWrites.delete(key);
@@ -916,6 +932,11 @@ async function main() {
     deliverPoll,
   });
 
+  /** 模型自己送出的訊息也算進發言頻率（長訊息切成幾則就記幾則）。 */
+  function recordBotMessages(key, count = 1) {
+    for (let i = 0; i < Math.max(1, count); i += 1) activity.record(key, { bot: true });
+  }
+
   /** 模型真的送出訊息時記一次；同一個回合送好幾則只算一次。 */
   function noteTrigger(key) {
     if (turnTriggerRecorded.has(key)) return;
@@ -989,6 +1010,7 @@ async function main() {
         sticker: textArg(body.sticker),
       });
       noteTrigger(result.key);
+      recordBotMessages(result.key, result.refs?.length);
       log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}）`);
       return result;
     },
@@ -1001,6 +1023,26 @@ async function main() {
       const result = await agentSender.unreact({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
       log(`MCP 收回 reaction ${result.key}（${textArg(body.message)} ${textArg(body.emoji)}）`);
       return result;
+    },
+    async quiet(body) {
+      const { key, channel } = await agentSender.resolve(body.token);
+      if (!channel.guildId) throw toolError('私聊每則都在叫你，安靜沒有用', 400);
+      const minutes = Math.round(Number(body.minutes));
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > QUIET_MAX_MINUTES) {
+        throw toolError(`minutes 要在 0~${QUIET_MAX_MINUTES} 之間（0 = 結束安靜）`, 400);
+      }
+      const result = quietState.set(key, minutes);
+      const reason = flat(body.reason, 100);
+      if (result.until) {
+        const at = formatQuietUntil(result.until);
+        log(`MCP 安靜 ${key} 到 ${at}${reason ? `（${reason}）` : ''}`);
+        return { key, text: `已安靜到 ${at}。這段時間沒叫你的訊息不會送進模型；叫你的照常。想提早結束用 minutes=0。` };
+      }
+      if (!result.ended) return { key, text: '目前沒有在安靜。' };
+      // 安靜期間丟掉的批次沒進會話，下一批要重新帶一次頻道上下文。
+      primedKeys.delete(key);
+      log(`MCP 結束安靜 ${key}`);
+      return { key, text: '已結束安靜，下一批會重新帶頻道上下文。' };
     },
     async edit(body) {
       const content = typeof body.content === 'string' ? body.content : '';
@@ -1018,6 +1060,7 @@ async function main() {
         multi: body.multi === true,
       });
       noteTrigger(result.key);
+      recordBotMessages(result.key, result.refs?.length);
       log(`MCP 投票 ${result.key}（${Array.isArray(body.answers) ? body.answers.length : 0} 個選項）`);
       return result;
     },
@@ -1972,6 +2015,13 @@ async function main() {
    */
   async function buildBatchPrompt(key, job) {
     const guild = Boolean(job.guildId);
+    const quietAt = quietUntil(key);
+    // 上一次送出的訊息收到的 reaction：只在這批 prompt 出現一次，不另外開回合。
+    const feedbackEntries = reactionInbox.peek(key);
+    const feedback = formatReactionInbox(
+      feedbackEntries,
+      (id) => messageRefs.register(key, id),
+    );
     const entries = [];
     const images = [];
     const skipped = [];
@@ -2029,7 +2079,7 @@ async function main() {
     // 之後每一則都已經進過會話，再帶只是重複燒 token。
     let context = '';
     const wantContext = guild && cfg.discord.context.enabled && cfg.discord.context.messages > 0
-      && (requireMentionInGuild() || !primedKeys.has(key));
+      && (requireMentionInGuild() || quietAt || !primedKeys.has(key));
     if (wantContext) {
       try {
         // 從最後一則往前抓，再扣掉批次自己的訊息：@ 模式下兩則 @ 之間的閒聊也要看得到。
@@ -2103,10 +2153,15 @@ async function main() {
     // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
     const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
     const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
-    const time = formatTimeContext({ messageAt: job.entries[0].at });
+    const time = [
+      formatTimeContext({ messageAt: job.entries[0].at }),
+      quietAt ? `（你設了安靜到 ${formatQuietUntil(quietAt)}）` : '',
+      formatActivityLine(activity.stats(key)),
+    ].filter(Boolean).join('\n');
     return {
-      text: [context, slangHint, styleHint, memory, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, memory, batch, time].filter(Boolean).join('\n'),
       images,
+      feedbackEntries,
     };
   }
 
@@ -2115,6 +2170,11 @@ async function main() {
     const { epoch } = job;
     if (epoch !== epochOf(key)) {
       log(`排隊期間會話已重置，丟棄 (${key})`);
+      return false;
+    }
+    // 批次排隊期間才設的安靜也要生效：沒叫 bot 的不進模型，省下這一輪。
+    if (isQuietBatchSkipped({ direct: job.direct, quietUntil: quietUntil(key) })) {
+      log(`安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
       return false;
     }
     const sessionId = await ensureSession(key);
@@ -2173,6 +2233,8 @@ async function main() {
       if (command.text) await sendLong(key, command.text);
       return false;
     }
+    // prompt 真的進 DSH 了，反應區塊才算送達；失敗重試時還會再帶一次。
+    reactionInbox.clear(key, prompt.feedbackEntries);
     log(`已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}${job.dropped ? `，略過 ${job.dropped} 則` : ''}）`);
     if (job.direct && cfg.discord.ackMessage) await sendLong(key, cfg.discord.ackMessage).catch(() => {});
     return true;
@@ -2405,6 +2467,25 @@ async function main() {
     }
   }
 
+  /** 自己的訊息收到 reaction：只記下來，下一批 prompt 再講；不觸發回合。 */
+  async function handleReaction(reaction, user) {
+    if (!reaction || !user || user.bot) return;
+    // 先查這則是不是模型自己送的，才決定要不要打 API 抓訊息：白名單外的 reaction 直接丟掉。
+    const key = agentSender.ownedKey(reaction.message?.id);
+    if (!key) return;
+    try {
+      if (reaction.partial) await reaction.fetch();
+      const message = reaction.message;
+      if (message?.partial) await message.fetch();
+      const emoji = reaction.emoji?.id ? `:${reaction.emoji.name}:` : reaction.emoji?.name;
+      if (!emoji) return;
+      reactionInbox.add(key, message.id, emoji, reaction.count ?? 1);
+      log(`收到 reaction ${key}（${emoji}×${reaction.count ?? 1}）`);
+    } catch (error) {
+      log(`讀取 reaction 失敗：${error?.message ?? error}`);
+    }
+  }
+
   async function handleMessage(message) {
     if (!message || message.author?.bot || message.webhookId) return;
     const guildId = message.guildId ?? null;
@@ -2416,6 +2497,9 @@ async function main() {
     };
     if (!isConversationAllowed(cfg.discord, ids)) return;
     const key = conversationKeyFor(ids);
+    // 發言頻率：這則在 handleMessage 最前面就記，早於所有 return（含 // 與空訊息）。
+    activity.record(key);
+    const quietAt = quietUntil(key);
 
     const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
     const repliedUserId = message.mentions?.repliedUser?.id ?? null;
@@ -2436,8 +2520,9 @@ async function main() {
 
     if (!direct) {
       // 沒叫 bot：偶爾留一個 reaction。預設模式到此為止；自由參與才送進批次讓模型決定。
-      if (text) await maybeReact(message, key, rawText).catch((error) => log(`表情反應失敗：${error?.message ?? error}`));
-      if (requireMentionInGuild()) return;
+      // 安靜期間連自動 reaction 都停，批次也直接丟掉（黑話語料上面已經收過）。
+      if (!quietAt && text) await maybeReact(message, key, rawText).catch((error) => log(`表情反應失敗：${error?.message ?? error}`));
+      if (requireMentionInGuild() || isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
     }
 
     const stickers = stickerLabel(message.stickers);
@@ -2676,13 +2761,23 @@ async function main() {
 
   // ── 啟動 ─────────────────────────────────────────────────────────────────
 
-  const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages];
+  const intents = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessageReactions,
+  ];
   if (cfg.discord.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
   // Partials.Channel：私聊頻道預設不在快取裡，少了它收不到未快取對象的私聊。
-  const client = new Client({ intents, partials: [Partials.Channel] });
+  // Message／Reaction：bot 重啟後對舊訊息按的 reaction 也要收得到（B3）。
+  const client = new Client({ intents, partials: [Partials.Channel, Partials.Message, Partials.Reaction] });
 
   client.on(Events.MessageCreate, (message) => {
     handleMessage(message).catch((error) => log(`處理訊息失敗：${error?.stack ?? error}`));
+  });
+  client.on(Events.MessageReactionAdd, (reaction, user) => {
+    handleReaction(reaction, user).catch((error) => log(`處理 reaction 失敗：${error?.stack ?? error}`));
   });
   client.on(Events.InteractionCreate, (interaction) => {
     if (!interaction.isChatInputCommand()) return;
@@ -2807,6 +2902,7 @@ async function main() {
       kind: key.startsWith('dm:') ? 'dm' : 'channel',
       lastActive: lastActive.get(key) ?? null,
       pending: pending.get(key)?.kind ?? null,
+      quietUntil: quietUntil(key),
     }))
     .sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));
 
