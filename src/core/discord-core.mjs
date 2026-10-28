@@ -176,6 +176,10 @@ export function normalizeDiscordConfig(raw) {
         hour: clamp(src.notes?.dailySummary?.hour, 4, 0, 23),
       },
     },
+    followup: {
+      // 回訪：模型自己排「N 分鐘後回來看」。預設關閉（時間到了會多一個模型回合）。
+      enabled: src.followup?.enabled === true,
+    },
     slang: {
       // 黑話學習：從允許的頻道收集語料，學習會話產生候選，人工確認後才注入。
       // 預設關閉：會把頻道文字送去模型（成本 + 隱私），要開再開。
@@ -298,7 +302,7 @@ const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
   'mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
-  'mcp__discord__remove_reaction', 'mcp__discord__set_quiet',
+  'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   'mcp__slang__lookup_slang', 'mcp__slang__record_slang', 'mcp__slang__record_channel_tag',
 ]);

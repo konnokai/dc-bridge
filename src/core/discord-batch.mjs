@@ -190,7 +190,10 @@ export function createTurnGate({
 
   const releaseAll = () => { for (const key of [...busy.keys()]) release(key); };
 
-  return { submit, release, drop, releaseAll };
+  /** 這個會話有沒有回合正在跑（回訪到點時用來決定要不要延後一分鐘）。 */
+  const isBusy = (key) => busy.has(key);
+
+  return { submit, release, drop, releaseAll, isBusy };
 }
 
 /**

@@ -99,18 +99,21 @@ export function formatEmojiLine(entry) {
 /**
  * 挑候選表情。
  * 規則：當前伺服器 +6、名稱命中 +4、其他關鍵字每命中 +2；按分數取前 k 個，受 maxChars 限制。
- * 有查詢字時只回命中關鍵字的；查詢字是空的就列當前伺服器的。
+ * 有查詢字時只回命中關鍵字的；查詢字是空的就列當前伺服器的，常用的排前面（usage：id → 次數）。
  */
-export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, maxChars = 600 } = {}) {
+export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, maxChars = 600, usage = null } = {}) {
   if (!catalogs?.size) return [];
   const current = guildId === null || guildId === undefined ? null : String(guildId);
   const tokens = queryTokens(text);
+  const browsing = tokens.size === 0;
   const rows = [];
 
   for (const [id, catalog] of catalogs) {
     for (const entry of catalog.entries ?? []) {
       if (!entry?.id || !entry?.name) continue;
       let score = current && id === current ? 6 : 0;
+      // 只有「query 留空」才按使用次數排：關鍵字查詢時命中程度才是重點。
+      if (browsing && current && id === current) score += Number(usage?.get?.(String(entry.id))) || 0;
       let keywordScore = 0;
       const hay = haystackOf(entry);
       for (const token of tokens) {
@@ -184,8 +187,83 @@ export function reactionKey(rendered, name) {
   return null;
 }
 
-/** 這則訊息上「自己按的」那個 reaction；找不到或不是自己按的回 null。 */
+/**
+ * 這則訊息上「自己按的」那個 reaction；找不到或不是自己按的回 null。
+ */
 export function ownReaction(message, identifier) {
   const reaction = message?.reactions?.cache?.get?.(identifier);
   return reaction?.me ? reaction : null;
+}
+
+// ── 使用次數（README 工作包 K） ─────────────────────────────────────────────
+// 只為了讓 search_emojis 的 query 留空時把常用的排前面；不進 prompt、不是評分。
+// 檔案壞掉就從空的重建：這只是排序提示，不值得為它停機或備份。
+
+const EMOJI_TAG = /<a?:\w{2,32}:(\d{15,25})>/g;
+
+/** 從訊息內容數自訂表情（`<:name:id>`／`<a:name:id>`），回傳 Map<emojiId, 次數>。 */
+export function countEmojiTags(text) {
+  const out = new Map();
+  const value = String(text ?? '');
+  if (!value.includes('<')) return out;
+  for (const match of value.matchAll(EMOJI_TAG)) out.set(match[1], (out.get(match[1]) ?? 0) + 1);
+  return out;
+}
+
+/** 讀 `state/discord-emoji-usage.json`：`{ version: 1, guilds: { <guildId>: { <emojiId>: 次數 } } }`。 */
+export function loadEmojiUsage(file) {
+  const out = new Map();
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return out;
+  }
+  if (doc?.version !== 1 || !doc.guilds || typeof doc.guilds !== 'object') return out;
+  for (const [guildId, counts] of Object.entries(doc.guilds)) {
+    const mine = Object.entries(counts ?? {}).filter(([, n]) => Number.isInteger(n) && n > 0);
+    if (mine.length) out.set(String(guildId), new Map(mine));
+  }
+  return out;
+}
+
+/** 原子寫回；順手丟掉不在目錄裡的 id，讓檔案不會隨著刪掉的表情長大。 */
+export function saveEmojiUsage(file, usage, { catalogs = null } = {}) {
+  const guilds = {};
+  for (const [guildId, counts] of usage) {
+    const alive = catalogs?.get(String(guildId))
+      ? new Set((catalogs.get(String(guildId)).entries ?? []).map((entry) => String(entry.id)))
+      : null;
+    const rows = [...counts].filter(([id]) => !alive || alive.has(String(id)));
+    if (rows.length) guilds[guildId] = Object.fromEntries(rows);
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, guilds }, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+/** 把一則訊息用到的自訂表情記進 usage（guildId → Map<emojiId, 次數>）；回傳記到幾種。 */
+export function bumpEmojiUsage(usage, guildId, text, { entries = null, maxIds = 500 } = {}) {
+  if (!guildId) return 0;
+  const found = countEmojiTags(text);
+  if (found.size === 0) return 0;
+  // 只記目錄裡真的有的表情：群友貼假 id 撐不大檔案，也不會擠掉新表情。
+  const allowed = entries ? new Set(entries.map((entry) => String(entry.id))) : null;
+  const ids = [...found.keys()].filter((id) => !allowed || allowed.has(id));
+  if (ids.length === 0) return 0;
+  const key = String(guildId);
+  let counts = usage.get(key);
+  if (!counts) {
+    counts = new Map();
+    usage.set(key, counts);
+  }
+  // 一則訊息同一個表情只算一次：群友貼一排 kekw 不該把整個排序拉走。
+  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  if (counts.size > maxIds) {
+    const keep = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, maxIds);
+    counts.clear();
+    for (const [id, n] of keep) counts.set(id, n);
+  }
+  return ids.length;
 }

@@ -44,6 +44,7 @@ import {
 import { formatQuote, formatRecentContext, formatTimeContext, referencedMessage } from './core/discord-context.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
+import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import {
   NOTE_DAYS_DEFAULT,
@@ -68,7 +69,7 @@ import {
   saveNotesFile,
 } from './core/discord-notes.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { formatEmojiLine, loadCatalogs, matchStickers, ownReaction, reactionKey, retrieveEmojis, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { bumpEmojiUsage, formatEmojiLine, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -127,6 +128,7 @@ const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
 const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
+const EMOJI_USAGE_FILE = path.join(STATE_DIR, 'discord-emoji-usage.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
@@ -406,6 +408,7 @@ async function main() {
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
   });
 
@@ -535,6 +538,7 @@ async function main() {
   const primedKeys = new Set(); // 自由參與：這次啟動後已經帶過頻道上下文的會話
   const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
   const quietState = createQuietState(); // key -> 安靜到什麼時候
+  const followups = createFollowupStore(); // 模型自己排的「N 分鐘後回來看」
   const reactionInbox = createReactionInbox(); // key -> 自己的訊息收到的 reaction（下一批提示）
 
   /** 安靜到什麼時候；剛結束就把 primedKeys 拿掉，下一批重新帶上下文。 */
@@ -550,9 +554,33 @@ async function main() {
   const emojiDir = cfg.discord.emoji.dir ? path.resolve(ROOT, cfg.discord.emoji.dir) : path.join(STATE_DIR, 'discord-emoji');
   let emojiCatalogs = loadCatalogs(emojiDir);
   let emojiLoadedAt = Date.now();
+  // 表情使用次數：只影響 query 留空時的排序，壞檔就從空的重建。
+  const emojiUsage = loadEmojiUsage(EMOJI_USAGE_FILE);
+  let emojiUsageDirty = false;
+  let emojiUsageTimer = null;
   let emojiBuild = { running: false, startedAt: 0, finishedAt: 0, guildId: '', force: false, pid: null, exitCode: null, error: null, reason: '' };
   let emojiDebounce = null;
   const emojiPending = new Set();
+
+  function markEmojiUsageDirty() {
+    emojiUsageDirty = true;
+    if (emojiUsageTimer) return;
+    emojiUsageTimer = setTimeout(() => {
+      emojiUsageTimer = null;
+      flushEmojiUsage();
+    }, 5000);
+    emojiUsageTimer.unref?.();
+  }
+
+  function flushEmojiUsage() {
+    if (!emojiUsageDirty) return;
+    try {
+      saveEmojiUsage(EMOJI_USAGE_FILE, emojiUsage, { catalogs: emojiCatalogs });
+      emojiUsageDirty = false;
+    } catch (error) {
+      log(`表情使用次數存檔失敗：${error?.message ?? error}`);
+    }
+  }
 
   function refreshEmojiCatalogs() {
     if (Date.now() - emojiLoadedAt < 60_000) return;
@@ -743,6 +771,8 @@ async function main() {
     ttftTimeouts.delete(key);
     ttftAbandonedTurns.delete(key);
     epochs.set(key, epochOf(key) + 1);
+    // 回訪屬於舊對話，/reset 之後不要再送。
+    followups.forget(key);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
     batcher.drop(key);
     turnGate.drop(key);
@@ -1114,6 +1144,17 @@ async function main() {
       log(`MCP 結束安靜 ${key}`);
       return { key, text: '已結束安靜，下一批會重新帶頻道上下文。' };
     },
+    // 回訪：時間到了 bridge 送一個提示，模型自己決定要不要說話。
+    async followup(body) {
+      const { key } = await agentSender.resolve(body.token);
+      if (!cfg.discord.followup.enabled) {
+        throw toolError('回訪沒開（config.json 的 discord.followup.enabled）', 403);
+      }
+      const result = followups.add(key, { minutes: body.minutes, note: body.note });
+      if (result.error) throw toolError(result.error, /^(minutes|note)/.test(result.error) ? 400 : 429);
+      log(`MCP 排回訪 ${key}（${result.entry.minutes} 分鐘後：${flat(result.entry.note, 60)}）`);
+      return { text: `已排定 ${result.entry.minutes} 分鐘後回訪。時間到了會給你一個提示，要不要說話由你決定；這個會話目前還排著 ${followups.pending(key)} 個。` };
+    },
     async edit(body) {
       const content = typeof body.content === 'string' ? body.content : '';
       return agentSender.edit({ token: body.token, message: textArg(body.message), content });
@@ -1144,6 +1185,7 @@ async function main() {
           text: query,
           k: cfg.discord.emoji.maxCandidates,
           maxChars: cfg.discord.emoji.maxChars,
+          usage: channel.guildId ? emojiUsage.get(String(channel.guildId)) : null,
         })
         : [];
       return {
@@ -2120,6 +2162,11 @@ async function main() {
           turnGate.release(key);
           stopTyping(key);
           if (isTransientDshError(error)) {
+            // 回訪進離線佇列會被後面的批次合併掉（mergeJobs 只看 entries）；時間過了就放棄。
+            if (job.followup) {
+              log(`DSH 暫時不可用，放棄回訪 (${key})`);
+              return;
+            }
             enqueueOffline(key, job);
             return;
           }
@@ -2318,7 +2365,11 @@ async function main() {
     }
     // 批次排隊期間才設的安靜也要生效：沒叫 bot 的不進模型，省下這一輪。
     if (isQuietBatchSkipped({ direct: job.direct, quietUntil: quietUntil(key) })) {
-      log(`安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
+      // 回訪排隊期間才設的安靜：放回去，安靜結束後再送（額度已算過，不重扣）。
+      if (job.followup) followups.restore(job.followup);
+      log(job.followup
+        ? `安靜期間延後回訪 ${key}`
+        : `安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
       return false;
     }
     const sessionId = await ensureSession(key);
@@ -2328,7 +2379,9 @@ async function main() {
     }
     if (job.direct) startTyping(key, job.channel);
 
-    const prompt = await buildBatchPrompt(key, job);
+    const prompt = job.followup
+      ? { text: formatFollowupPrompt(job.followup), images: [], feedbackEntries: [] }
+      : await buildBatchPrompt(key, job);
     if (epoch !== epochOf(key)) {
       log(`整理批次期間會話已重置，丟棄 (${key})`);
       return false;
@@ -2379,7 +2432,9 @@ async function main() {
     }
     // prompt 真的進 DSH 了，反應區塊才算送達；失敗重試時還會再帶一次。
     reactionInbox.clear(key, prompt.feedbackEntries);
-    log(`已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}${job.dropped ? `，略過 ${job.dropped} 則` : ''}）`);
+    log(job.followup
+      ? `已投遞回訪 ${key}（${job.followup.minutes} 分鐘）`
+      : `已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}${job.dropped ? `，略過 ${job.dropped} 則` : ''}）`);
     if (job.direct && cfg.discord.ackMessage) await sendLong(key, cfg.discord.ackMessage).catch(() => {});
     return true;
   }
@@ -2568,6 +2623,45 @@ async function main() {
     return parseExtractionJson(text, { max: 5 });
   }
 
+  // ── 回訪（工作包 I） ──────────────────────────────────────────────────────
+  // 時間到了只送一個【回訪】提示；模型自己決定要不要說話，跟一般批次一樣走閘門。
+  let followupTimer = null;
+
+  function scheduleFollowupCheck() {
+    if (followupTimer) return;
+    followupTimer = setInterval(() => { void runFollowups(); }, 60_000);
+    followupTimer.unref?.();
+  }
+
+  async function runFollowups() {
+    if (!cfg.discord.followup.enabled) return;
+    for (const entry of followups.due()) {
+      // 沒有會話就沒得回訪，直接丟掉；安靜或回合還在跑就先留著，下一分鐘再看。
+      if (!sessions[entry.key]) { followups.remove(entry.id); continue; }
+      if (quietUntil(entry.key) || turnGate.isBusy(entry.key)) continue;
+      let channel;
+      try {
+        channel = await resolveChannel(entry.key);
+      } catch (error) {
+        // 頻道被刪、bot 被踢：留著只會每分鐘重試，直接丟掉。
+        followups.remove(entry.id);
+        log(`回訪失敗，放棄（${entry.key}）：${error?.message ?? error}`);
+        continue;
+      }
+      // 抓頻道是 async，期間可能開始了新回合、或 /reset 取消了這個回訪；
+      // 這裡到 enqueuePrompt 之間不能再 await。
+      if (turnGate.isBusy(entry.key) || !followups.remove(entry.id)) continue;
+      enqueuePrompt(entry.key, {
+        channel,
+        guildId: channel.guildId ?? null,
+        entries: [],
+        direct: false,
+        epoch: epochOf(entry.key),
+        followup: entry,
+      });
+    }
+  }
+
   // ── 每日頻道摘要（v2） ───────────────────────────────────────────────────
   let summaryTimer = null;
   let summaryRunning = false;
@@ -2742,6 +2836,10 @@ async function main() {
     const key = conversationKeyFor(ids);
     // 發言頻率：這則在 handleMessage 最前面就記，早於所有 return（含 // 與空訊息）。
     activity.record(key);
+    // 表情使用次數：同樣早於所有 return，// 訊息也算（那只是叫模型不要回，不是不存在）。
+    const usageCatalog = guildId ? emojiCatalogs.get(String(guildId)) : null;
+    if (cfg.discord.emoji.enabled && usageCatalog
+      && bumpEmojiUsage(emojiUsage, guildId, message.content, { entries: usageCatalog.entries }) > 0) markEmojiUsageDirty();
     const quietAt = quietUntil(key);
 
     const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
@@ -3069,6 +3167,7 @@ async function main() {
   agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: agentHandlers, log });
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
   scheduleSummaryCheck();
+  scheduleFollowupCheck();
 
   // ── 控制台 ───────────────────────────────────────────────────────────────
   /** 邀請連結：slash `/invite` 與控制台共用同一份權限清單。 */
@@ -3326,6 +3425,7 @@ async function main() {
     log(`收到 ${signal}，結束中…`);
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
     clearAllTtftTimers();

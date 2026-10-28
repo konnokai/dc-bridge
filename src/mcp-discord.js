@@ -194,6 +194,18 @@ tool(
 );
 
 tool(
+  'schedule_followup',
+  '排一個之後的「回訪」：時間到了 bridge 會給你一個提示，你再決定要不要說話（不是預先寫好直接送出）。用在「我等一下回來看結果」「晚點再確認」這種；做不到的事不要拿它敷衍。',
+  {
+    token: sessionToken,
+    minutes: z.number().int().min(5).max(180).describe('幾分鐘後回訪（5~180）'),
+    note: z.string().max(200).describe('要提醒自己什麼，例如「回來看比賽結果」'),
+  },
+  '/followup',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
   'search_emojis',
   '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {

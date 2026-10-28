@@ -87,6 +87,9 @@
         "hour": 4
       }
     },
+    "followup": {
+      "enabled": false
+    },
     "slang": {
       "enabled": false,
       "extractMinMessages": 20,

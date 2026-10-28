@@ -126,6 +126,7 @@ pm2 logs dc-bridge
 | `notes.maxChars` | 筆記注入區塊的字數上限，預設 600（100~3000） |
 | `notes.dailySummary.enabled` | 每天自動產生頻道摘要，預設 `false`（另開背景模型會話） |
 | `notes.dailySummary.hour` | 幾點之後才做當天摘要，預設 4（bridge 主機時區，0~23） |
+| `followup.enabled` | 回訪開關，預設 `false`（時間到了會多一個模型回合） |
 | `slang.enabled` | 黑話學習開關，預設 `false`（會把頻道文字送去模型） |
 | `slang.extractMinMessages` | 同一頻道累積幾則才抽一次，預設 20（5~200） |
 | `slang.extractCooldownMs` | 兩次抽取的最短間隔，預設 10 分鐘 |
@@ -401,7 +402,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 2. **模型自己查**：prompt 不附表情清單。模型想用表情時呼叫 `mcp__discord__search_emojis`
    用關鍵字查：當前伺服器 +6 分、名稱命中 +4、中文 bigram 關鍵字命中 +2，只回命中關鍵字的，
-   最多 `emoji.maxCandidates` 個、受 `emoji.maxChars` 限制；query 留空就列當前伺服器的。
+   最多 `emoji.maxCandidates` 個、受 `emoji.maxChars` 限制；query 留空就列當前伺服器的，
+   並按群友實際使用的次數排序（次數存在 `state/discord-emoji-usage.json`，只計伺服器頻道裡
+   出現過的自訂表情、同一則訊息同一個表情只算一次，不進 prompt）。
    貼圖另外用 `mcp__discord__search_stickers` 查：比對名稱、說明、tags，最多 30 張；
    query 留空或沒有符合的就列出全部（一個伺服器的貼圖不多，列全部比回「沒找到」好）。
    以前兩種混在同一個工具裡，模型想找貼圖卻常只看到表情。
@@ -505,6 +508,20 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 }
 ```
 
+## 回訪（選用）
+
+模型自己排「N 分鐘後回來看」（`schedule_followup`，5~180 分鐘）。時間到了 bridge 送一個只有
+`【回訪】你 N 分鐘前說要回來看：…` 的回合，模型再決定要不要說話；沒有預先寫好、時間到就直接送出的訊息。
+
+- **限制**：一個會話同時最多 2 個、每天 6 個；`/reset` 取消；安靜期間（`set_quiet`）延後到安靜結束。
+- **不進頻道**：回訪本身不是訊息，模型不說話就什麼都不會出現。
+- **狀態只在記憶體**：bridge 重啟就清掉，所以不支援以天計的提醒。
+- **預設關閉**：`followup.enabled` 打開後 `schedule_followup` 才有作用；關著時呼叫會回錯誤，也不會有排程。
+
+```json
+"followup": { "enabled": true }
+```
+
 ## 黑話學習（選用）
 
 從允許的頻道收集語料 → 學習會話抽候選 → 管理員在控制台確認 → 下一則 prompt 才看得到。
@@ -606,6 +623,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__discord__set_quiet`（`minutes`、`reason` 可省略）：讓自己安靜 1~120 分鐘。這段時間**沒叫 bot** 的頻道訊息
   不送進模型（省 token），叫 bot 的照常；黑話語料照收。`minutes=0` 提早結束。
   安靜結束後的下一批會重新帶一次頻道上下文。狀態只在記憶體，bridge 重啟就清掉
+- `mcp__discord__schedule_followup`（`minutes`、`note`）：排一個回訪，`minutes` 5~180。
+  時間到了 bridge 送一個只有【回訪】提示的回合，模型再決定要不要說話（不是預先寫好直接送出）。
+  一個會話同時最多 2 個、每天 6 次；`/reset` 取消；安靜期間延後到安靜結束。狀態只在記憶體，
+  bridge 重啟就清掉
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
 - `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字；

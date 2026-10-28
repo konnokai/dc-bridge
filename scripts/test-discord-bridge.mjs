@@ -53,7 +53,7 @@ import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '.
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
-import { formatEmojiLine, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
+import { bumpEmojiUsage, countEmojiTags, formatEmojiLine, loadEmojiUsage, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
   AGENT_MAX_CONTENT,
   REACT_PER_TURN_LIMIT,
@@ -87,7 +87,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note',
@@ -107,6 +107,7 @@ console.log('## 1. 設定收斂');
     '頻道筆記預設關閉，注入 5 條、600 字');
   ok(cfg.notes.dailySummary.enabled === false && cfg.notes.dailySummary.hour === 4,
     '每日摘要預設關閉，4 點後才做');
+  ok(cfg.followup.enabled === false, '回訪預設關閉');
   ok(cfg.questionTimeoutMs === 300_000, '提問等待預設 5 分鐘');
   ok(cfg.autoCompactTokens === 80_000, '自動壓縮門檻預設 8 萬');
   ok(normalizeDiscordConfig({ autoCompactTokens: 0 }).autoCompactTokens === 0, 'autoCompactTokens: 0 = 關閉');
@@ -141,7 +142,8 @@ console.log('## 1. 設定收斂');
     }
     ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
-    ok(others.every((name) => name === 'mcp__discord__set_quiet' || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
+    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__schedule_followup']);
+    ok(others.every((name) => silent.has(name) || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
     ok(SLANG_TOOL_NAMES.every((name) => describeToolCall(name, '{}') === null), '黑話工具不列進度（背景筆記）');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
 
@@ -1250,6 +1252,7 @@ console.log('## 7e. Discord MCP 發送工具');
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
       set_quiet: ['/quiet', { minutes: 30 }],
+      schedule_followup: ['/followup', { minutes: 30, note: '回來看結果' }],
       search_emojis: ['/emojis', { query: '笑' }],
       search_stickers: ['/stickers', { query: '貓' }],
       read_history: ['/history', { limit: 5 }],
@@ -1774,6 +1777,34 @@ console.log('## 11. 表情目錄與代換');
   ok(retrieveEmojis(catalogs, { guildId: '111', text: '完全無關', k: 10, maxChars: 1000 }).length === 0, '都沒命中就回空的');
   const browse = retrieveEmojis(catalogs, { guildId: '111', text: '', k: 10, maxChars: 1000 });
   ok(browse.length === 2 && browse.every((e) => e.guildId === '111'), '查詢字留空就列本服的');
+  const usage = new Map([['e2', 9]]);
+  const byUsage = retrieveEmojis(catalogs, { guildId: '111', text: '', k: 10, maxChars: 1000, usage });
+  ok(byUsage[0].id === 'e2', 'query 留空時常用的排前面');
+  ok(retrieveEmojis(catalogs, { guildId: '111', text: '', k: 10, maxChars: 1000, usage: new Map([['e3', 99]]) })
+    .map((e) => e.id).join() === browse.map((e) => e.id).join(), '別的伺服器的使用次數不影響本服排序');
+  const keyword = retrieveEmojis(catalogs, { guildId: '111', text: '笑', k: 10, maxChars: 1000, usage });
+  ok(keyword[0].id === 'e1', '有查詢字時使用次數不影響命中排序');
+  ok(countEmojiTags('笑 <:kekw:111111111111111111> 又 <a:pat:222222222222222222> <:kekw:111111111111111111>').get('111111111111111111') === 2,
+    '數訊息裡的自訂表情');
+  ok(countEmojiTags('沒有表情').size === 0, '沒有表情回空的');
+  const usageMap = new Map();
+  ok(bumpEmojiUsage(usageMap, '111', '<:kekw:111111111111111111> <:kekw:111111111111111111>') === 1
+    && usageMap.get('111').get('111111111111111111') === 1, '一則訊息同一個表情只算一次');
+  bumpEmojiUsage(usageMap, '111', '<:kekw:111111111111111111>');
+  ok(usageMap.get('111').get('111111111111111111') === 2, '同一表情累加');
+  ok(bumpEmojiUsage(usageMap, null, '<:kekw:111111111111111111>') === 0 && usageMap.size === 1, '沒有伺服器不記');
+  const withCatalog = new Map();
+  ok(bumpEmojiUsage(withCatalog, '111', '<:kekw:111111111111111111> <:fake:999999999999999999>', { entries: [{ id: '111111111111111111' }] }) === 1
+    && withCatalog.get('111').size === 1 && withCatalog.get('111').has('111111111111111111'), '只記目錄裡有的表情');
+  const usageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-emoji-usage-'));
+  const usageFile = path.join(usageDir, 'usage.json');
+  saveEmojiUsage(usageFile, new Map([['111', new Map([['e1', 4]])]]), { catalogs });
+  const loadedUsage = loadEmojiUsage(usageFile);
+  ok(loadedUsage.get('111').get('e1') === 4, '使用次數存檔再讀回來');
+  ok(loadEmojiUsage(path.join(usageDir, 'nope.json')).size === 0, '沒有檔案回空的');
+  saveEmojiUsage(usageFile, new Map([['111', new Map([['e1', 4], ['e9', 1]])]]), { catalogs });
+  ok(!loadEmojiUsage(usageFile).get('111').has('e9'), '存檔時丟掉目錄裡已經沒有的表情');
+  fs.rmSync(usageDir, { recursive: true, force: true });
   ok(formatEmojiLine({ name: 'kekw', description: '大笑', usage: '好笑時' }) === 'kekw：大笑（好笑時）', '一行的格式');
 
   ok(substituteEmojiNames('笑死 :kekw:', { guildId: '111', catalogs }) === '笑死 <:kekw:e1>',
