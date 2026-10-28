@@ -93,6 +93,7 @@ pm2 logs dc-bridge
 | `maxMessageChars` | 單則訊息上限，200 ~ 2000，預設 2000 |
 | `questionTimeoutMs` | 等提問／審批回答的時間，預設 300000（5 分鐘） |
 | `autoCompactTokens` | 一輪結束時 context（上一次請求的 totalTokens）超過這個數，橋接就替會話送 `/compact`，預設 80000；`0` = 關閉。同一會話 10 分鐘內最多送一次 |
+| `ttftTimeoutMs` | 模型多久沒吐出第一個 token 就取消這一輪，預設 30000（5~120 秒）；`0` = 關閉。已經開始呼叫工具就不受這個限制 |
 | `typing` | 送出「正在輸入」提示，預設 `true` |
 | `sendDelayMs` | 連續送出的間隔，預設 300 毫秒 |
 | `sessionDir` | 會話工作目錄，預設 `<repo>/state/discord-agents` |
@@ -136,6 +137,13 @@ pm2 logs dc-bridge
 
 > **id 一律寫字串。** Discord 的 snowflake 是 19 位數字，寫成 JSON 數字會在 `JSON.parse` 就先掉精度，
 > 橋接會直接報錯而不是幫你轉。
+
+### 模型想太久（TTFT）
+
+- 從 `turn/start` 開始計時；`ttftTimeoutMs` 內沒收到模型的第一個串流 chunk、完整訊息或 `tool/call`，
+  橋接就送 `session/cancel` 取消這一輪。直接叫 bot 的頻道會收到「想太久，先取消」的提示。
+- 只要模型開始輸出或呼叫工具，計時器就停：工具跑多久都不會被這個機制取消，讓它把該輪做完。
+- 自動壓縮的 `/compact` 不計時。
 
 `dsh` 段沿用 QQ 版的欄位（`baseUrl`、`provider`、`model`、`reasoningEffort`、`authToken`、`allowRemote`）。
 預設是 `opencode-go` / `deepseek-v4.1-flash`（橋接的內建預設）。實際可用的 provider/model 以 DSH 的
@@ -528,17 +536,18 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   貼圖、附件清單、連結預覽（embed 的標題、說明、網域、欄位）、投票（題目、選項、票數）、回覆的是哪一則、reaction 統計，
   再附上圖片（附件、貼圖、連結預覽的圖，最多 `media.maxCount` 張，走同一套下載與縮圖）。
   回覆的對象只讀同一個頻道的一般回覆；轉發只顯示轉發的文字，不讀別的頻道。連結預覽的圖只抓 Discord 代理過的網址
-- `mcp__discord__search_history`（`query`、`from`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道最近 500 則裡找訊息。
+- `mcp__discord__search_history`（`query`、`from`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道最近 300 則裡找訊息。
   `query` 用空白分開的每個詞都要出現（不分大小寫、全形半形），比對文字、貼圖名稱、連結預覽標題；`from` 給某人說過的一則 #編號，只找他的。
-  Discord 的訊息搜尋 API 這裡沒用：這是往回一頁一頁掃（每頁 100 則、最多 5 頁），私聊也能用。最多回 20 則，一輪最多搜 2 次。
-  沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
+  Discord 的訊息搜尋 API 這裡沒用：這是往回一頁一頁掃（每頁 100 則、最多 3 頁），私聊也能用。最多回 20 則。
+  和 `read_history` 合計一輪最多 3 次，超過回 429；沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
 - `mcp__discord__create_poll`（`question`、`answers`、`hours`／`multi` 可省略）：在這個頻道發一個 Discord 投票。
   題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。
   文字過敏感資訊閘門，佔「一輪 5 則」的名額。bot 沒有「建立投票」權限時回錯誤
 - `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
-- `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字
+- `mcp__discord__read_history`（`before`、`limit` 都可省略）：往前讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字；
+  和 `search_history` 合計一輪最多 3 次
 - `mcp__discord__user_info`（`message`）：查那則訊息發言者的顯示名稱、全域名稱、使用者名稱、身分組（含最高身分組顏色）、
   加入時間、帳號建立時間、加成起始日、禁言到期時間，以及記憶；另外附上頭像圖片（有伺服器專屬頭像就用那張，128px，
   經 `media` 設定的縮圖流程）。頭像抓不到時只少圖，文字照回。個人簡介、代名詞 Discord 不給 bot 讀；線上狀態要 Presence 特權 intent，沒開
@@ -588,7 +597,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   遇到 `/reset` 也會被擋下來，不會送進新的會話。
 - **敏感資訊閘門**：跟舊版一樣，命中本機路徑／憑證／已知令牌的內容整條攔掉，工具會回錯誤給模型，
   模型不會誤以為已送出。
-- **一輪最多 5 則**（訊息、貼圖、投票、修改合計），**reaction 最多 3 個**，**收回最多 2 則**，**搜尋最多 2 次**，**記憶寫入最多 3 次**；
+- **一輪最多 5 則**（訊息、貼圖、投票、修改合計），**reaction 最多 3 個**，**收回最多 2 則**，**歷史查詢最多 3 次（`read_history` + `search_history` 合計）**，**記憶寫入最多 3 次**；
   同一會話的訊息照順序送，超過 2000 字由橋接切段。
 - **改和收回只認自己送的**：模型被 prompt injection 也改不了審批提示（例如改成「回通過繼續」騙管理員），也刪不掉別人的訊息。
   不用 discord.js 的 `deletable`：bot 有 Manage Messages 時它對別人的訊息也是 true。

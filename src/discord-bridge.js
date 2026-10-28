@@ -339,6 +339,9 @@ async function main() {
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
   const turnUsers = new Map(); // key -> 目前回合的觸發者
   const turnTriggerRecorded = new Set(); // key -> 這個回合已經記過觸發
+  const ttftTimers = new Map(); // sessionId -> { timer, key, done }：等第一個 token 的計時器
+  const ttftTimeouts = new Map(); // key -> 被 TTFT 超時取消的門檻（ms），turn/end 時拿來提示
+  const ttftAbandonedTurns = new Map(); // key -> Set(turn)：保底放行後，等遲到的 turn/end 時不要重放 gate
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
@@ -429,6 +432,8 @@ async function main() {
     token: cfg.dsh.authToken,
     tokenExplicit: cfg.dsh.authTokenExplicit,
     allowRemote: cfg.dsh.allowRemote,
+    // 只有 Discord 橋接要算 TTFT；QQ 不需要，別讓它多收一堆串流幀。
+    assistantStream: true,
   });
   if (!api.hasAuth()) {
     log(`⚠️ 讀不到 DSH 的鑑權材料（${cfg.dsh.baseUrl}）。確認 ~/.dsh/.credentials.yaml 存在，或設定 dsh.authToken`);
@@ -651,6 +656,10 @@ async function main() {
     stopTyping(key);
     finishProgress(key);
     hideCompactNotice(key);
+    const activeSession = sessions[key];
+    if (activeSession) clearTtftTimer(activeSession);
+    ttftTimeouts.delete(key);
+    ttftAbandonedTurns.delete(key);
     epochs.set(key, epochOf(key) + 1);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
     batcher.drop(key);
@@ -761,7 +770,7 @@ async function main() {
   const toolError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
   const HISTORY_MAX = 50;
   const HISTORY_MAX_CHARS = 6000;
-  const SEARCH_PAGES = 5; // search_history 往回掃幾頁（每頁 100 則）
+  const SEARCH_PAGES = 3; // search_history 往回掃幾頁（每頁 100 則）
   const SEARCH_RESULTS_MAX = 20;
   const VIEW_TEXT_MAX = 1500;
 
@@ -1010,24 +1019,25 @@ async function main() {
       };
     },
     async history(body) {
-      const { key, channel } = await agentSender.resolve(body.token);
-      const limit = Math.min(HISTORY_MAX, Math.max(1, Number(body.limit) || 20));
-      const before = textArg(body.before);
-      const beforeId = before ? messageRefs.lookup(key, before) : null;
-      if (before && !beforeId) throw toolError(`找不到訊息 ${before}：before 要用出現過的 #編號`, 404);
-      const fetched = await channel.messages.fetch({ limit, ...(beforeId ? { before: beforeId } : {}) });
-      const lines = [];
-      let used = 0;
-      // 從新往舊裝，超過字數上限就停，再倒回舊→新。
-      for (const message of fetched.values()) {
-        const line = historyLine(key, message);
-        if (used + line.length > HISTORY_MAX_CHARS) break;
-        lines.push(line);
-        used += line.length + 1;
-      }
-      return { text: lines.length ? lines.reverse().join('\n') : '沒有更早的訊息了。' };
+      return agentSender.history(body.token, async ({ key, channel }) => {
+        const limit = Math.min(HISTORY_MAX, Math.max(1, Number(body.limit) || 20));
+        const before = textArg(body.before);
+        const beforeId = before ? messageRefs.lookup(key, before) : null;
+        if (before && !beforeId) throw toolError(`找不到訊息 ${before}：before 要用出現過的 #編號`, 404);
+        const fetched = await channel.messages.fetch({ limit, ...(beforeId ? { before: beforeId } : {}) });
+        const lines = [];
+        let used = 0;
+        // 從新往舊裝，超過字數上限就停，再倒回舊→新。
+        for (const message of fetched.values()) {
+          const line = historyLine(key, message);
+          if (used + line.length > HISTORY_MAX_CHARS) break;
+          lines.push(line);
+          used += line.length + 1;
+        }
+        return { text: lines.length ? lines.reverse().join('\n') : '沒有更早的訊息了。' };
+      });
     },
-    search: (body) => agentSender.search(body.token, async ({ key, channel }) => {
+    search: (body) => agentSender.history(body.token, async ({ key, channel }) => {
       const terms = searchTerms(body.query);
       const fromRef = textArg(body.from);
       const authorId = fromRef ? (await fetchByRef(key, fromRef)).author?.id : null;
@@ -1036,7 +1046,7 @@ async function main() {
       const found = [];
       let scanned = 0;
       let before = null;
-      // 往回一頁一頁掃；cache: false 免得 500 則塞進快取。只登記找到的編號，不然會把 prompt 裡的編號擠掉。
+      // 往回一頁一頁掃；cache: false 免得 300 則塞進快取。只登記找到的編號，不然會把 prompt 裡的編號擠掉。
       for (let page = 0; page < SEARCH_PAGES && found.length < limit; page += 1) {
         const fetched = await channel.messages.fetch({ limit: 100, cache: false, ...(before ? { before } : {}) });
         for (const message of fetched.values()) {
@@ -1530,6 +1540,75 @@ async function main() {
     }
   }
 
+  /**
+   * 等第一個 token 的計時器。只從 turn/start 開始算，而且是橋接自己排進去的批次；
+   * 自動壓縮的 `/compact` 不算。收到 assistant/first-token（DSH 串流第一個 chunk）、
+   * assistant/message 或 tool/call 就停錶：模型已經開始輸出或跑工具，後面多久都不歸這個機制管。
+   */
+  function clearTtftTimer(sessionId) {
+    const entry = ttftTimers.get(sessionId);
+    if (!entry) return;
+    entry.done = true;
+    clearTimeout(entry.timer);
+    ttftTimers.delete(sessionId);
+  }
+
+  function clearAllTtftTimers() {
+    for (const entry of ttftTimers.values()) {
+      entry.done = true;
+      clearTimeout(entry.timer);
+    }
+    ttftTimers.clear();
+    ttftTimeouts.clear();
+    ttftAbandonedTurns.clear();
+  }
+
+  function armTtftTimer(key, sessionId, turn) {
+    clearTtftTimer(sessionId);
+    const timeoutMs = cfg.discord.ttftTimeoutMs;
+    if (!timeoutMs) return;
+    const entry = { key, done: false, startedAt: Date.now(), timer: null };
+    entry.timer = setTimeout(() => {
+      if (entry.done) return;
+      entry.done = true;
+      ttftTimers.delete(sessionId);
+      if (sessions[key] !== sessionId) return;
+      log(`TTFT 超過 ${Math.round(timeoutMs / 1000)} 秒，取消本輪（${key}）`);
+      ttftTimeouts.set(key, timeoutMs);
+      let releaseTimer = null;
+      void api.cancelSession(sessionId).catch((error) => {
+        ttftTimeouts.delete(key);
+        if (releaseTimer) clearTimeout(releaseTimer);
+        // 取消失敗時不要放行 gate：回合多半還在跑，放行會讓兩批重疊。
+        // 真的卡住還有 turnGate 的 5 分鐘保險絲。
+        log(`取消超時回合失敗（${key}）：${error?.message ?? error}`);
+      });
+      // 取消成功但 DSH 沒送 turn/end 時，別讓頻道卡到 5 分鐘保險絲。
+      // 一定要確認還是同一個 session、而且這次超時還沒被 turn/start／reset／斷線清掉；
+      // 否則會放到下一個回合的 gate。
+      releaseTimer = setTimeout(() => {
+        if (sessions[key] !== sessionId || !ttftTimeouts.has(key)) return;
+        ttftTimeouts.delete(key);
+        log(`取消後等不到 turn/end，先放行（${key}）`);
+        if (turn !== undefined && turn !== null) {
+          const abandoned = ttftAbandonedTurns.get(key) ?? new Set();
+          abandoned.add(turn);
+          ttftAbandonedTurns.set(key, abandoned);
+        }
+        collectors.delete(sessionId);
+        stopTyping(key);
+        finishProgress(key);
+        turnGate.release(key);
+        if (turnDirect.get(key) ?? defaultDirect(key)) {
+          void sendLong(key, `⚠️ 模型這次想太久（超過 ${Math.round(timeoutMs / 1000)} 秒），先取消這一輪；可以再問一次。`).catch(() => {});
+        }
+      }, 5000);
+      releaseTimer.unref?.();
+    }, timeoutMs);
+    entry.timer.unref?.();
+    ttftTimers.set(sessionId, entry);
+  }
+
   async function handleSessionEvent(frame) {
     const event = frame.event;
     if (!event?.type) return;
@@ -1554,11 +1633,29 @@ async function main() {
     const key = reverse.get(frame.sessionId);
     if (!key) return;
 
+    // 模型已經開始輸出或跑工具、或這一輪結束了：停掉等第一個 token 的計時器。
+    if (event.type === 'assistant/first-token') {
+      const entry = ttftTimers.get(frame.sessionId);
+      if (entry) {
+        const ms = Date.now() - entry.startedAt;
+        if (ms > 10_000) log(`TTFT ${(ms / 1000).toFixed(1)} 秒（${key}）`);
+      }
+    }
+    if (event.type === 'assistant/first-token' || event.type === 'assistant/chunk' || event.type === 'assistant/message'
+      || event.type === 'tool/call' || event.type === 'turn/end' || event.type === 'compaction/start') {
+      clearTtftTimer(frame.sessionId);
+    }
+    if (event.type === 'tool/call' && ttftTimeouts.has(key)) {
+      log(`TTFT 已取消，但工具剛開始跑（${key}）；沿用取消`);
+    }
+
     // 新的一輪開始：清掉上一輪的發送紀錄。
     if (event.type === 'turn/start') {
+      clearTtftTimer(frame.sessionId);
       agentSender.startTurn(key);
       memoryWrites.delete(key);
       slangWrites.delete(key);
+      ttftTimeouts.delete(key);
     }
     if (event.type === 'compaction/start') showCompactNotice(key);
     if (event.type === 'compaction/end') {
@@ -1570,15 +1667,23 @@ async function main() {
     // 任何 turn/end 都放行下一批，包括沒對到 turn/start 的那種；不然頻道要卡到保險計時器。
     // context 太大時先壓縮再放行：/compact 要會話閒著才跑得動。
     if (event.type === 'turn/end') {
-      const compact = shouldAutoCompact({
-        tokens: contextTokens.get(frame.sessionId),
-        threshold: cfg.discord.autoCompactTokens,
-        lastAt: compactedAt.get(frame.sessionId) ?? 0,
-        now: Date.now(),
-        cooldownMs: AUTO_COMPACT_COOLDOWN_MS,
-      });
-      if (compact) void autoCompact(key, frame.sessionId);
-      else turnGate.release(key);
+      const abandoned = ttftAbandonedTurns.get(key);
+      if (abandoned?.has(event.data?.turn)) {
+        abandoned.delete(event.data.turn);
+        if (abandoned.size === 0) ttftAbandonedTurns.delete(key);
+        // 5 秒保底已經放行過這一輪；遲到的 turn/end 不能再放掉下一批的 gate。
+        log(`略過遲到的 turn/end（${key}，turn ${event.data.turn}）`);
+      } else {
+        const compact = shouldAutoCompact({
+          tokens: contextTokens.get(frame.sessionId),
+          threshold: cfg.discord.autoCompactTokens,
+          lastAt: compactedAt.get(frame.sessionId) ?? 0,
+          now: Date.now(),
+          cooldownMs: AUTO_COMPACT_COOLDOWN_MS,
+        });
+        if (compact) void autoCompact(key, frame.sessionId);
+        else turnGate.release(key);
+      }
     }
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
@@ -1604,10 +1709,13 @@ async function main() {
       if (missedStart) collector.push({ type: 'turn/start', data: { turn } });
       collectors.set(frame.sessionId, collector);
       const queued = pendingDirect.get(key);
-      turnDirect.set(key, queued?.length ? queued.shift() : defaultDirect(key));
+      const hadQueued = Boolean(queued?.length);
+      turnDirect.set(key, hadQueued ? queued.shift() : defaultDirect(key));
       const queuedUsers = pendingUsers.get(key);
       turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
       turnTriggerRecorded.delete(key);
+      // 只有橋接自己排進去的批次才等第一個 token；自動壓縮的 /compact 不算。
+      if (event.type === 'turn/start' && hadQueued) armTtftTimer(key, frame.sessionId, turn);
     }
     const ended = collector ? collector.push(event) : null;
     if (!ended) {
@@ -1619,7 +1727,10 @@ async function main() {
       // 進度不分有沒有人叫：它自己去搜尋時，通常接著就會開口。沒用工具的回合不會貼任何東西。
       if (event.type === 'turn/start') startProgress(key);
       // 沒有對應 turn/start 的 turn/end（重連後補發）只需清掉殘留，不能當成新回覆。
-      if (event.type === 'turn/end') collectors.delete(frame.sessionId);
+      if (event.type === 'turn/end') {
+        collectors.delete(frame.sessionId);
+        ttftTimeouts.delete(key);
+      }
       return;
     }
     collectors.delete(frame.sessionId);
@@ -1632,6 +1743,8 @@ async function main() {
     turnTriggerRecorded.delete(key);
 
     const reason = ended.reason ?? {};
+    const ttftMs = ttftTimeouts.get(key);
+    ttftTimeouts.delete(key);
     if (reason.kind === 'completed') {
       const { sent, reacted, removed, attempted } = agentSender.finishTurn(key);
       // 只按 reaction 或只收回訊息也算回應了，不是「忘了用工具」。
@@ -1649,7 +1762,13 @@ async function main() {
       if (direct) await sendLong(key, `⚠️ agent 處理出錯：${message}`);
       return;
     }
-    if (reason.kind === 'aborted' && direct) await sendLong(key, '⏹️ 已停止');
+    if (reason.kind === 'aborted') {
+      if (direct) {
+        await sendLong(key, ttftMs
+          ? `⚠️ 模型這次想太久（超過 ${Math.round(ttftMs / 1000)} 秒），先取消這一輪；可以再問一次。`
+          : '⏹️ 已停止');
+      }
+    }
   }
 
   async function handleFrame(frame) {
@@ -1704,6 +1823,7 @@ async function main() {
         pendingUsers.clear();
         turnUsers.clear();
         turnTriggerRecorded.clear();
+        clearAllTtftTimers();
         // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
         turnGate.releaseAll();
         for (const key of [...typingTimers.keys()]) stopTyping(key);
@@ -2803,6 +2923,7 @@ async function main() {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
+    clearAllTtftTimers();
     try { await agentApiHandle?.close(); } catch { /* 已經關了 */ }
     try { await consoleHandle?.close(); } catch { /* 已經關了 */ }
     try { await client.destroy(); } catch { /* 已斷線就算了 */ }

@@ -55,7 +55,7 @@ import {
   REACT_PER_TURN_LIMIT,
   SEND_PER_TURN_LIMIT,
   DELETE_PER_TURN_LIMIT,
-  SEARCH_PER_TURN_LIMIT,
+  HISTORY_PER_TURN_LIMIT,
   createAgentSender,
   createMessageRefs,
   messageRefOf,
@@ -178,6 +178,10 @@ console.log('## 1. 設定收斂');
   ok(normalizeDiscordConfig({ maxMessageChars: 99999 }).maxMessageChars === 2000, 'maxMessageChars 上限收斂到 2000');
   ok(normalizeDiscordConfig({ maxMessageChars: 1 }).maxMessageChars === 200, 'maxMessageChars 下限收斂到 200');
   ok(normalizeDiscordConfig({ questionTimeoutMs: 1 }).questionTimeoutMs === 10_000, 'questionTimeoutMs 下限收斂');
+  ok(cfg.ttftTimeoutMs === 30_000, 'TTFT 逾期預設 30 秒');
+  ok(normalizeDiscordConfig({ ttftTimeoutMs: 0 }).ttftTimeoutMs === 0, 'ttftTimeoutMs: 0 = 關閉');
+  ok(normalizeDiscordConfig({ ttftTimeoutMs: 1 }).ttftTimeoutMs === 5_000, 'ttftTimeoutMs 太小拉到下限 5 秒');
+  ok(normalizeDiscordConfig({ ttftTimeoutMs: 999999 }).ttftTimeoutMs === 120_000, 'ttftTimeoutMs 太大拉到上限 120 秒');
 
   throws(() => normalizeDiscordConfig({ ownerIds: '12345' }), /必須是陣列/, 'ownerIds 不是陣列要拋錯');
   throws(() => normalizeDiscordConfig({ ownerIds: [123456789012345678] }), /必須是字串/, '數字 ID 要拒絕（JSON 已掉精度）');
@@ -828,12 +832,12 @@ console.log('## 7d2a. 改、收回、投票、搜尋（只動自己送的）');
 
   sender.startTurn('ch:100');
   const scanKey = async ({ key }) => key;
-  await rejects(sender.search(tokenA, async () => { throw new Error('query 和 from 至少要給一個'); }), /至少/, '搜尋參數錯回錯誤');
-  const searches = await Promise.allSettled(Array.from({ length: SEARCH_PER_TURN_LIMIT + 1 }, () => sender.search(tokenA, scanKey)));
-  ok(searches.filter((r) => r.status === 'fulfilled').length === SEARCH_PER_TURN_LIMIT, `一輪最多搜尋 ${SEARCH_PER_TURN_LIMIT} 次（參數錯的那次不佔名額）`);
+  await rejects(sender.history(tokenA, async () => { throw new Error('query 和 from 至少要給一個'); }), /至少/, '搜尋參數錯回錯誤');
+  const searches = await Promise.allSettled(Array.from({ length: HISTORY_PER_TURN_LIMIT + 1 }, () => sender.history(tokenA, scanKey)));
+  ok(searches.filter((r) => r.status === 'fulfilled').length === HISTORY_PER_TURN_LIMIT, `一輪最多翻歷史 ${HISTORY_PER_TURN_LIMIT} 次（參數錯的那次不佔名額）`);
   ok(searches.find((r) => r.status === 'fulfilled')?.value === 'ch:100', '搜尋拿到令牌自己的頻道');
   sender.startTurn('ch:100');
-  ok(await sender.search(tokenA, scanKey) === 'ch:100', '新的一輪搜尋次數歸零');
+  ok(await sender.history(tokenA, scanKey) === 'ch:100', '新的一輪歷史查詢次數歸零');
 }
 
 console.log('## 7d2b. 訊息編號（#ref）');

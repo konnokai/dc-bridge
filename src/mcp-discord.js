@@ -189,7 +189,7 @@ tool(
 
 tool(
   'read_history',
-  '往前讀這個頻道更早的訊息（被問到之前的事、或想知道前面在聊什麼時用）。只能讀目前這個頻道。',
+  '往前讀這個頻道更早的訊息（被問到之前的事、或想知道前面在聊什麼時用）。只能讀目前這個頻道；和 search_history 合計一輪最多 3 次。',
   {
     token: sessionToken,
     before: messageRef('從哪一則往前讀，省略就從最新的開始').optional(),
@@ -201,7 +201,7 @@ tool(
 
 tool(
   'search_history',
-  '在這個頻道最近 500 則裡找訊息：query 的每個詞都要出現；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。一輪最多 2 次。',
+  '在這個頻道最近 300 則裡找訊息：query 的每個詞都要出現；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。和 read_history 合計一輪最多 3 次；長時間的懶人包不要硬翻，先請對方縮小範圍。',
   {
     token: sessionToken,
     query: z.string().optional().describe('關鍵字，用空白分開，每個都要出現'),

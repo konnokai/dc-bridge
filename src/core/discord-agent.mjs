@@ -26,8 +26,8 @@ export const REACT_PER_TURN_LIMIT = 3;
 /** 收回一輪最多 2 則：被 prompt injection 也洗不掉自己一整串發言。 */
 export const DELETE_PER_TURN_LIMIT = 2;
 
-/** search_history 一輪最多 2 次：每次往回掃最多 500 則，連搜會一直打 Discord API。 */
-export const SEARCH_PER_TURN_LIMIT = 2;
+/** read_history + search_history 一輪合計最多 3 次：每次都可能掃幾百則，連翻會卡住同一個頻道。 */
+export const HISTORY_PER_TURN_LIMIT = 3;
 
 /** 每個頻道記住最近幾則「模型自己用工具送出的」訊息；改和收回只認這些。 */
 const OWNED_PER_KEY = 200;
@@ -131,10 +131,10 @@ export function createAgentSender({
   const tokens = new Map(); // sessionId -> 會話令牌（只在記憶體，橋接重啟就換）
   const chains = new Map(); // key -> 串行化（同一輪的多個 tool call 不搶順序）
   const sentCounts = new Map(); // key -> 這一輪已經送出幾則
-  const usedCounts = new Map(); // key -> { react, remove, search }：這一輪各用了幾次
+  const usedCounts = new Map(); // key -> { react, remove, history }：這一輪各用了幾次
   const attempted = new Set(); // key -> 這一輪有沒有試過呼叫發送工具
   const owned = new Map(); // key -> Set(訊息 id)：模型自己用工具送出的，插入順序就是新舊順序
-  const usedLimits = { react: reactLimit, remove: DELETE_PER_TURN_LIMIT, search: SEARCH_PER_TURN_LIMIT };
+  const usedLimits = { react: reactLimit, remove: DELETE_PER_TURN_LIMIT, history: HISTORY_PER_TURN_LIMIT };
 
   function tokenFor(sessionId) {
     let value = tokens.get(sessionId);
@@ -225,7 +225,7 @@ export function createAgentSender({
 
   /** 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。 */
   async function withQuota(key, kind, label, action) {
-    const counts = usedCounts.get(key) ?? { react: 0, remove: 0, search: 0 };
+    const counts = usedCounts.get(key) ?? { react: 0, remove: 0, history: 0 };
     usedCounts.set(key, counts);
     if (counts[kind] >= usedLimits[kind]) throw statusError(`這一輪已經${label} ${usedLimits[kind]} 次，不能再${label}`, 429);
     counts[kind] += 1;
@@ -290,10 +290,10 @@ export function createAgentSender({
     return { key };
   }
 
-  /** search_history 的門：跟唯讀工具一樣過 resolve，整個搜尋佔一次名額；參數錯或 Discord 出錯就退回名額。 */
-  async function search(token, scan) {
+  /** read_history／search_history 的門：同一輪合計最多 3 次；參數錯或 Discord 出錯就退回名額。 */
+  async function history(token, scan) {
     const resolved = await resolve(token);
-    return withQuota(resolved.key, 'search', '搜尋', () => scan(resolved));
+    return withQuota(resolved.key, 'history', '翻歷史紀錄', () => scan(resolved));
   }
 
   const clearKey = (key) => { sentCounts.delete(key); usedCounts.delete(key); attempted.delete(key); };
@@ -306,7 +306,7 @@ export function createAgentSender({
     remove,
     poll,
     react,
-    search,
+    history,
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },
     startTurn: clearKey,

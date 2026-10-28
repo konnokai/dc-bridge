@@ -337,6 +337,7 @@ export class NodeApiClient extends AbstractApiClient {
     this._secret = undefined;
     // token 是用户显式配置的（true）还是从日志猜的（false）。猜来的不优先于离线铸造。
     this.tokenExplicit = this.auth.tokenExplicit === true;
+    this.assistantStream = this.auth.assistantStream === true;
     // 上次用的鉴权策略（'minted' | 'token' | null）与「改用 launch token」的偏好。
     // _preferToken **只在铸造出来的 Cookie 真的被 401 时**才置位（见 _doFetchWithAuth）：
     // invalidateAuth() 也会被 remote.mux 流结束（WS 抖动 / DSH 重启）调用，那是常态事件，
@@ -465,6 +466,15 @@ export class NodeApiClient extends AbstractApiClient {
 
   async doFetch(input, init) {
     return this._doFetchWithAuth(input, init, false);
+  }
+
+  /**
+   * 只取消目前這一輪，保留 inbox 佇列；給「模型想太久」這類超時用。
+   */
+  async cancelSession(sessionId, { timeoutMs = 8000 } = {}) {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId is required');
+    const response = await this.callUnary('session/cancel', { sessionId }, AbortSignal.timeout(timeoutMs));
+    if (!response.result?.ok && response.result?.error?.code !== 'session/not-found') unwrap(response, 'session/cancel');
   }
 
   /**
@@ -729,6 +739,7 @@ export class NodeApiClient extends AbstractApiClient {
     const followed = new Set();
     const streamToSession = new Map();
     const sessionToStream = new Map();
+    const firstChunks = new Set(); // `${sessionId}:${attemptId}`：這次 attempt 已經送過 first-token 事件
     const enqueue = (item) => {
       inbox.push(item);
       wake?.();
@@ -757,6 +768,9 @@ export class NodeApiClient extends AbstractApiClient {
             args: {
               request: {
                 address: { kind: 'session', sessionId },
+                // 需要 process-local 的 assistant 串流幀才能算真正的 TTFT；
+                // 不開的话只有回合結束的 assistant/message，分不出「想很久」和「回很長」。
+                ...(this.assistantStream ? { assistantStream: true } : {}),
                 // 开场快照的历史深度。默认只有 50 条，不足以回填逐轮花费；
                 // 调大只影响首帧体积（每个已 follow 的会话一帧），不改变事件通道语义。
                 maxMessages: FOLLOW_SNAPSHOT_MESSAGES
@@ -872,6 +886,32 @@ export class NodeApiClient extends AbstractApiClient {
               payload: { type: 'session/snapshot', sessionId, snapshot: msg.value }
             }
           });
+        } else if (sessionId && msg.value?.type === 'assistant-stream') {
+          // assistantStream 是 Web 客户端的 process-local 串流；桥接只拿它判断「第一個 token 到了」。
+          // start 不代表模型吐字，chunk 才算；同一個 attempt 只送一次，避免每個 delta 都丟一個事件。
+          const frame = msg.value.frame;
+          if (frame?.type === 'chunk') {
+            const key = `${sessionId}:${frame.attemptId}`;
+            if (!firstChunks.has(key)) {
+              firstChunks.add(key);
+              enqueue({
+                kind: 'frame',
+                envelope: {
+                  rpcId: msg.streamId,
+                  payload: {
+                    type: 'session/event',
+                    sessionId,
+                    event: {
+                      type: 'assistant/first-token',
+                      data: { attemptId: frame.attemptId, turn: frame.turn, step: frame.step, at: frame.time }
+                    }
+                  }
+                }
+              });
+            }
+          } else if (frame?.type === 'end') {
+            firstChunks.delete(`${sessionId}:${frame.attemptId}`);
+          }
         }
         // 其余 snapshot 之外的帧（assistant-stream 等）当前桥接不需要，保持忽略。
       } else if (msg.type === 'end') {
@@ -884,6 +924,7 @@ export class NodeApiClient extends AbstractApiClient {
           sessionToStream.delete(sessionId);
           streamToSession.delete(msg.streamId);
           followed.delete(sessionId);
+          for (const key of firstChunks) if (key.startsWith(`${sessionId}:`)) firstChunks.delete(key);
           // DSH 正常结束了单条会话流（follow 被回收 / 会话被归档 / 服务端空闲清理）。
           // 旧代码在这里什么都不做：不重订阅、不打日志，而重放只在 socket 'open' 时发生，
           // 于是这个会话**永久失联**且毫无提示。更糟的是若它断在回合中间，
