@@ -527,6 +527,14 @@ export class NodeApiClient extends AbstractApiClient {
    * 投影表之后，每次退役会话都抛 "invalid session/control baseline"，队列清不掉、
    * 旧任务继续烧 token。所以现在的解析放在**具名导出**里，由 test-dsh-client-* 直接钉住。
    */
+  /**
+   * 佇列裡還沒跑的使用者訊息數（後台提問前要確認，避免等到別人的回合）。
+   * 公開包裝，讓橋接不必直接碰 _readSessionQueue 的兩條 fallback。
+   */
+  async pendingPrompts(sessionId, signal) {
+    return (await this._readSessionQueue(sessionId, signal)).length;
+  }
+
   async _readSessionQueue(sessionId, signal) {
     await this.ensureAuth(signal);
     signal?.throwIfAborted();

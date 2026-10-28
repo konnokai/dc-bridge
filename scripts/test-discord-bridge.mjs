@@ -757,6 +757,16 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   allowed = true;
   ok((await sender.resolve(tokenA)).key === 'ch:100', 'resolve 回令牌自己的會話 key');
 
+  sender.startTurn('ch:100');
+  const muteToken = {};
+  sender.setMuted('ch:100', muteToken);
+  await rejects(sender.send({ token: tokenA, content: '後台提問的答案' }), /後台提問/, '後台提問期間所有工具都被擋（回答不會公開）');
+  await rejects(sender.react({ token: tokenA, message: '#a', emoji: '😂' }), /後台提問/, '後台提問期間 reaction 也擋');
+  sender.clearMuted('ch:100', {});
+  await rejects(sender.send({ token: tokenA, content: 'x' }), /後台提問/, '別的 token 解不掉這次 mute');
+  sender.clearMuted('ch:100', muteToken);
+  ok((await sender.send({ token: tokenA, content: '提問結束' })).key === 'ch:100', '提問結束後發送恢復');
+
   await rejects(sender.send({ token: tokenA, content: '   ' }), /空的/, '沒有貼圖時內容不能是空的');
   await rejects(sender.send({ token: tokenA, content: 'x'.repeat(AGENT_MAX_CONTENT + 1) }), /超過/, '過長內容拒絕');
   await sender.send({ token: tokenA, content: '', sticker: 'wave' });
@@ -1227,6 +1237,34 @@ console.log('## 7d3. 批次');
   gate.submit('g:3', job([31]));
   gate.releaseAll();
   ok(ids(delivered.at(-1).job) === '31', '事件流斷線時全部放行');
+
+  // ticket：/reset 或 releaseAll 之後，舊的收尾不能放掉下一批。
+  const staleTicket = gate.submit('g:4', job([40]));
+  gate.drop('g:4');
+  gate.submit('g:4', job([41]));
+  gate.release('g:4', staleTicket);
+  gate.submit('g:4', job([42]));
+  ok(ids(delivered.at(-1).job) === '41', '舊 ticket release 不會放掉 /reset 後的新回合');
+  gate.release('g:4');
+  ok(ids(delivered.at(-1).job) === '42', '新回合結束才放行壓住的批次');
+
+  const staleAfterReconnect = gate.submit('g:5', job([50]));
+  gate.releaseAll();
+  gate.submit('g:5', job([51]));
+  gate.release('g:5', staleAfterReconnect);
+  gate.submit('g:5', job([52]));
+  ok(ids(delivered.at(-1).job) === '51', '重連 releaseAll 後，舊 ticket 不會放掉新回合');
+  gate.release('g:5');
+  ok(ids(delivered.at(-1).job) === '52', '新回合結束才放行（重連後）');
+
+  const beforeAsk = delivered.length;
+  const askTicket = gate.submit('g:6', { ask: { question: 'x' } }, { noStuckRelease: true });
+  gate.submit('g:6', job([60]));
+  advance(60_000);
+  ok(!stuck.includes('g:6'), 'ask job 不吃 5 分鐘保險絲');
+  ok(delivered.length === beforeAsk + 1, 'ask 進行中，頻道批次仍然壓住');
+  gate.release('g:6', askTicket);
+  ok(ids(delivered.at(-1).job) === '60', 'ask 用自己的 ticket 放行下一批');
 
   // 群友的暱稱可能只有看不見的字元（實際遇到 U+17B5），prompt 裡變成「：內容」，模型叫不出名字。
   ok(visibleName('឵', 'ㅤ', 'real_user') === 'real_user', '只有看不見字元的名字跳過，改用下一個');

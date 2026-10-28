@@ -156,24 +156,35 @@ export function createTurnGate({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 }) {
-  const busy = new Map(); // key -> 保險計時器
+  const busy = new Map(); // key -> { ticket, timer }
   const held = new Map(); // key -> 回合進行中先壓住的那批
 
-  function submit(key, job) {
+  function submit(key, job, { noStuckRelease = false } = {}) {
     if (busy.has(key)) {
+      // ask job 一定要獨佔一輪，不能跟頻道批次合併（它沒有 entries）。
+      if (job?.ask) throw new Error('ask job 不能排隊');
       held.set(key, mergeJobs(held.get(key), job, maxEntries));
-      return;
+      return null;
     }
-    const timer = setTimer(() => { onStuck(key); release(key); }, releaseMs);
+    const ticket = {};
+    // /ask 自己用 tracker 的 hardClose 保底；不吃 5 分鐘保險絲，否則會提早放掉它的閘門。
+    const timer = noStuckRelease ? null : setTimer(() => { onStuck(key); release(key); }, releaseMs);
     timer?.unref?.();
-    busy.set(key, timer);
-    deliver(key, job);
+    busy.set(key, { ticket, timer });
+    deliver(key, job, ticket);
+    return ticket;
   }
 
-  /** 回合結束（或確定不會有回合）：放行壓住的那批。 */
-  function release(key) {
-    if (!busy.has(key)) return;
-    clearTimer(busy.get(key));
+  /**
+   * 回合結束（或確定不會有回合）：放行壓住的那批。
+   * 帶 ticket 時只放行自己持有的那一輪：/reset、重連的 releaseAll 之後，
+   * 舊的收尾不能把下一批的 busy 放掉。
+   */
+  function release(key, ticket) {
+    const entry = busy.get(key);
+    if (!entry) return;
+    if (ticket !== undefined && entry.ticket !== ticket) return;
+    clearTimer(entry.timer);
     busy.delete(key);
     const next = held.get(key);
     if (!next) return;

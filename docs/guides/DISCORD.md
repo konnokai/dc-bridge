@@ -233,16 +233,17 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
 | `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
+| `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。等待期間這個頻道的一般訊息會排到問完才送；模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
 | `/forget`（或 `!forget`） | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
 | `/blacklist join:true\|false` | 所有人 | 把自己加入（`true`）或移出（`false`）`deny.users`，立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不再處理你的訊息（不回、不進批次、不學黑話）。不填 `join` 只顯示目前狀態。只能改自己，回覆只有自己看得到 |
 | 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
-`/reset`、`/status`、`/invite`、`/mention` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
+`/reset`、`/status`、`/invite`、`/mention`、`/ask` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
 只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
 
 - **誰看得到選單**：`/reset` 是 `default_member_permissions: ManageGuild`（有「管理伺服器」權限的人看得到）；
-  `/status`、`/invite`、`/console`、`/mention` 是 `Administrator`。
+  `/status`、`/invite`、`/console`、`/mention`、`/ask` 是 `Administrator`。
   Discord 沒辦法把指令選單只開給某一個人，所以用權限縮小範圍。
 - **誰能執行**：`/reset` 認 `ownerIds`，或那個伺服器裡有「管理伺服器」權限（含 Administrator）的人。
   bot 開放給別人管的伺服器時，那邊的管理員可以自己清掉 bot 在自己頻道的上下文，不用找 bot 擁有者。

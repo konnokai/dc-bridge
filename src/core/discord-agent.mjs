@@ -135,6 +135,7 @@ export function createAgentSender({
   unreactLimit = UNREACT_PER_TURN_LIMIT,
 }) {
   const tokens = new Map(); // sessionId -> 會話令牌（只在記憶體，橋接重啟就換）
+  const muted = new Map(); // key -> 後台提問的 token：只有持有者能解除，避免舊收尾解掉新提問
   const chains = new Map(); // key -> 串行化（同一輪的多個 tool call 不搶順序）
   const sentCounts = new Map(); // key -> 這一輪已經送出幾則
   const usedCounts = new Map(); // key -> { react, unreact, remove, history }：這一輪各用了幾次
@@ -178,6 +179,8 @@ export function createAgentSender({
     }
     const key = reverse.get(sessionId);
     if (!key || !alive(key, sessionId)) throw statusError('這個會話已經結束，不送出', 403);
+    // 後台提問（/ask）要獨佔這一輪：模型只能輸出文字，任何工具動作都不該公開。
+    if (muted.has(key)) throw statusError('這個會話正在後台提問：這一輪所有 Discord 工具都不能用，直接輸出文字回答', 403);
     const kind = key.split(':')[0];
     if (kind !== 'ch' && kind !== 'dm') throw statusError('會話 key 格式不對', 400);
 
@@ -349,7 +352,10 @@ export function createAgentSender({
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },
     /** /reset：舊會話送出的訊息不能再改／收回，也不要再回報 reaction。 */
-    forgetKey: (key) => { owned.delete(key); },
+    forgetKey: (key) => { owned.delete(key); muted.delete(key); },
+    /** 後台提問：暫停這一輪的工具動作；token 要比對才解得住。 */
+    setMuted: (key, token) => { if (token) muted.set(key, token); },
+    clearMuted: (key, token) => { if (muted.get(key) === token) muted.delete(key); },
     startTurn: clearKey,
     noteAttempt: (key) => { attempted.add(key); },
     /** 回合結束：回傳這一輪送了幾則、按了幾個 reaction、收回幾則、有沒有試過呼叫工具，並歸零。 */

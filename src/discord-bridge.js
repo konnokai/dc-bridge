@@ -116,6 +116,7 @@ import {
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
 import { createBatcher, createTurnGate, defang, formatBatch, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
+import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { readDshCredential } from './web-search.js';
@@ -136,6 +137,11 @@ const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
+const ASK_TIMEOUT_MS = 120_000; // /ask 等模型回答的上限：一般回合 12~35 秒，兩分鐘足夠
+const ASK_CANCEL_FAILED_GRACE_MS = 10 * 60_000; // 取消失敗：繼續擋到這一輪真的結束，最多十分鐘
+const ASK_ABANDONED_TTL_MS = 30 * 60_000; // 連 hardClose 都等不到 turn/end：記錄下來再擋三十分鐘
+// 後台提問的開頭：模型要知道這不是頻道對話、這一輪的工具真的被擋住，而且事後不要在頻道提起。
+const PRIVATE_ASK_HEADER = '【後台提問｜只有管理員看得到，不會公開】直接輸出文字回答，不要呼叫任何工具；這一輪所有 Discord 工具都已封鎖，呼叫只會失敗。這段問答之後不要在公開對話提起。';
 const TYPING_MAX_MS = 10 * 60 * 1000; // 回合卡住時不要讓「正在輸入」亮一輩子
 const TURN_RELEASE_MS = 5 * 60 * 1000; // 等不到 turn/end 時，最久把下一批壓這麼久
 const HELD_MAX = 50; // 回合進行中壓住的訊息最多幾則（★ 那幾則不算在內，一定留著）
@@ -189,6 +195,16 @@ const slashCommandData = [
     .addBooleanOption((option) => option
       .setName('required')
       .setDescription('true：要 @bot 才回；false：自由參與。不填就只顯示目前設定'))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('ask')
+    .setDescription('私下問這個頻道的模型一句話，回答只有你看得到（管理員）')
+    .addStringOption((option) => option
+      .setName('text')
+      .setDescription('要問的內容；模型會用它目前的頻道上下文回答')
+      .setRequired(true)
+      .setMaxLength(1500))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false),
   new SlashCommandBuilder()
@@ -425,7 +441,12 @@ async function main() {
   const slangWindows = new Map(); // channelId -> 最近訊息（記憶體 ring buffer）
   const slangQueue = [];
   const slangQueued = new Set();
-  const learnerWaiters = new Map(); // sessionId -> 學習回合的 collector（不進 reverse）
+  const sessionWaiters = new Map(); // sessionId -> 學習回合的 collector（不進公開回覆）
+  const askTurns = new Map(); // sessionId -> /ask 的私人回合（見 core/discord-ask.mjs）
+  const askAbandonedTurns = new Map(); // sessionId -> Map(turn, { key, muteToken, ticket, timer })
+  const lastTurns = new Map(); // sessionId -> 看過的最大 turn 編號，/ask 用它排除上一輪
+  const openTurns = new Map(); // sessionId -> Set(turn)：有 start 還沒有 end 的回合
+  const snapshotReady = new Set(); // sessionId -> 收到 session/follow 的開場快照
   let slangRunning = false;
   let slangTimer = null;
   let slangLastRunAt = 0;
@@ -809,6 +830,13 @@ async function main() {
     const sessionId = sessions[key];
     if (!sessionId) return false;
 
+    // 掛在這個會話上的 /ask 等不到回答了，先讓它失敗，不要讓使用者乾等逾時。
+    askTurns.get(sessionId)?.abort(new Error('會話已重置'), 0);
+    sessionWaiters.get(sessionId)?.fail(new Error('會話已重置'));
+    forgetAbandonedTurns(sessionId);
+    lastTurns.delete(sessionId);
+    openTurns.delete(sessionId);
+    snapshotReady.delete(sessionId);
     api.events.forget(sessionId);
     delete sessions[key];
     reverse.delete(sessionId);
@@ -1819,7 +1847,10 @@ async function main() {
 
   async function handleQuestion(frame) {
     const key = reverse.get(frame.sessionId);
-    if (!key) {
+    // 後台提問進行中：提問不能貼到頻道，直接取消，模型改回文字。
+    // 寧可錯擋別的回合一次，也不要把私人回合的問題貼出去。
+    const ask = askTurns.get(frame.sessionId);
+    if (!key || ask || askAbandonedTurns.get(frame.sessionId)?.size) {
       await cancelPendingEntry({ kind: 'question', clientId: frame.clientId, eventId: frame.eventId });
       return;
     }
@@ -1846,7 +1877,9 @@ async function main() {
 
   async function handleApproval(frame) {
     const key = reverse.get(frame.sessionId);
-    if (!key) {
+    // 後台提問進行中：審批同樣不能公開；這一輪的工具動作本來就全部封鎖。
+    const ask = askTurns.get(frame.sessionId);
+    if (!key || ask || askAbandonedTurns.get(frame.sessionId)?.size) {
       await cancelPendingEntry({ kind: 'approval', clientId: frame.clientId, eventId: frame.eventId });
       return;
     }
@@ -1953,19 +1986,43 @@ async function main() {
     // 先記帳再分流：學習會話也要算錢，只是在控制台歸到 internal，不送回 Discord。
     usage.ingestEvent(frame.sessionId, event);
 
-    // 學習會話：不在 reverse 裡，只收文字，不送 Discord。
-    const learner = learnerWaiters.get(frame.sessionId);
-    if (learner) {
-      const turn = event.data?.turn;
-      if (!learner.started && event.type === 'assistant/message' && turn !== undefined && turn !== null) {
-        learner.started = true;
-        learner.collector.push({ type: 'turn/start', data: { turn } });
+    // 記住看過的最大 turn：/ask 用它排除提問前就存在的回合。
+    const eventTurn = event.data?.turn;
+    if (typeof eventTurn === 'number' && eventTurn > (lastTurns.get(frame.sessionId) ?? 0)) {
+      lastTurns.set(frame.sessionId, eventTurn);
+    }
+    if (typeof eventTurn === 'number') {
+      if (event.type === 'turn/start') markTurnOpen(frame.sessionId, eventTurn);
+      else if (event.type === 'turn/end') markTurnEnded(frame.sessionId, eventTurn);
+    }
+
+    // 被放棄的回合（收尾時還沒等到 turn/end）：整段吞掉，不能讓它變成公開回合。
+    const abandoned = askAbandonedTurns.get(frame.sessionId);
+    if (abandoned) {
+      if (typeof eventTurn !== 'number') return; // 分不出是哪一輪，先吞掉
+      if (abandoned.has(eventTurn)) {
+        if (event.type === 'turn/end') clearAbandonedTurn(frame.sessionId, eventTurn);
+        return;
       }
-      if (event.type === 'turn/start') learner.started = true;
-      const endedLearning = learner.collector.push(event);
-      if (endedLearning) learner.finish(endedLearning);
+    }
+
+    // 學習會話：只收文字，不進公開回覆。
+    const privateTurn = sessionWaiters.get(frame.sessionId);
+    if (privateTurn) {
+      const turn = event.data?.turn;
+      if (!privateTurn.started && event.type === 'assistant/message' && turn !== undefined && turn !== null) {
+        privateTurn.started = true;
+        privateTurn.collector.push({ type: 'turn/start', data: { turn } });
+      }
+      if (event.type === 'turn/start') privateTurn.started = true;
+      const endedPrivate = privateTurn.collector.push(event);
+      if (endedPrivate) privateTurn.finish(endedPrivate);
       return;
     }
+
+    // 後台提問：只吞屬於這次提問的回合，其他回合照常走公開路徑。
+    const ask = askTurns.get(frame.sessionId);
+    if (ask?.push(event)) return;
 
     const key = reverse.get(frame.sessionId);
     if (!key) return;
@@ -2020,7 +2077,8 @@ async function main() {
           cooldownMs: AUTO_COMPACT_COOLDOWN_MS,
         });
         if (compact) void autoCompact(key, frame.sessionId);
-        else turnGate.release(key);
+        // /ask 拿著閘門時，公開路徑收到的 turn/end 一定是別的回合；不能因此放掉提問的閘門。
+        else if (!askTurns.has(frame.sessionId)) turnGate.release(key);
       }
     }
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
@@ -2122,10 +2180,32 @@ async function main() {
       case 'session/event':
         await handleSessionEvent(frame);
         break;
-      case 'session/snapshot':
+      case 'session/snapshot': {
         // 開場快照帶整條會話的 tokenUsage 累計與最近事件；只進帳本，不當成新回合。
         usage.ingestSnapshot(frame.sessionId, frame.snapshot);
+        // 補上最大 turn、重建「有 start 沒有 end」的回合：重連後如果還有回合在跑，
+        // /ask 才不會把它認成自己的；快照到之前也一律不讓 /ask 進來。
+        const { open, ended } = turnsFromRecords(frame.snapshot?.records);
+        for (const entry of frame.snapshot?.records ?? []) {
+          const event = entry?.type === 'event' ? entry.event : entry;
+          const turn = event?.data?.turn;
+          if (typeof turn === 'number' && turn > (lastTurns.get(frame.sessionId) ?? 0)) {
+            lastTurns.set(frame.sessionId, turn);
+          }
+        }
+        if (open.size) openTurns.set(frame.sessionId, open);
+        else openTurns.delete(frame.sessionId);
+        snapshotReady.add(frame.sessionId);
+        // 被放棄的回合只有在快照裡「真的看到 turn/end」才解除；不能只看不在 open
+        // （records 只有最近 200 筆，start 可能被截掉但那一輪還在跑）。
+        const abandoned = askAbandonedTurns.get(frame.sessionId);
+        if (abandoned) {
+          for (const abandonedTurn of [...abandoned.keys()]) {
+            if (ended.has(abandonedTurn)) clearAbandonedTurn(frame.sessionId, abandonedTurn);
+          }
+        }
         break;
+      }
       case 'question/requested':
         await handleQuestion(frame);
         break;
@@ -2160,8 +2240,21 @@ async function main() {
       } catch (error) {
         log(`DSH 事件流中斷：${error?.message ?? error}`);
       } finally {
+        // 後台提問先收尾：斷線後分不出重連的回合是提問還是頻道批次，寧可取消也不要誤認。
+        // 事件流收不到 turn/end，所以取消受理後直接收尾；取消失敗則繼續擋到寬限。
+        for (const [sessionId, ask] of [...askTurns]) {
+          void stopAskSession(sessionId, ask, { closeOnSuccess: true });
+          ask.abort(new Error('DSH 事件流中斷'), ASK_CANCEL_FAILED_GRACE_MS);
+        }
+        // 學習會話也一樣：事件流斷了就不會再有回合結束，直接失敗（下次冷卻後再學）。
+        for (const waiter of [...sessionWaiters.values()]) {
+          waiter.fail(new Error('DSH 事件流中斷，學習回合取消'));
+        }
         // 斷線後舊的 collector 不可信：重連快照會補歷史 turn/end，拿它當新回覆會重複發送。
         collectors.clear();
+        // 重連要等新的開場快照才能再問；在那之前 /ask 一律拒絕。
+        snapshotReady.clear();
+        openTurns.clear();
         agentSender.clearTurns();
         // 回合 ↔ 批次的對應也不可信了；之後的回合退回 defaultDirect。
         pendingDirect.clear();
@@ -2175,10 +2268,6 @@ async function main() {
         for (const key of [...typingTimers.keys()]) stopTyping(key);
         for (const key of [...progress.keys()]) finishProgress(key);
         for (const key of [...compactNotices.keys()]) hideCompactNotice(key);
-        // 學習會話也一樣：事件流斷了就不會再有回合結束，直接失敗（下次冷卻後再學）。
-        for (const waiter of [...learnerWaiters.values()]) {
-          waiter.fail(new Error('DSH 事件流中斷，學習回合取消'));
-        }
       }
       retryMs = frames > 0 ? 3_000 : Math.min(30_000, retryMs * 2);
       await sleep(retryMs);
@@ -2243,13 +2332,14 @@ async function main() {
     maxEntries: HELD_MAX,
     releaseMs: TURN_RELEASE_MS,
     onStuck: (key) => log(`等不到回合結束，先放行下一批 (${key})`),
-    deliver: (key, job) => {
+    deliver: (key, job, ticket) => {
+      if (job.ask) { runAskJob(key, job, ticket); return; }
       const previous = promptChains.get(key) ?? Promise.resolve();
       const next = previous
         .then(() => deliverPrompt(key, job))
-        .then((turnQueued) => { if (!turnQueued) turnGate.release(key); })
+        .then((turnQueued) => { if (!turnQueued) turnGate.release(key, ticket); })
         .catch(async (error) => {
-          turnGate.release(key);
+          turnGate.release(key, ticket);
           stopTyping(key);
           if (isTransientDshError(error)) {
             // 回訪與提醒進離線佇列會被後面的批次合併掉（mergeJobs 只看 entries）；時間過了就放棄。
@@ -2640,6 +2730,157 @@ async function main() {
   }
 
   /**
+   * 停掉後台提問那一輪：清掉 DSH inbox 裡還沒跑的問題，再取消正在跑的回合。
+   * 失敗時把 waiter 的寬限拉長，不要立刻解除 mute。
+   * @param options.closeOnSuccess 斷線時用：事件流收不到 turn/end，取消受理後直接收尾
+   */
+  async function stopAskSession(sessionId, tracker, { closeOnSuccess = false } = {}) {
+    try {
+      await api.stopSessionWork(sessionId, { timeoutMs: 15_000 });
+      if (tracker?.phase !== 'closing') return;
+      // 沒認領到回合也要再等一下：讀佇列到 cancel 之間，回合可能剛好開始跑。
+      // 有回合就等它自己的 turn/end；寬限到了不會關，交給 hardClose 保底。
+      if (closeOnSuccess) tracker.close();
+      else tracker.extendGrace(10_000);
+    } catch (error) {
+      log(`後台提問取消失敗 ${sessionId}：${error?.message ?? error}`);
+      tracker?.extendGrace(ASK_CANCEL_FAILED_GRACE_MS);
+    }
+  }
+
+  function markTurnOpen(sessionId, turn) {
+    const set = openTurns.get(sessionId) ?? new Set();
+    set.add(turn);
+    openTurns.set(sessionId, set);
+  }
+
+  function markTurnEnded(sessionId, turn) {
+    const set = openTurns.get(sessionId);
+    if (!set) return;
+    set.delete(turn);
+    if (set.size === 0) openTurns.delete(sessionId);
+  }
+
+  function clearAbandonedTurn(sessionId, turn) {
+    const turns = askAbandonedTurns.get(sessionId);
+    const entry = turns?.get(turn);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    turns.delete(turn);
+    if (turns.size === 0) askAbandonedTurns.delete(sessionId);
+    markTurnEnded(sessionId, turn);
+    agentSender.clearMuted(entry.key, entry.muteToken);
+    turnGate.release(entry.key, entry.ticket);
+  }
+
+  /** /reset：這一輪已經不屬於任何活著的會話，清掉計時器就好（mute/閘門另有清理）。 */
+  function forgetAbandonedTurns(sessionId) {
+    const turns = askAbandonedTurns.get(sessionId);
+    if (!turns) return;
+    for (const entry of turns.values()) clearTimeout(entry.timer);
+    askAbandonedTurns.delete(sessionId);
+  }
+
+  /**
+   * /ask 進閘門後才開始跑：問答獨佔一輪，頻道訊息壓到問完才送。
+   *
+   * 回合歸屬、逾時收尾都在 core/discord-ask.mjs；這裡只接 DSH 與 Discord 兩邊。
+   * 進閘門後先 mute 再送 prompt：事件流的 turn/start 可能漏掉，不能等看到才擋工具。
+   */
+  function runAskJob(key, job, ticket) {
+    const { question, sessionId, epoch, resolve, reject } = job.ask;
+    const muteToken = {};
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+    const fail = (error) => {
+      settle(reject, error);
+      agentSender.clearMuted(key, muteToken);
+      turnGate.release(key, ticket);
+    };
+
+    if (sessions[key] !== sessionId || epochOf(key) !== epoch) {
+      fail(new Error('會話已重置'));
+      return;
+    }
+
+    // 先 mute 再送 prompt：事件流的 turn/start 有可能漏掉，等到 onStart 才 mute 會留下工具外洩的窗口。
+    agentSender.setMuted(key, muteToken);
+
+    let tracker;
+    tracker = createAskTurn({
+      baselineTurn: lastTurns.get(sessionId) ?? 0,
+      timeoutMs: ASK_TIMEOUT_MS,
+      closeGraceMs: 20_000, // 大於 stopSessionWork 的 15 秒，讓取消有機會先完成
+      onStart: (_turn, { late }) => {
+        agentSender.setMuted(key, muteToken);
+        // 逾時後才開始跑的排隊問題：立刻停掉，不要讓它變成公開回合。
+        if (late) void stopAskSession(sessionId, tracker);
+      },
+      onSettle: (result) => {
+        if (result.kind === 'answer') {
+          if (result.text) settle(resolve, result.text);
+          else settle(reject, new Error('模型沒有輸出文字'));
+        } else if (result.kind === 'timeout') {
+          settle(reject, new Error(`等不到回答（${ASK_TIMEOUT_MS / 1000} 秒）`));
+        } else if (result.kind === 'ended') {
+          settle(reject, new Error(`這一輪被中斷（${result.reason?.kind ?? 'unknown'}）`));
+        } else {
+          settle(reject, result.error ?? new Error('後台提問失敗'));
+        }
+      },
+      onTimeout: () => { void stopAskSession(sessionId, tracker); },
+      onClose: ({ turn, ended }) => {
+        if (askTurns.get(sessionId) === tracker) askTurns.delete(sessionId);
+        if (turn !== null && !ended) {
+          // 保底時間到了還沒看到這一輪的 turn/end：不能解除 mute，否則晚到的工具呼叫會公開。
+          // 記下來讓公開路徑繼續吞掉它，真的等到 turn/end（或 TTL）才清。
+          const entry = { key, muteToken, ticket, timer: null };
+          const turns = askAbandonedTurns.get(sessionId) ?? new Map();
+          turns.set(turn, entry);
+          askAbandonedTurns.set(sessionId, turns);
+          entry.timer = setTimeout(() => {
+            log(`⚠️ 後台提問的回合 ${turn} 一直沒結束，強制解除保護（${key}）`);
+            clearAbandonedTurn(sessionId, turn);
+          }, ASK_ABANDONED_TTL_MS);
+          entry.timer.unref?.();
+          return;
+        }
+        agentSender.clearMuted(key, muteToken);
+        turnGate.release(key, ticket);
+      },
+    });
+    askTurns.set(sessionId, tracker);
+
+    void (async () => {
+      try {
+        const accepted = await api.sessions.prompt({
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text: `${PRIVATE_ASK_HEADER}\n${question}` }],
+        });
+        if (!accepted.result?.ok) {
+          const error = accepted.result?.error;
+          throw new Error(`${error?.code ?? '未知錯誤'}${error?.message ? `：${error.message}` : ''}`);
+        }
+        if (accepted.result.value?.command) throw new Error('DSH 把問題當成斜線命令，沒有送進模型');
+        if (tracker.phase === 'closed') {
+          // 回應太慢，waiter 已經收尾：把可能排進去的問題清掉，不能讓它之後才跑成公開回合。
+          log(`後台提問回應晚於收尾，清掉 DSH 佇列（${key}）`);
+          void stopAskSession(sessionId, tracker);
+        }
+      } catch (error) {
+        // prompt 可能已進 DSH 但回應失敗：先停掉那一輪，再讓 waiter 收尾，不能直接解除 mute。
+        void stopAskSession(sessionId, tracker);
+        tracker.abort(error, ASK_CANCEL_FAILED_GRACE_MS);
+      }
+    })();
+  }
+
+  /**
    * 背景會話：建一個獨立 session、只收文字、結束就歸檔（不進 reverse，不會送回 Discord）。
    * 黑話抽取和每日頻道摘要共用；preset 用 dc.slang.learnerPreset（沒有 Discord 工具）。
    */
@@ -2684,12 +2925,12 @@ async function main() {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          learnerWaiters.delete(sessionId);
+          sessionWaiters.delete(sessionId);
           fn(value);
         };
         timer = setTimeout(() => settle(reject, new Error(`${label}回合逾時`)), timeoutMs);
         timer.unref?.();
-        learnerWaiters.set(sessionId, {
+        sessionWaiters.set(sessionId, {
           collector,
           started: false,
           finish: (result) => settle(resolve, result),
@@ -2714,7 +2955,10 @@ async function main() {
       }
       return result.text;
     } finally {
-      learnerWaiters.get(sessionId)?.fail(new Error(`${label}回合收尾`));
+      sessionWaiters.get(sessionId)?.fail(new Error(`${label}回合收尾`));
+      lastTurns.delete(sessionId);
+      openTurns.delete(sessionId);
+      snapshotReady.delete(sessionId);
       try { await withTimeout(api.stopSessionWork(sessionId), 15_000, 'stopSessionWork'); } catch { /* 已結束 */ }
       try { await withTimeout(api.workspace.archiveSession({ sessionId }), 15_000, 'archiveSession'); } catch { /* 已歸檔 */ }
     }
@@ -3139,6 +3383,83 @@ async function main() {
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     log(`slash /${interaction.commandName} ${key} user=${interaction.user.id}`);
+
+    if (interaction.commandName === 'ask') {
+      const question = String(interaction.options.getString('text', true) ?? '').trim();
+      if (!question) {
+        await interaction.editReply('問題是空的。');
+        return;
+      }
+      const hasSession = Boolean(sessions[key]);
+      const channelAllowed = isConversationAllowed(cfg.discord, {
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        parentId: interaction.channel?.isThread?.() ? interaction.channel.parentId : null,
+        userId: interaction.user.id,
+      });
+      if (!hasSession && !channelAllowed) {
+        await interaction.editReply('這個頻道沒有開放 bot，沒有可以問的會話。');
+        return;
+      }
+      let sessionId;
+      try {
+        sessionId = await ensureSession(key);
+      } catch (error) {
+        await interaction.editReply(`建立會話失敗：${error?.message ?? error}`);
+        return;
+      }
+      // 事件流還沒同步完（剛重啟／剛斷線）：這時候 lastTurns 不可信，先不接受提問。
+      if (!snapshotReady.has(sessionId)) {
+        await interaction.editReply('事件流還在同步這個會話，等幾秒再問。');
+        return;
+      }
+      // 發問前先把「這輪一定是我們的」確認清楚：DSH 佇列非空、頻道回合還在收集、
+      // 或這個會話已經有一個 /ask，都不要插隊。
+      let queued;
+      try {
+        queued = await api.pendingPrompts(sessionId, AbortSignal.timeout(8000));
+      } catch (error) {
+        await interaction.editReply(`無法確認會話佇列（${error?.message ?? error}），稍後再問。`);
+        return;
+      }
+      const blocked = askBlockReason({
+        snapshotReady: snapshotReady.has(sessionId),
+        queued,
+        gateBusy: turnGate.isBusy(key),
+        collectorActive: collectors.has(sessionId),
+        openTurns: openTurns.get(sessionId)?.size ?? 0,
+        askActive: askTurns.has(sessionId),
+      });
+      if (blocked === 'syncing') {
+        await interaction.editReply('事件流還在同步這個會話，等幾秒再問。');
+        return;
+      }
+      if (blocked === 'queued') {
+        await interaction.editReply('會話裡還有排隊的訊息（可能剛從 DSH 後台送出），等它跑完再問。');
+        return;
+      }
+      if (blocked) {
+        await interaction.editReply('這個頻道還在處理上一輪，等它回完再問。');
+        return;
+      }
+      try {
+        const answer = await new Promise((resolve, reject) => {
+          turnGate.submit(
+            key,
+            { ask: { question, sessionId, epoch: epochOf(key), resolve, reject } },
+            { noStuckRelease: true },
+          );
+        });
+        const parts = splitDiscordMessage(answer, cfg.discord.maxMessageChars);
+        await interaction.editReply(parts[0] ?? answer);
+        for (const part of parts.slice(1)) {
+          await interaction.followUp({ content: part, flags: MessageFlags.Ephemeral });
+        }
+      } catch (error) {
+        await interaction.editReply(`後台提問失敗：${error?.message ?? error}`);
+      }
+      return;
+    }
 
     if (interaction.commandName === 'invite') {
       const url = buildInviteUrl(client.user.id);
