@@ -227,6 +227,11 @@ export function upsertCandidates(store, { guildId = '', channelId = '', items = 
       && normalizeTerm(entry.term) === key);
     // 改成共用前各服各自學過同一個詞，可能有一筆被拒絕、一筆還在用；累加到還在用的那筆。
     const existing = same.find((entry) => entry.status !== SLANG_STATUS.REJECTED) ?? same[0];
+    // 注入上限就是 5 條，存更多也看不到；滿了就不收，要換標籤先在控制台刪一條。
+    if (!existing && kind === 'style' && liveStyleCount(store, cid) >= STYLE_INJECT_MAX) {
+      stats.skipped += 1;
+      continue;
+    }
     if (existing) {
       existing.seen += 1;
       existing.updatedAt = stamp;
@@ -274,6 +279,13 @@ export function findSlangEntry(store, term) {
   if (!key) return null;
   const same = (store?.entries ?? []).filter((entry) => entry.kind === 'slang' && normalizeTerm(entry.term) === key);
   return same.find((entry) => entry.status !== SLANG_STATUS.REJECTED) ?? same[0] ?? null;
+}
+
+/** 這個頻道還沒被拒絕的風格標籤數；注入上限就是 5 條，存更多也永遠看不到。 */
+function liveStyleCount(store, channelId) {
+  return (store?.entries ?? []).filter((entry) => entry.kind === 'style'
+    && entry.channelId === channelId
+    && entry.status !== SLANG_STATUS.REJECTED).length;
 }
 
 /** 找同一個頻道的同一個風格標籤；rejected 也回，才知道不要復活。 */
@@ -346,7 +358,8 @@ export function recordSlang(store, { guildId = '', term, meaning, usage = '', ex
 
 /**
  * 模型自己收錄頻道風格標籤。同頻道同標籤已存在就原樣回傳，不復活 rejected。
- * @returns {{entry: object, existing: boolean}|null}
+ * 每個頻道非 rejected 的標籤最多 5 條（就是注入上限），滿了回 full。
+ * @returns {{entry: object, existing: boolean}|{full: true, max: number}|null}
  */
 export function recordChannelTag(store, { guildId = '', channelId, tag, description, now = Date.now() } = {}) {
   const cid = clean(channelId, 24);
@@ -355,6 +368,7 @@ export function recordChannelTag(store, { guildId = '', channelId, tag, descript
   if (!cid || !cleanedTag || !cleanedDescription) return null;
   const existing = findStyleEntry(store, cid, cleanedTag);
   if (existing) return { entry: existing, existing: true };
+  if (liveStyleCount(store, cid) >= STYLE_INJECT_MAX) return { full: true, max: STYLE_INJECT_MAX };
   upsertCandidates(store, {
     guildId,
     channelId: cid,
@@ -534,8 +548,9 @@ export function buildExtractionPrompt(samples, { max = 5, maxChars = 6000, style
 排除：人名、@提及、一般常見詞、純表情、你在一般字典查得到的詞。
 只挑這段對話裡真的出現過的詞；不確定就不要輸出。寧可少，不要亂收。
 
-二、頻道風格：最多 ${STYLE_PER_RUN} 條「這個頻道大家怎麼聊天」的觀察，例如回覆長短、語氣、常聊的話題、互動習慣、常用的表情或語尾。
-要是多數人、多則訊息都看得出來的現象；只有一個人這樣、或只出現一次的不算。不要評價個人，不要寫人名。${knownLine}
+二、頻道風格：最多 ${STYLE_PER_RUN} 條「這個頻道大家怎麼聊天」的穩定習慣，例如回覆長短、語氣、常用語尾、表情貼圖、互動節奏。
+只收不隨話題變的現象；某段時間在聊什麼、一次性的話題或事件不算風格，那是頻道筆記的事。
+要是多數人、多則訊息都看得出來的現象；只有一個人這樣的不算。不要評價個人，不要寫人名。${knownLine}
 沒有把握的新觀察就不要輸出。
 
 輸出 JSON 陣列，黑話的元素：

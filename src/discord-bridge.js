@@ -1605,6 +1605,7 @@ async function main() {
       }
       const result = recordChannelTag(slangStore, { guildId: channel.guildId, channelId: channel.id, tag, description });
       if (!result) throw toolError('tag 和 description 都要給', 400);
+      if (result.full) throw toolError(`這個頻道的風格已經記滿 ${result.max} 條，先在控制台刪掉一條再加`, 409);
       slangWrites.set(key, used + 1);
       if (result.existing) {
         log(`MCP 頻道標籤：已收錄過「${result.entry.term}」（${key}）`);

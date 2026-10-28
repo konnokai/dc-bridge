@@ -296,11 +296,24 @@ console.log('## 5. 頻道風格');
   ok(!buildSlangHint(store).includes('回覆長度'), '風格不會混進黑話區塊');
   ok(!hint.includes('難繃'), '黑話不會混進風格區塊');
 
+  // 注入的字數與條數上限：直接鋪已確認的詞條，不走寫入端（那裡有每頻道 5 條的上限）。
+  const wide = createSlangStore();
   for (let i = 0; i < 8; i += 1) {
-    upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: [{ kind: 'style', term: `觀察${i}`, meaning: '這是一段為了測字數上限而寫得比較長一點的描述文字，大概三十個字左右吧' }], now: NOW + 10 + i });
-    confirmSlang(store, store.entries.at(-1).id, {}, NOW + 20 + i);
+    wide.entries.push({
+      id: `s${i}`,
+      kind: 'style',
+      guildId: GUILD,
+      channelId: CHANNEL,
+      term: `觀察${i}`,
+      meaning: '這是一段為了測字數上限而寫得比較長一點的描述文字，大概三十個字左右吧',
+      status: SLANG_STATUS.CONFIRMED,
+      seen: 1,
+      sources: [],
+      createdAt: new Date(NOW).toISOString(),
+      updatedAt: new Date(NOW).toISOString(),
+    });
   }
-  const full = buildStyleHint(store, { channelId: CHANNEL });
+  const full = buildStyleHint(wide, { channelId: CHANNEL });
   ok(full.split('\n').length - 1 <= 5, '每個頻道最多注入 5 條');
   ok(full.length <= 300, '風格區塊不超過 300 字');
 
@@ -320,6 +333,7 @@ console.log('## 5. 頻道風格');
   ok(labels.includes('回覆長度') && labels.includes('語氣') && !labels.includes('難繃'), '列出這個頻道已有的風格標籤（含已拒絕）');
   const prompt = buildExtractionPrompt(SAMPLES, { styleLabels: labels });
   ok(prompt.includes('"kind":"style"') && prompt.includes('回覆長度'), 'prompt 要求風格並列出已有標籤');
+  ok(!prompt.includes('常聊的話題') && prompt.includes('頻道筆記'), 'prompt 只收風格，事件交給頻道筆記');
   ok(!buildExtractionPrompt(SAMPLES).includes('已經記下的'), '沒有既有標籤時不列');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-style-'));
@@ -398,6 +412,15 @@ console.log('## 7. 模型自己查與收錄');
   ok(tag?.existing === true && tag.entry.meaning === '大家都一兩句', '同頻道同標籤只回報，不改描述');
   const other = recordChannelTag(store, { guildId: GUILD, channelId: '555', tag: '回覆長度', description: '都寫長文', now: NOW + 7 });
   ok(other && !other.existing, '不同頻道可以有同名標籤');
+
+  for (let i = 1; i < 5; i += 1) {
+    recordChannelTag(store, { guildId: GUILD, channelId: CHANNEL, tag: `標籤${i}`, description: '說明', now: NOW + 10 + i });
+  }
+  const overflow = recordChannelTag(store, { guildId: GUILD, channelId: CHANNEL, tag: '第六條', description: '說明', now: NOW + 20 });
+  ok(overflow?.full === true && overflow.max === 5, '一個頻道最多 5 條風格，滿了回 full');
+  const capped = upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: [{ kind: 'style', term: '第七條', meaning: '說明' }], now: NOW + 21 });
+  ok(capped.skipped === 1, '學習抽到第 6 條風格也不收');
+  ok(recordChannelTag(store, { guildId: GUILD, channelId: '777', tag: '回覆長度', description: '都寫長文', now: NOW + 22 })?.entry?.channelId === '777', '別的頻道不受 5 條上限影響');
 }
 
 console.log(failures === 0 ? '\n✅ Discord 黑話詞庫離線回歸通過' : `\n❌ ${failures} 項失敗`);
