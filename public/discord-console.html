@@ -40,6 +40,15 @@
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  /* 黑話／頻道風格：欄寬與列高固定，內容變動時操作按鈕不會位移。 */
+  .entry-table { table-layout: fixed; min-width: 560px; }
+  .entry-table tbody td { height: 84px; }
+  .entry-table tbody td.empty-cell { height: auto; }
+  .cell-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
+  .nowrap { white-space: nowrap; }
+  .entry-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-content: start; }
+  .entry-actions button { height: 28px; padding: 0 6px; font-size: 12px; white-space: nowrap; }
+  .action-slot { display: block; height: 28px; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   td.mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
   .muted { color: var(--muted); }
@@ -220,7 +229,8 @@
       <span id="slang-learning" class="muted"></span>
     </div>
     <div class="table-wrap">
-      <table>
+      <table class="entry-table">
+        <colgroup><col style="width:16%"><col><col><col style="width:64px"><col style="width:64px"><col style="width:112px"></colgroup>
         <thead><tr><th>詞</th><th>意思</th><th>用法</th><th>狀態</th><th>次數</th><th>操作</th></tr></thead>
         <tbody id="slang-rows"></tbody>
       </table>
@@ -236,7 +246,8 @@
       <span class="muted" style="font-size:12px">跟黑話同一次抽；確認後才會注入那個頻道</span>
     </div>
     <div class="table-wrap">
-      <table>
+      <table class="entry-table">
+        <colgroup><col style="width:20%"><col style="width:12%"><col><col style="width:64px"><col style="width:64px"><col style="width:112px"></colgroup>
         <thead><tr><th>頻道</th><th>標籤</th><th>描述</th><th>狀態</th><th>次數</th><th>操作</th></tr></thead>
         <tbody id="style-rows"></tbody>
       </table>
@@ -727,11 +738,17 @@
   let triggerPage = 1;
 
   function entryActions(entry) {
-    return el('div', { className: 'row' },
-      entry.status === 'candidate' ? el('button', { dataset: { action: 'confirm', id: entry.id }, textContent: '確認' }) : null,
-      entry.status !== 'rejected' ? el('button', { className: 'ghost', dataset: { action: 'reject', id: entry.id }, textContent: '拒絕' }) : null,
-      el('button', { className: 'ghost', dataset: { action: 'edit', id: entry.id }, textContent: '編輯' }),
-      el('button', { className: 'danger', dataset: { action: 'delete', id: entry.id }, textContent: '刪除' }),
+    const button = (action, text, className = '') => el('button', {
+      className,
+      dataset: { action, id: entry.id },
+      textContent: text,
+    });
+    // 固定四格，沒有的動作留隱形佔位：按鈕位置才不會隨狀態跳動。
+    return el('div', { className: 'entry-actions' },
+      entry.status === 'candidate' ? button('confirm', '確認') : el('span', { className: 'action-slot' }),
+      entry.status !== 'rejected' ? button('reject', '拒絕', 'ghost') : el('span', { className: 'action-slot' }),
+      button('edit', '編輯', 'ghost'),
+      button('delete', '刪除', 'danger'),
     );
   }
 
@@ -752,7 +769,7 @@
     const rows = shown.slice((view.page - 1) * LIST_PAGE_SIZE, view.page * LIST_PAGE_SIZE);
     $(kind + '-rows').replaceChildren(...(rows.length
       ? rows.map((entry) => el('tr', {}, ...cells(entry), el('td', {}, entryActions(entry))))
-      : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, all.length ? '這個狀態沒有項目。' : empty))]));
+      : [el('tr', {}, el('td', { colSpan: 6, className: 'muted empty-cell' }, all.length ? '這個狀態沒有項目。' : empty))]));
     $(kind + '-pager').replaceChildren(...(pages > 1 ? [
       el('button', { type: 'button', className: 'ghost', dataset: { list: kind, page: String(view.page - 1) }, textContent: '上一頁', disabled: view.page <= 1 }),
       el('span', { className: 'muted' }, `第 ${view.page} / ${pages} 頁（${shown.length} 筆）`),
@@ -795,22 +812,25 @@
     renderEntryList('slang', slangEntries.filter((entry) => entry.kind !== 'style'), {
       empty: '還沒有詞條；在允許的頻道累積 20 則訊息後會自動學。',
       cells: (entry) => [
-        el('td', {}, el('strong', {}, entry.term)),
-        el('td', {}, entry.meaning),
-        el('td', { className: 'muted' }, entry.usage || '—'),
-        el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
-        el('td', {}, String(entry.seen ?? 0)),
+        el('td', { title: String(entry.term ?? '') }, el('div', { className: 'cell-clamp' }, el('strong', {}, entry.term))),
+        el('td', { title: String(entry.meaning ?? '') }, el('div', { className: 'cell-clamp' }, entry.meaning)),
+        el('td', { className: 'muted', title: entry.usage || '—' }, el('div', { className: 'cell-clamp' }, entry.usage || '—')),
+        el('td', { className: 'nowrap' }, SLANG_LABEL[entry.status] ?? entry.status),
+        el('td', { className: 'nowrap' }, String(entry.seen ?? 0)),
       ],
     });
     renderEntryList('style', renderStyleChannels(slangEntries.filter((entry) => entry.kind === 'style')), {
       empty: '還沒有頻道風格；黑話學習每次抽取時會順便產出。',
-      cells: (entry) => [
-        el('td', { className: 'muted' }, '#' + (entry.channelName || entry.channelId)),
-        el('td', {}, el('strong', {}, entry.term)),
-        el('td', {}, entry.meaning),
-        el('td', {}, SLANG_LABEL[entry.status] ?? entry.status),
-        el('td', {}, String(entry.seen ?? 0)),
-      ],
+      cells: (entry) => {
+        const channel = '#' + (entry.channelName || entry.channelId);
+        return [
+          el('td', { className: 'muted', title: channel }, el('div', { className: 'cell-clamp' }, channel)),
+          el('td', { title: String(entry.term ?? '') }, el('div', { className: 'cell-clamp' }, el('strong', {}, entry.term))),
+          el('td', { title: String(entry.meaning ?? '') }, el('div', { className: 'cell-clamp' }, entry.meaning)),
+          el('td', { className: 'nowrap' }, SLANG_LABEL[entry.status] ?? entry.status),
+          el('td', { className: 'nowrap' }, String(entry.seen ?? 0)),
+        ];
+      },
     });
   }
 

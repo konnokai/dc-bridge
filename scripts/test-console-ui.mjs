@@ -661,6 +661,65 @@ try {
     }
   });
 
+  await test('Discord 控制台：黑話／頻道表欄寬與列高固定，操作按鈕不隨內容位移', async () => {
+    let entries = [
+      { id: 's1', kind: 'slang', term: '短', meaning: '短', usage: '短', status: 'candidate', seen: 1 },
+      { id: 's2', kind: 'slang', term: '長'.repeat(30), meaning: '長'.repeat(80), usage: '長'.repeat(80), status: 'confirmed', seen: 2 },
+      { id: 's3', kind: 'slang', term: '拒絕', meaning: '拒絕的', usage: '', status: 'rejected', seen: 3 },
+      { id: 't1', kind: 'style', channelId: 'c1', channelName: '短', term: '甲', meaning: '短描述', status: 'candidate', seen: 1 },
+      { id: 't2', kind: 'style', channelId: 'c2', channelName: '長'.repeat(30), term: '乙', meaning: '長'.repeat(80), status: 'confirmed', seen: 2 },
+    ];
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries, learning: { enabled: true } }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 648, height: 900 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#slang`);
+      await p.waitForFunction(() => document.querySelectorAll('#slang-rows tr').length === 3
+        && document.querySelectorAll('#style-rows tr').length === 2);
+      const metrics = (id) => p.locator(`#${id}`).evaluate((tbody) => {
+        const rows = [...tbody.querySelectorAll('tr')];
+        return {
+          heights: rows.map((tr) => Math.round(tr.getBoundingClientRect().height)),
+          editX: rows.map((tr) => Math.round(tr.querySelector('[data-action="edit"]').getBoundingClientRect().x)),
+        };
+      });
+      const same = (m, name) => {
+        assert(m.heights.every((h) => h > 0), `${name}：列高要大於 0`);
+        assert.equal(new Set(m.editX).size, 1, `${name}：不同內容的列，編輯按鈕 x 要一樣`);
+        assert.equal(new Set(m.heights).size, 1, `${name}：不同內容的列，列高要一樣`);
+      };
+      const before = await metrics('slang-rows');
+      same(before, '黑話表');
+      same(await metrics('style-rows'), '頻道表');
+
+      entries = [{ ...entries[0], meaning: '很長'.repeat(300), usage: '很長'.repeat(300) }, ...entries.slice(1)];
+      await Promise.all([
+        p.waitForResponse(r => new URL(r.url()).pathname === '/api/slang'),
+        p.locator('#refresh').click(),
+      ]);
+      await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(2)').textContent.startsWith('很長'));
+      const after = await metrics('slang-rows');
+      assert.deepEqual(after, before, '內容變長後欄寬、列高與按鈕位置都不能變');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('No JavaScript errors, unknown API routes or external requests', async () => {
     assert.deepEqual(errors, []);
     assert.deepEqual(fixture.unknownRequests, []);
