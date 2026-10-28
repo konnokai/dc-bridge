@@ -737,6 +737,15 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await sender.send({ token: tokenA, content: '對', replyTo: '#abcde' });
   ok(delivered.at(-1)?.replyTo === '#abcde', 'reply_to 交給 deliver 去查編號');
 
+  const ref = result.refs[0];
+  await rejects(sender.send({ token: tokenA, content: `#${ref}` }), /reply_to/, 'content 只有查得到的 #編號就擋下來，提示放 reply_to');
+  await rejects(sender.send({ token: tokenA, content: `#${ref}`, replyTo: `#${ref}` }), /send_message 沒有 message 參數/, '連 reply_to 一起給也擋');
+  await sender.send({ token: tokenA, content: `看 #${ref} 這則` });
+  ok(delivered.at(-1)?.content === `看 #${ref} 這則`, '正文裡夾 #編號照常送');
+  sender.startTurn('ch:100');
+  await sender.send({ token: tokenA, content: '#abcdef' });
+  ok(delivered.at(-1)?.content === '#abcdef', '查不到的 #編號不誤擋');
+
   sender.startTurn('ch:100');
   await rejects(sender.react({ token: tokenA, message: '#gone', emoji: '😂' }), /找不到/, 'reaction 失敗回錯誤');
   const reactBurst = await Promise.allSettled(

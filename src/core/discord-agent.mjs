@@ -261,6 +261,11 @@ export function createAgentSender({
     }
     if (!content.trim() && !sticker) throw statusError('content 是空的', 400);
     const { sessionId, key, kind, channel } = await resolve(token);
+    // 模型偶爾把回覆目標塞進 content（其他工具的參數叫 message，send_message 沒有）。
+    // 只送一個查得到的 #編號 一定是放錯位置：擋下來，讓它同一輪自己改。
+    if (/^#[a-z0-9]{6,}$/i.test(content.trim()) && refs.lookup(key, content.trim())) {
+      throw statusError('content 只有一個 #編號：正文放 content，回覆目標放 reply_to；send_message 沒有 message 參數', 400);
+    }
     checkSensitive(sessionId, content);
     const ids = await visible(key, sessionId, () => deliver(key, { content, replyTo, sticker }));
     return { key, channel: channelName(kind, channel, key), refs: own(key, ids ?? []) };

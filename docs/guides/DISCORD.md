@@ -599,6 +599,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 `mcp__discord__*` 每個都要帶 `token`（這個 DSH 會話的令牌，橋接用它反查是哪個頻道），下面只列其他參數：
 
 - `mcp__discord__send_message`（`content`、`reply_to` 可省略）：送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。
+  沒有 `message` 參數：正文只放 `content`，要接的那則 `#編號` 只放 `reply_to`；`content` 只有一個查得到的 `#編號` 會被擋（400）。
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
   `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
