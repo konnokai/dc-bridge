@@ -83,7 +83,7 @@ pm2 logs dc-bridge
 | `allow.channels` | 允許的頻道 id（討論串用自己的 id，不是母頻道） |
 | `allow.users` | 允許私聊的 user id。**不影響伺服器頻道** |
 | `deny.guilds` / `deny.channels` / `deny.users` | 黑名單，優先於白名單。`deny.channels` 也擋掉這個頻道底下的討論串。`deny.users` 是**管理員封鎖**（控制台或 `config.json` 編輯）：bot 完全不處理他的訊息，@bot 也一樣 |
-| `deny.self` | 使用者自己用 `/blacklist` 退出的名單。同樣不處理他的訊息，**唯一例外**是他 @bot 或回覆 bot 的那一則照常處理。管理員封鎖的人不能用 `/blacklist` 自己解除。控制台不顯示這份名單，要直接改 `config.json` |
+| `deny.self` | 使用者自己用 `/blacklist` 退出的名單。同樣不處理他的訊息，**唯一例外**是他 @bot 或回覆 bot 的那一則照常處理。管理員封鎖的人不能用 `/blacklist` 自己解除。控制台「白名單與媒體」卡片可以直接改這份名單 |
 | `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 3000（500~30000） |

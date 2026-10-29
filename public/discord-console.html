@@ -179,7 +179,8 @@
       <label>ownerIds<textarea id="owner-ids" placeholder="一行一個 ID"></textarea></label>
       <label>deny.guilds<textarea id="deny-guilds"></textarea></label>
       <label>deny.channels<textarea id="deny-channels"></textarea></label>
-      <label>deny.users<textarea id="deny-users"></textarea></label>
+      <label>deny.users（管理員封鎖）<textarea id="deny-users"></textarea></label>
+      <label>deny.self（/blacklist 退出）<textarea id="deny-self"></textarea></label>
       <label>media.maxBytes<input id="media-max-bytes" type="number" min="65536" step="any"></label>
       <label>media.maxModelBytes<input id="media-max-model-bytes" type="number" min="131072" step="131072"></label>
       <label>media.maxLongEdge<input id="media-max-long-edge" type="number" min="256" max="2048" step="64"></label>
@@ -928,6 +929,7 @@
     $('deny-guilds').value = join(c.deny.guilds);
     $('deny-channels').value = join(c.deny.channels);
     $('deny-users').value = join(c.deny.users);
+    $('deny-self').value = join(c.deny.self);
     $('media-max-bytes').value = c.media.maxBytes;
     $('media-max-model-bytes').value = c.media.maxModelBytes;
     $('media-max-long-edge').value = c.media.maxLongEdge;
@@ -1183,6 +1185,7 @@
             guilds: lines($('deny-guilds').value),
             channels: lines($('deny-channels').value),
             users: lines($('deny-users').value),
+            self: lines($('deny-self').value),
           },
           ownerIds: lines($('owner-ids').value),
           media: {
