@@ -1426,6 +1426,9 @@ async function main() {
               || linkPaths(message.content).some((path) => targetPaths.includes(path))))
           .slice(0, 3);
         for (const message of fixMessages) {
+          // 修復 bot 的重點是訊息本文那條換過網域的完整網址，embed 只有網域時也要先留下它。
+          const fixText = flat(labelEmojiTags(resolveMentions(withStickers(message), message), emojiCatalogs), 500);
+          if (fixText) lines.push(`${flat(authorName(message), 40)} 補的連結：${fixText}`);
           lines.push(...embedLines(message.embeds, message, `${flat(authorName(message), 40)} 補的連結預覽`));
         }
       }

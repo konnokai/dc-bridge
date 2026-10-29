@@ -631,7 +631,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   作者在 `deny.users` 的人一律不給讀；在 `deny.self` 的人只有 @bot／回覆 bot 的那一則讀得到（那一則本來就照正常流程處理）。
   訊息裡有連結時，也會讀後面幾則由機器人補上的同一個連結預覽（X、Facebook、Threads、bilibili、IG 這類修復 bot；
   只換網域的改寫連結也算同一條，例如 fxtwitter、fixupx、ddinstagram），
-  因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到
+  因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到；
+  修復 bot 的訊息本文（換過網域的完整網址）也會一起列出
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
   伺服器頻道走 Discord 的訊息搜尋 API（`/guilds/{guild}/messages/search`），不用從最新一則一則往回翻；
   一次最多比對 75 個符合（3 頁 × 25），更早的符合要再給 `date` 縮小範圍。
