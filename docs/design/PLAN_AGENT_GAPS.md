@@ -399,6 +399,14 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 - 影片佔 `media.maxCount` 的 1 張。`prepareImageBlock`／`collectImageAttachments`／`fetchDiscordImage` 改名成 `prepareMediaBlock`／`collectMediaAttachments`／`fetchDiscordMedia`，callers 一起改。
 - 測試伺服器有 ffmpeg 7.1.3 與 ffprobe，F2 上線後可以真的抽格。還沒部署，也還沒貼真影片驗證。
 
+**延伸：影片連結（yt-dlp，2026-10-29，同一支分支）**
+- `view_message` 遇到訊息裡的 YouTube 白名單連結（`youtube.com`、`youtu.be`、`music.youtube.com`、`youtube-nocookie.com`）
+  且 `videoLinks.enabled` 時，用 `yt-dlp -g` 取**直連串流網址**（不落地整支片），交給同一套 ffmpeg 抽格。
+- 白名單是防 SSRF；yt-dlp 的 stdout/stderr 寫檔案（受限沙箱 pipe 會 EPERM）。失敗只多一行「影片連結看不了」。
+- `videoLinks.enabled` 預設 `false`，`videoLinks.ytDlpPath` 留空就用 `YTDLP_PATH` 或 PATH。
+- 測試伺服器實測：yt-dlp 2026.10.21、`-g` 約 2 秒、ffmpeg 7.1.3 讀 googlevideo 的 AV1 串流 60 秒窗抽格成功（736×282 JPEG）。
+  還沒開、還沒部署。
+
 ### K：常用表情（低優先，可以不做）
 
 **狀態：已完成（2026-10-28，commit `c590ad8`，已部署）。**

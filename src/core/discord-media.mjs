@@ -8,7 +8,7 @@
 //
 // 縮圖重用 QQ 版的 normalizeImageForModel（ffmpeg）：它已經處理過 DSH 的
 // base64 上限、長邊、動圖抽帧拼圖，是這個 repo 唯一的圖片正規化實作。
-import { normalizeImageForModel, normalizeVideoForModel, sniffImage, sniffVideo } from '../media-normalize.js';
+import { normalizeImageForModel, normalizeVideoForModel, normalizeVideoUrlForModel, sniffImage, sniffVideo } from '../media-normalize.js';
 
 /** 允許抓圖的 host（精確比對，子網域不算）。 */
 // images-ext-*：Discord 替連結預覽代抓的外部圖片。原站由 Discord 去抓，橋接只連 Discord 的主機。
@@ -165,6 +165,28 @@ export async function prepareMediaBlock(buffer, name, limits) {
       mediaType: result.mimeType || mediaType,
       data: result.buffer.toString('base64'),
       name: safeName(name),
+    },
+    note: result.note || '',
+  };
+}
+
+/** yt-dlp 的直連網址 → 跟附件一樣的圖像區塊（影片抽格拼圖）。 */
+export async function prepareVideoUrlBlock(url, limits) {
+  const result = await normalizeVideoUrlForModel(url, {
+    maxModelBytes: limits.maxModelBytes,
+    maxVideoSeconds: limits.maxVideoSeconds,
+    gifTile: 240,
+    videoFrames: 6,
+    timeoutMs: limits.timeoutMs,
+    ffmpegPath: limits.ffmpegPath ?? null,
+  });
+  if (!result.ok) return { error: result.error };
+  return {
+    block: {
+      type: 'image',
+      mediaType: result.mimeType || 'image/jpeg',
+      data: result.buffer.toString('base64'),
+      name: 'video-link',
     },
     note: result.note || '',
   };

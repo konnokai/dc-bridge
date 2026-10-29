@@ -105,6 +105,8 @@ pm2 logs dc-bridge
 | `media.maxCount` | 一則訊息與整批各最多處理幾張，預設 4（1 ~ 8）；影片抽格後算 1 張 |
 | `media.timeoutMs` | 單張縮圖／影片抽格的 ffmpeg 逾時，預設 25000 |
 | `media.maxVideoSeconds` | 影片只看前面幾秒，預設 60（5 ~ 120；6 格抽樣的上限就是 120 秒） |
+| `videoLinks.enabled` | 群友貼 YouTube 這類連結時，`view_message` 用 yt-dlp 抽幾格畫面，預設 `false` |
+| `videoLinks.ytDlpPath` | yt-dlp 的位置；留空就用 `YTDLP_PATH` 環境變數或 PATH 裡的 `yt-dlp` |
 | `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則） |
 | `context.messages` | 抓幾則，預設 12（0 = 關閉，上限 50） |
 | `context.maxChars` | 上下文區塊的字數上限，預設 3000 |
@@ -634,6 +636,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   只換網域的改寫連結也算同一條，例如 fxtwitter、fixupx、ddinstagram），
   因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到；
   修復 bot 的訊息本文（換過網域的完整網址）也會一起列出
+- `view_message` 的影片連結：訊息文字裡有白名單連結（YouTube 與 `youtu.be`、`music.youtube.com`、`youtube-nocookie.com`）
+  且 `videoLinks.enabled` 時，橋接用 `yt-dlp -g` 取**直連串流網址**，再用同一套 ffmpeg 抽 6 格拼圖，
+  不會把整支影片下載下來。抽格窗口跟影片附件一樣（`media.maxVideoSeconds`）。
+  yt-dlp 失敗（私人影片、會員限定、地區鎖、直播、沒裝）只多一行「影片連結看不了：原因」，其它內容照回。
+  白名單是防 SSRF：yt-dlp 會連原站，不能讓群友丟任何網址就讓伺服器去抓。抓 YouTube 違反其服務條款，要不要開由管理員決定；
+  預設關閉，而且 yt-dlp 要自己定期更新，沒更新就會整條失效。
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
   伺服器頻道走 Discord 的訊息搜尋 API（`/guilds/{guild}/messages/search`），不用從最新一則一則往回翻；
   一次最多比對 75 個符合（3 頁 × 25），更早的符合要再給 `date` 縮小範圍。

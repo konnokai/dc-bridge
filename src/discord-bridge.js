@@ -113,9 +113,11 @@ import {
   embedImages,
   fetchDiscordMedia,
   prepareMediaBlock,
+  prepareVideoUrlBlock,
   stickerImages,
   stickerLabel,
 } from './core/discord-media.mjs';
+import { fetchStreamUrl, videoLinks } from './core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
 import { createBatcher, createTurnGate, defang, formatBatch, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
@@ -1458,6 +1460,28 @@ async function main() {
         ...media.skipped.map((s) => `${flat(s.name, 60)}（${s.reason}）`),
         ...settled.map((r, i) => (r.status === 'rejected' ? `${flat(media.accepted[i].name, 60)}（${flat(r.reason?.message ?? r.reason, 80)}）` : '')).filter(Boolean),
       ];
+
+      // 群友貼的影片連結（YouTube 等）：按需用 yt-dlp 取直連網址，跟附件同一套抽格。
+      // 只在這則訊息真的有白名單連結、而且還有圖片名額時才跑；失敗只多一行原因。
+      const linkUrl = cfg.discord.videoLinks.enabled && images.length < cfg.discord.media.maxCount
+        ? videoLinks(target.content)[0]
+        : '';
+      if (linkUrl) {
+        const stream = await fetchStreamUrl(linkUrl, { ytDlpPath: cfg.discord.videoLinks.ytDlpPath })
+          .catch((error) => ({ ok: false, reason: error?.message ?? String(error) }));
+        if (!stream.ok) {
+          lines.push(`影片連結看不了：${flat(stream.reason, 120)}`);
+        } else {
+          const sheet = await prepareVideoUrlBlock(stream.url, cfg.discord.media);
+          if (sheet.block) {
+            images.push({ data: sheet.block.data, mimeType: sheet.block.mediaType });
+            if (sheet.note) videoNotes.push(sheet.note);
+          } else {
+            lines.push(`影片連結看不了：${flat(sheet.error, 120)}`);
+          }
+        }
+      }
+
       if (images.length) lines.push(`附上 ${images.length} 張圖。`);
       if (videoNotes.length) lines.push(`影片說明：${videoNotes.map((note) => flat(note, 80)).join('；')}`);
       if (missed.length) lines.push(`看不到的圖：${missed.join('；')}`);

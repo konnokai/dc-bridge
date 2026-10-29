@@ -50,6 +50,7 @@ import {
   stickerLabel,
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
+import { parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
@@ -1753,6 +1754,17 @@ console.log('## 8. 附件（圖片與影片）');
   ok(collectMediaAttachments([att({ name: 'a.zip', contentType: 'application/zip' })], limits).skipped[0].reason.includes('影片'),
     '不是圖片也不是影片的附件說明會講清楚');
   ok(normalizeDiscordConfig({}).media.maxBytes === 20 * 1024 * 1024, '下載上限預設跟 Discord 免費額度（20MB）一致');
+
+  // 影片連結：只有白名單網域交給 yt-dlp，其它網址一律不碰。
+  const links = videoLinks('看這個 https://www.youtube.com/watch?v=abc123 和 https://youtu.be/xyz 還有 https://evil.example.com/v.mp4');
+  ok(links.length === 2 && links[0].includes('youtube.com/watch') && links[1].includes('youtu.be'), '只挑白名單的 YouTube 連結');
+  ok(videoLinks('https://www.youtube.com/watch?v=abc123 https://www.youtube.com/watch?v=abc123').length === 1, '同一條連結只留一次');
+  ok(videoLinks('https://youtube.com.evil.com/watch?v=1').length === 0, '子網域詐騙不算白名單');
+  ok(videoLinks('看這個 https://youtu.be/xyz，很好笑')[0] === 'https://youtu.be/xyz', '句尾標點不會黏進網址');
+  ok(parseStreamUrl('https://cdn.example/v.mp4\nhttps://cdn.example/a.m4a\n') === 'https://cdn.example/v.mp4', 'yt-dlp 多行輸出取第一條 https 網址');
+  ok(parseStreamUrl('') === '' && parseStreamUrl('http://insecure/x') === '', '沒有 https 網址就回空字串');
+  ok(resolveYtDlp({}) === 'yt-dlp' || resolveYtDlp({}), '沒有設定時回候選路徑不會丟例外');
+  ok(normalizeDiscordConfig({}).videoLinks.enabled === false, '影片連結預設關閉');
   const tooBig = collectMediaAttachments([att({ size: limits.maxBytes + 1 })], limits);
   ok(tooBig.accepted.length === 0 && tooBig.skipped[0].reason.includes('上限'), '超過下載上限會跳過並說明原因');
 

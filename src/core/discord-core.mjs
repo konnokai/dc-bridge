@@ -129,6 +129,12 @@ export function normalizeDiscordConfig(raw) {
       // 影片只抽前面這麼多秒的畫面：後面再多也只是白解碼。6 格最多蓋住 120 秒（fps 下限）。
       maxVideoSeconds: clamp(src.media?.maxVideoSeconds, 60, 5, 120),
     },
+    videoLinks: {
+      // 群友貼 YouTube 這類連結時，view_message 用 yt-dlp 取直連網址再抽格。預設關閉：
+      // 多一支外部程式、一次外部請求，而且 yt-dlp 沒更新就會整條失效。
+      enabled: src.videoLinks?.enabled === true,
+      ytDlpPath: typeof src.videoLinks?.ytDlpPath === 'string' ? src.videoLinks.ytDlpPath.trim() : '',
+    },
     context: {
       // 被 @／回覆時，抓最近幾則頻道訊息一起送進 prompt（Read Message History 權限）。
       enabled: src.context?.enabled !== false,

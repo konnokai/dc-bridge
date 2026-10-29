@@ -45,6 +45,10 @@
       "timeoutMs": 25000,
       "maxVideoSeconds": 60
     },
+    "videoLinks": {
+      "enabled": false,
+      "ytDlpPath": ""
+    },
     "context": {
       "enabled": true,
       "messages": 12,

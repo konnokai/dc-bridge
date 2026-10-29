@@ -298,7 +298,8 @@ function runFfmpeg(ffmpeg, args, { timeoutMs = MEDIA_DEFAULTS.timeoutMs } = {}) 
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(ffmpeg, args, { windowsHide: true, stdio: 'ignore' });
+      // -nostdin：不是每個環境的 stdin 都是 /dev/null；留著會等使用者按鍵，看起來像卡死。
+      child = spawn(ffmpeg, ['-nostdin', ...args], { windowsHide: true, stdio: 'ignore' });
     } catch (error) {
       resolve({ ok: false, error: `ffmpeg 启动失败：${error?.message ?? error}` });
       return;
@@ -457,47 +458,45 @@ export async function normalizeImageForModel(buf, mimeType, opts = {}) {
   }
 }
 
-/**
- * 影片 → 一張拼圖 JPEG。做法照 GIF 的抽帧拼图，差別是長度只有 ffprobe 知道。
- * 超過 maxVideoSeconds 只看前面那一段：模型要的是大概發生什麼，不是整支片。
- *
- * @param opts { maxModelBytes, maxVideoSeconds, videoFrames, gifTile, timeoutMs, ffmpegPath, ffprobePath, tmpDir }
- */
-export async function normalizeVideoForModel(buf, opts = {}) {
-  const bytes = Buffer.isBuffer(buf) ? buf.length : 0;
-  if (!bytes) return { ok: false, error: '影片位元組為空' };
-  const info = sniffVideo(buf);
-  if (!info) return { ok: false, error: '認不出影片格式（mp4／mov／webm）' };
+/** 影片抽格參數：窗口秒數、fps、格子數。純函式。 */
+function planVideoSheet(probedSeconds, opts = {}) {
+  const wanted = clampInt(opts.videoFrames, 2, 12, MEDIA_DEFAULTS.gifFrames);
+  const maxSeconds = clampInt(opts.maxVideoSeconds, 5, 120, MEDIA_DEFAULTS.maxVideoSeconds);
+  // planAnimation 的 fps 下限是 0.05，6 格最多蓋住 120 秒；窗口先封頂，
+  // note 才不會說「抽 6 格」卻其實只看到前面一小段。
+  const windowSeconds = Math.min(probedSeconds > 0 ? probedSeconds : wanted, maxSeconds, wanted / 0.05);
+  return {
+    windowSeconds,
+    layout: planAnimation({ frames: wanted, durationMs: windowSeconds * 1000 }, { gifFrames: wanted }),
+  };
+}
 
+/**
+ * 抽格拼圖的共同實作：input 是本機檔案或 http(s) 網址（yt-dlp 的直連串流）。
+ * 失敗一律回一句可讀原因，不丟例外給呼叫端。
+ */
+async function renderVideoSheet(input, opts = {}) {
   const ffmpeg = resolveFfmpeg({ ffmpegPath: opts.ffmpegPath ?? null });
   const maxBytes = clampInt(opts.maxModelBytes, 64 * 1024, HARD_MAX_MODEL_BYTES, MEDIA_DEFAULTS.maxModelBytes);
-  const maxSeconds = clampInt(opts.maxVideoSeconds, 5, 120, MEDIA_DEFAULTS.maxVideoSeconds);
-  const wanted = clampInt(opts.videoFrames, 2, 12, MEDIA_DEFAULTS.gifFrames);
   const tileWidth = clampInt(opts.gifTile, 64, 400, MEDIA_DEFAULTS.gifTile);
+
+  // ffprobe 問不到長度（沒裝、格式怪）就當 1 fps 取前 6 秒：短片還是看得到每一格。
+  const probe = await probeAudio(input, {
+    ffprobePath: opts.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe',
+    // 只讀檔頭，不必跟 ffmpeg 共用 25 秒的預算。
+    timeoutMs: Math.min(opts.timeoutMs ?? MEDIA_DEFAULTS.timeoutMs, 10_000),
+    tmpDir: opts.tmpDir
+  });
+  const probed = probe.ok ? Number(probe.duration) || 0 : 0;
+  const { windowSeconds, layout } = planVideoSheet(probed, opts);
 
   const dir = makeTempWorkspace(opts.tmpDir);
   try {
-    const inFile = path.join(dir, `in.${info.format}`);
-    fs.writeFileSync(inFile, buf);
-
-    // ffprobe 問不到長度（沒裝、格式怪）就當 1 fps 取前 6 秒：短片還是看得到每一格。
-    const probe = await probeAudio(inFile, {
-      ffprobePath: opts.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe',
-      // 只讀檔頭，不必跟 ffmpeg 共用 25 秒的預算。
-      timeoutMs: Math.min(opts.timeoutMs ?? MEDIA_DEFAULTS.timeoutMs, 10_000),
-      tmpDir: opts.tmpDir
-    });
-    const probed = probe.ok ? Number(probe.duration) || 0 : 0;
-    // planAnimation 的 fps 下限是 0.05，6 格最多蓋住 120 秒；窗口先封頂，
-    // note 才不會說「抽 6 格」卻其實只看到前面一小段。
-    const windowSeconds = Math.min(probed > 0 ? probed : wanted, maxSeconds, wanted / 0.05);
-    const durationMs = windowSeconds * 1000;
-    const layout = planAnimation({ frames: wanted, durationMs }, { gifFrames: wanted });
     const outFile = path.join(dir, 'strip.jpg');
     const vf = `fps=${layout.fps},scale=${tileWidth}:-1:flags=lanczos,` +
       `tile=${layout.cols}x${layout.rows}:padding=4:margin=4:color=white`;
     const run = await runFfmpeg(ffmpeg, [
-      '-v', 'error', '-y', '-t', String(windowSeconds), '-i', inFile,
+      '-v', 'error', '-y', '-t', String(windowSeconds), '-i', input,
       '-filter_complex', `[0:v]${vf}[out]`, '-map', '[out]',
       '-frames:v', '1', '-q:v', '4', outFile
     ], { timeoutMs: opts.timeoutMs });
@@ -514,6 +513,35 @@ export async function normalizeVideoForModel(buf, opts = {}) {
   } finally {
     cleanupWorkspace(dir);
   }
+}
+
+/**
+ * 影片附件 → 一張拼圖 JPEG。做法照 GIF 的抽帧拼图，差別是長度只有 ffprobe 知道。
+ * 超過 maxVideoSeconds 只看前面那一段：模型要的是大概發生什麼，不是整支片。
+ *
+ * @param opts { maxModelBytes, maxVideoSeconds, videoFrames, gifTile, timeoutMs, ffmpegPath, ffprobePath, tmpDir }
+ */
+export async function normalizeVideoForModel(buf, opts = {}) {
+  const bytes = Buffer.isBuffer(buf) ? buf.length : 0;
+  if (!bytes) return { ok: false, error: '影片位元組為空' };
+  const info = sniffVideo(buf);
+  if (!info) return { ok: false, error: '認不出影片格式（mp4／mov／webm）' };
+
+  const dir = makeTempWorkspace(opts.tmpDir);
+  try {
+    const inFile = path.join(dir, `in.${info.format}`);
+    fs.writeFileSync(inFile, buf);
+    return await renderVideoSheet(inFile, opts);
+  } finally {
+    cleanupWorkspace(dir);
+  }
+}
+
+/** 直接拿 http(s) 網址（yt-dlp 的直連串流）抽格，不先把整支片抓下來。 */
+export async function normalizeVideoUrlForModel(url, opts = {}) {
+  const input = String(url ?? '');
+  if (!/^https?:\/\//i.test(input)) return { ok: false, error: '影片網址不是 http(s)' };
+  return renderVideoSheet(input, opts);
 }
 
 /** 供日志/提示用的一句话摘要（不含 base64）。 */

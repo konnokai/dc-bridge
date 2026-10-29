@@ -11,6 +11,7 @@
 // 不访问网络；ffmpeg 缺失时只跑纯函数部分并明确打印 SKIP。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -19,6 +20,7 @@ import {
   describeImage,
   normalizeImageForModel,
   normalizeVideoForModel,
+  normalizeVideoUrlForModel,
   planAnimation,
   planNormalization,
   sniffImage,
@@ -239,6 +241,33 @@ await test('影片抽不出畫面（壞檔）回錯誤，不丟例外', async ()
   const out = await normalizeVideoForModel(fs.readFileSync(fake), { ...MEDIA_DEFAULTS, tmpDir: tmp });
   assert.equal(out.ok, false);
   assert.match(out.error, /影片抽不出畫面/);
+});
+
+await test('normalizeVideoUrlForModel：http 直連網址走同一套抽格（不落地整支片）', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const clip = path.join(tmp, 'served.mp4');
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=3', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', clip]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const bytes = fs.readFileSync(clip);
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'video/mp4', 'content-length': bytes.length });
+    response.end(bytes);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/clip.mp4`;
+    const out = await normalizeVideoUrlForModel(url, { ...MEDIA_DEFAULTS, tmpDir: tmp });
+    assert.equal(out.ok, true, out.error);
+    assert.match(out.note, /抽 6 格拼成 3×2/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await test('normalizeVideoUrlForModel：非 http(s) 一律拒絕', async () => {
+  const out = await normalizeVideoUrlForModel('file:///etc/passwd', MEDIA_DEFAULTS);
+  assert.equal(out.ok, false);
+  assert.match(out.error, /不是 http/);
 });
 
 await test('maxVideoSeconds 再大，抽格窗口也只到 120 秒（fps 下限）', async () => {
