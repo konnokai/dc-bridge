@@ -1400,9 +1400,9 @@ async function main() {
         `內容：${flat(labelEmojiTags(resolveMentions(withStickers(target), target), emojiCatalogs), VIEW_TEXT_MAX) || '（沒有文字）'}`,
       ];
       try {
-        const replied = await referencedMessage(target, true);
-        if (replied && !isDeniedUser(cfg.discord, replied.author?.id)
-          && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
+        // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它就看不懂在回什麼。
+        const replied = await referencedMessage(target);
+        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
       } catch { /* 被回覆的那則刪了就不寫 */ }
       for (const snapshot of target.messageSnapshots?.values() ?? []) {
         lines.push(`轉發的內容：${flat(labelEmojiTags(resolveMentions(withStickers(snapshot), snapshot), emojiCatalogs), 500) || '[沒有文字]'}`);
@@ -2451,10 +2451,9 @@ async function main() {
       }
       let quote = '';
       try {
-        const referenced = await referencedMessage(entry.message, entry.direct);
-        // 退出或封鎖的人那則原文也不進引用，跟頻道上下文同一個規則。
-        if (referenced && !isDeniedUser(cfg.discord, referenced.author?.id)
-          && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
+        const referenced = await referencedMessage(entry.message);
+        // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它模型看不懂在回什麼。
+        if (referenced && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
             author: authorName(referenced),
             content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
@@ -2472,7 +2471,7 @@ async function main() {
         isOwner: entry.isOwner,
         ref: messageRefs.register(key, entry.id),
         quote,
-        // 引用內容看不到時（沒快取、沒叫 bot、被回覆的那則沒文字），至少寫出在回誰。
+        // 引用內容看不到時（抓不到或被回覆的那則沒內容），至少寫出在回誰。
         replyName: quote ? '' : repliedName(entry.message),
         imageTags,
         hasImage: entry.hasImage,

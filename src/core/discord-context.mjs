@@ -23,19 +23,19 @@ export function formatQuote({ author, content, hasImage } = {}) {
 }
 
 /**
- * 這則回覆的是哪一則。快取裡有就直接用，不打 API；快取沒有時只有叫 bot 的才去抓，
- * 自由參與時每則都抓會被 Discord 的 rate limit 卡住。不是回覆、或沒抓就回 null。
+ * 這則回覆的是哪一則。快取裡有就直接用；快取沒有就抓那一則（一次 API 呼叫）。
+ * 引用是群友自己帶進對話的內容，少了它模型看不懂在回什麼，所以沒叫 bot 也要拿。
  *
  * 只認同一個頻道的一般回覆（type 0）：轉發與討論串起點會指到別的頻道，那裡可能不在白名單。
  * 所以也不用 fetchReference()，它會照 reference.channelId 去任何快取裡的頻道抓。
  */
-export async function referencedMessage(message, direct) {
+export async function referencedMessage(message) {
   const reference = message?.reference;
   const id = reference?.messageId;
   if (!id || (reference.type ?? 0) !== 0 || reference.channelId !== message.channelId) return null;
   const cached = message.channel?.messages?.cache?.get(id);
   if (cached && !cached.partial) return cached;
-  return direct ? message.channel.messages.fetch(id) : null;
+  return message.channel.messages.fetch(id);
 }
 
 const WEEKDAYS =['週日', '週一', '週二', '週三', '週四', '週五', '週六'];

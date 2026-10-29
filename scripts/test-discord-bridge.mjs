@@ -1985,16 +1985,15 @@ console.log('## 10. 引用、上下文、出站閘門');
       },
     },
   });
-  ok(await referencedMessage(replyTo('r1'), false) === cachedRef, '沒叫 bot 的回覆：快取有就帶引用');
-  ok(await referencedMessage(replyTo('r2'), false) === null && fetches === 0, '沒叫 bot 的回覆：快取沒有就不抓 API');
-  ok((await referencedMessage(replyTo('r2'), true))?.content === 'fetched' && fetches === 1, '★ 的回覆：快取沒有才抓 API');
-  ok(await referencedMessage({ channel: {} }, true) === null, '不是回覆 → null');
-  ok(await referencedMessage(replyTo('r1', { channelId: 'other' }), true) === null && fetches === 1,
+  ok(await referencedMessage(replyTo('r1')) === cachedRef, '回覆：快取有就直接用，不打 API');
+  ok((await referencedMessage(replyTo('r2')))?.content === 'fetched' && fetches === 1, '回覆：快取沒有就抓那一則');
+  ok(await referencedMessage({ channel: {} }) === null, '不是回覆 → null');
+  ok(await referencedMessage(replyTo('r1', { channelId: 'other' })) === null && fetches === 1,
     '引用別的頻道（可能不在白名單）→ 不帶，也不抓');
-  ok(await referencedMessage(replyTo('r1', { type: 1 }), true) === null && fetches === 1, '轉發不是回覆 → 不帶');
+  ok(await referencedMessage(replyTo('r1', { type: 1 })) === null && fetches === 1, '轉發不是回覆 → 不帶');
   const partialCache = replyTo('r1');
   partialCache.channel.messages.cache.set('r1', { id: 'r1', partial: true, content: '' });
-  ok((await referencedMessage(partialCache, true))?.content === 'fetched' && fetches === 2,
+  ok((await referencedMessage(partialCache))?.content === 'fetched' && fetches === 2,
     '快取裡是 partial 就重新抓，不拿空訊息');
   ok(searchTerms('  期末考  ＡＢＣ ').join('|') === '期末考|abc', '搜尋詞：去空白、全形轉半形、轉小寫');
   ok(matchesTerms('明天ABC期末考', searchTerms('abc 期末考')), '每個詞都出現才算符合（不分大小寫）');
