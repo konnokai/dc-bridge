@@ -82,7 +82,8 @@ pm2 logs dc-bridge
 | `allow.guilds` | 允許的伺服器 id |
 | `allow.channels` | 允許的頻道 id（討論串用自己的 id，不是母頻道） |
 | `allow.users` | 允許私聊的 user id。**不影響伺服器頻道** |
-| `deny.guilds` / `deny.channels` / `deny.users` | 黑名單，優先於白名單。`deny.channels` 也擋掉這個頻道底下的討論串 |
+| `deny.guilds` / `deny.channels` / `deny.users` | 黑名單，優先於白名單。`deny.channels` 也擋掉這個頻道底下的討論串。`deny.users` 是**管理員封鎖**（控制台或 `config.json` 編輯）：bot 完全不處理他的訊息，@bot 也一樣 |
+| `deny.self` | 使用者自己用 `/blacklist` 退出的名單。同樣不處理他的訊息，**唯一例外**是他 @bot 或回覆 bot 的那一則照常處理。管理員封鎖的人不能用 `/blacklist` 自己解除。控制台不顯示這份名單，要直接改 `config.json` |
 | `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 3000（500~30000） |
@@ -217,7 +218,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **`requireMentionInGuild: false`（自由參與）**：頻道裡允許的訊息全部進批次。沒有 ★ 的是大家在聊，
   persona 規定預設不說話，只有真的有話想接才呼叫發送工具；有 ★ 的照樣要回。
   - 只有批次裡有 ★ 時才會亮「正在輸入」，也只有這時才送 `ackMessage`。
-  - 指令（`!reset` 等）、提問的回答、非管理員 `/` 的拒絕訊息只認 ★ 的訊息；沒叫 bot 的 `!xxx` 就是一般聊天。
+  - 提問的回答、非管理員 `/` 的拒絕訊息只認 ★ 的訊息；其餘文字（含 `!xxx`）就是一般聊天。
   - 沒有 ★ 的那批出錯（模型不可用、DSH 拒收、回合被中止）只記日誌，不在頻道貼錯誤訊息。
   - 暱稱或內文裡的 `★`、`【管理員】` 會被改寫成 `☆`、`[管理員]`，多行訊息的續行會縮排，群友沒辦法偽造標記。
   - 每一批都是一個模型回合，**頻道越熱鬧花費越高**；聊得比模型回得快時，上限是「模型連續跑回合」
@@ -228,40 +229,40 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 | 指令 | 誰能用 | 作用 |
 | --- | --- | --- |
-| `/reset`（或 `!reset`、`!new`） | 管理員，或該伺服器有「管理伺服器」權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理者只能重置自己伺服器裡、在白名單上的頻道；私聊只有管理員能用 |
-| `/status`（或 `!status`） | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
+| `/reset` | 管理員，或該伺服器有「管理伺服器」權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理者只能重置自己伺服器裡、在白名單上的頻道；私聊只有管理員能用 |
+| `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
-| `/mention required:true\|false` | 管理員 | 切換 `requireMentionInGuild`（`false` = 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。不填 `required` 只顯示目前設定 |
+| `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。沒開 Message Content 意圖時不能切換（一定得 @bot） |
 | `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。等待期間這個頻道的一般訊息會排到問完才送；模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
-| `/forget`（或 `!forget`） | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
-| `/blacklist join:true\|false` | 所有人 | 把自己加入（`true`）或移出（`false`）`deny.users`，立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不再處理你的訊息（不回、不進批次、不學黑話）。不填 `join` 只顯示目前狀態。只能改自己，回覆只有自己看得到 |
-| 其他 `/` 開頭 | 管理員 | 原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
+| `/forget` | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶與觸發統計，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
+| `/blacklist` | 所有人 | 切換自己的 `deny.self`：每次執行都會切換（不在名單 → 加入，已在名單 → 移出），立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不再處理你的訊息（不回、不進批次、不學黑話），模型主動讀歷史、搜尋、引用也看不到你的訊息；唯一例外是 @bot 或回覆 bot 的那一則（那一則照正常流程處理）。在 `deny.users`（管理員封鎖）裡的人不能自己解除，會回一句請找管理員。私聊仍然全擋。只能改自己，回覆只有自己看得到。別人把你的訊息轉發出去時，轉發的內容不受這份名單影響 |
+| 其他 `/` 開頭 | 管理員 | 文字原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
-`/reset`、`/status`、`/invite`、`/mention`、`/ask` 是**已註冊的 Discord slash command**（回覆只有自己看得到）。
+`/reset`、`/status`、`/invite`、`/console`、`/mention`、`/ask`、`/memory`、`/forget`、`/blacklist`
+都是**已註冊的 Discord slash command**（回覆只有自己看得到）。
 只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
+橋接**沒有訊息指令**：`!reset`、`!forget` 這類文字一律當一般聊天送進模型。
 
 - **誰看得到選單**：`/reset` 是 `default_member_permissions: ManageGuild`（有「管理伺服器」權限的人看得到）；
   `/status`、`/invite`、`/console`、`/mention`、`/ask` 是 `Administrator`。
   Discord 沒辦法把指令選單只開給某一個人，所以用權限縮小範圍。
+  這個欄位**只在伺服器裡生效**；私聊的選單每個人看得到 `/reset`、`/status`、`/forget`，能不能執行還是看下一條。
 - **誰能執行**：`/reset` 認 `ownerIds`，或那個伺服器裡有「管理伺服器」權限（含 Administrator）的人。
   bot 開放給別人管的伺服器時，那邊的管理員可以自己清掉 bot 在自己頻道的上下文，不用找 bot 擁有者。
   其他管理指令執行時只認 `ownerIds`：它們會動到所有伺服器共用的設定（`/mention`）、
   露出擁有者的後台與 token（`/console`）或額度（`/status`），伺服器管理員看得到選單也會被拒絕。
 
-> Discord 官方客戶端會把未註冊的 `/xxx` 當成指令輸入，可能不讓你送出。`/reset`、`/status`、`/forget`
-> 有 `!` 別名；`/invite` 沒有（邀請連結不適合用一般訊息貼在頻道裡），`/memory` 也沒有（一般訊息的回覆
-> 整個頻道都看得到，會把你的記憶貼給大家看），`/mention` 也沒有。
-> `!` 別名是一般訊息，頻道裡要 @bot 或回覆 bot 才算數（私聊直接打）。
-> DSH 的斜線命令沒有別名（`!model` 會被當成普通文字）。
+> 私聊只有 `/reset`、`/status`、`/forget` 會出現；`/reset`、`/status` 只認 `ownerIds`，其他指令只在伺服器頻道。
+> DSH 的斜線命令（`/model` 等）沒有 slash command 版本，只能由管理員當文字打給 bot。
 
 非管理員對 bot 打 `/` 開頭會被拒絕，不會送進模型。
 
 ### 忽略某一則訊息
 
 在訊息開頭打 `\//`（畫面上會顯示成 `//`），橋接就整則跳過：不送進模型、不進頻道上下文、不算觸發統計、
-不學黑話、不回表情、不執行指令，也不能當提問的答案。
+不學黑話、不回表情，也不能當提問的答案。
 
 - Discord 客戶端會攔截 `/` 開頭的訊息並跳出指令選單，所以要打 `\//`，不能只打 `//`。
 - 開頭的 `//` 也接受，方便舊訊息或從其他管道送出的內容。
@@ -481,8 +482,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 刪除自己的記憶：
 
-- `/forget`（slash command，結果只有自己看得到）
-- `!forget`（一般訊息，適合 slash command 還沒生效時）
+- `/forget`（slash command，結果只有自己看得到；私聊也能用）
 
 只刪群友記憶；目前這個頻道的 DSH 會話上下文不受影響，要一起清用 `/reset`（管理員）。
 
@@ -601,7 +601,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - 存在 `state/discord-triggers.json`（`state/` 已被 gitignore）。控制台總覽顯示今天人數、總人數、
   總次數與最常觸發的 3 人；「對話」分頁列出全部人，可搜尋名稱／user id、每頁 20 人。
 - 只記使用者 id、顯示名稱、次數與最後觸發時間，不記聊天內容；超過 5000 人丟最久沒觸發的。
-- 當事人用 `/forget`（或 `!forget`）會把記憶和觸發統計一起刪掉；私聊的 `!forget` 沒有記憶可刪，但會刪觸發統計。
+- 當事人用 `/forget` 會把記憶和觸發統計一起刪掉，私聊也一樣。
 - 模型可以呼叫 `mcp__discord__conversation_stats` 自己撈同一份統計（全部伺服器加總的今天／總計／總次數；前 5 名只列同一個伺服器的人，私聊只回數字）。
 
 ## 誰決定要不要發訊息（MCP）
@@ -747,6 +747,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **頻道上下文**：會用 `channel.messages.fetch` 抓這一批第一則之前的 `context.messages` 則訊息放進
   prompt。預設模式每一批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶（橋接重啟或
   `/reset` 後再帶一次）。這需要 bot 的 **Read Message History** 權限；不需要 Message Content 意圖。
+  抓回來的歷史訊息裡，`deny.users` / `deny.self` 的人不會進上下文，也不會被收進黑話語料。
   私聊不加，DSH 會話本身就有上下文。
 - **圖片**：批次裡每則訊息的圖片依序編號，那一行會標 `[圖1]`、`[圖2]`，圖片本體跟著送進模型；
   整批最多 `media.maxCount` 張。
@@ -797,6 +798,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 2. **fail-closed preset**：啟動時向 DSH 要 preset 清單；`agentPreset` 不在清單裡就拒絕建立會話，並在頻道
    回報安裝提示。**絕不**回退到 DSH 預設 preset（那通常有完整本地工具）。
 3. **白名單**：預設全擋。`deny` 優先於 `allow`；`deny.channels` 也擋母頻道底下的討論串。
+   `deny.users` 是管理員封鎖，完全擋。`deny.self` 是自己用 `/blacklist` 退出的名單，只擋「沒在叫 bot」的訊息：
+   @bot 或回覆 bot 時照常處理。私聊兩種名單都全擋（私聊每則都算叫 bot，例外不適用）。
 4. **審批只有 `ownerIds` 能回**；管理命令同理（slash command 選單只給伺服器管理員看，執行時再驗 `ownerIds`）。
 5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
 6. **發送端點只在本機**：`mcp-discord` 與 `mcp-slang` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`

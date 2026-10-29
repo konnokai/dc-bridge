@@ -25,6 +25,7 @@ import {
   formatProgress,
   invitePermissionsBitfield,
   isConversationAllowed,
+  isDeniedUser,
   isTransientDshError,
   loadSessions,
   matchesTerms,
@@ -36,7 +37,7 @@ import {
   sessionTitleFor,
   shouldAutoCompact,
   shouldHandleGuildMessage,
-  withDeniedUser,
+  withSelfMutedUser,
   splitDiscordMessage,
   stripBotMention,
   isSkippedMessage,
@@ -165,7 +166,8 @@ const SLANG_STATUS_TEXT = {
 /**
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
  * 伺服器管理員可以改；真正的邊界是執行時的權限檢查（見 handleSlashCommand）。
- * dmPermission: false —— reset/status 只對伺服器頻道有意義，私聊請用 `!reset` / `!status`。
+ * dmPermission: false —— invite/console/mention/ask/memory/blacklist 只在伺服器頻道有意義。
+ * reset/status/forget 開放私聊：沒有訊息指令之後，私聊只剩 slash 這一條路。
  * forget、memory、blacklist 不設管理員權限：任何人都能看、刪自己的記憶，或把自己加入／移出黑名單。
  */
 const slashCommandData = [
@@ -173,12 +175,12 @@ const slashCommandData = [
     .setName('reset')
     .setDescription('重置這個頻道的會話上下文（伺服器管理者）')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .setDMPermission(false),
+    .setDMPermission(true),
   new SlashCommandBuilder()
     .setName('status')
     .setDescription('顯示這個頻道的會話狀態（管理員）')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .setDMPermission(false),
+    .setDMPermission(true),
   new SlashCommandBuilder()
     .setName('invite')
     .setDescription('產生機器人邀請連結（管理員）')
@@ -192,9 +194,6 @@ const slashCommandData = [
   new SlashCommandBuilder()
     .setName('mention')
     .setDescription('切換頻道要不要 @bot 才回（全部伺服器共用，管理員）')
-    .addBooleanOption((option) => option
-      .setName('required')
-      .setDescription('true：要 @bot 才回；false：自由參與。不填就只顯示目前設定'))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(false),
   new SlashCommandBuilder()
@@ -209,18 +208,15 @@ const slashCommandData = [
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('memory')
-    .setDescription('列出 bot 在這個伺服器記下的關於你的事（只有你看得到）')
+    .setDescription('列出 bot 記下的關於你的事（所有伺服器共用，只有你看得到）')
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('forget')
-    .setDescription('刪除 bot 在這個伺服器記下的關於你的事')
-    .setDMPermission(false),
+    .setDescription('刪除 bot 記下的關於你的事（所有伺服器共用）')
+    .setDMPermission(true),
   new SlashCommandBuilder()
     .setName('blacklist')
-    .setDescription('把自己加入或移出 bot 的黑名單（所有伺服器共用，只能改自己）')
-    .addBooleanOption((option) => option
-      .setName('join')
-      .setDescription('true：加入，bot 不再處理你的訊息；false：移出。不填就只顯示目前狀態'))
+    .setDescription('切換自己的黑名單狀態（加入／移出，所有伺服器共用，只能改自己）')
     .setDMPermission(false),
 ].map((command) => command.toJSON());
 
@@ -1308,6 +1304,7 @@ async function main() {
         // date 從指定時間往後讀；before 從最新往回裝，超過字數上限就停。
         for (const message of date ? messages : messages.reverse()) {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
+          if (isDeniedUser(cfg.discord, message.author?.id)) continue;
           const line = historyLine(key, message);
           if (used + line.length > HISTORY_MAX_CHARS) break;
           lines.push(line);
@@ -1338,6 +1335,7 @@ async function main() {
         }),
         matches: (message) => {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) return false;
+          if (isDeniedUser(cfg.discord, message.author?.id)) return false;
           if (authorId && message.author?.id !== authorId) return false;
           if (terms.length && !matchesTerms(searchableText(message), terms)) return false;
           return true;
@@ -1352,6 +1350,7 @@ async function main() {
     async view(body) {
       const { key, channel } = await agentSender.resolve(body.token);
       const target = await fetchByRef(key, textArg(body.message));
+      if (isDeniedUser(cfg.discord, target.author?.id)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
       const self = target.author?.id === client.user.id ? '（你）' : '';
       const lines = [
         `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
@@ -1359,7 +1358,8 @@ async function main() {
       ];
       try {
         const replied = await referencedMessage(target, true);
-        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
+        if (replied && !isDeniedUser(cfg.discord, replied.author?.id)
+          && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
       } catch { /* 被回覆的那則刪了就不寫 */ }
       for (const snapshot of target.messageSnapshots?.values() ?? []) {
         lines.push(`轉發的內容：${flat(labelEmojiTags(resolveMentions(withStickers(snapshot), snapshot), emojiCatalogs), 500) || '[沒有文字]'}`);
@@ -1441,7 +1441,9 @@ async function main() {
         member?.premiumSince ? `從 ${date(member.premiumSince)} 開始加成這個伺服器` : '',
         mutedUntil && mutedUntil > new Date() ? `禁言中，到 ${shortTime(mutedUntil)}` : '',
       ];
-      const facts = cfg.discord.memory.enabled ? userFacts(memoryStore, { userId: target.author?.id, now: Date.now() }) : [];
+      const facts = cfg.discord.memory.enabled && !isDeniedUser(cfg.discord, target.author?.id)
+        ? userFacts(memoryStore, { userId: target.author?.id, now: Date.now() })
+        : [];
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
       // 頭像抓不到不算失敗：文字照回，少一張圖而已。
       let avatar = null;
@@ -2407,7 +2409,9 @@ async function main() {
       let quote = '';
       try {
         const referenced = await referencedMessage(entry.message, entry.direct);
-        if (referenced && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
+        // 退出或封鎖的人那則原文也不進引用，跟頻道上下文同一個規則。
+        if (referenced && !isDeniedUser(cfg.discord, referenced.author?.id)
+          && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
             author: authorName(referenced),
             content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
@@ -2447,7 +2451,9 @@ async function main() {
           before: job.entries.at(-1).id,
         });
         // 有 // 標記的訊息不進上下文，也不收黑話樣本。bot 自己的訊息不套這個規則。
+        // deny 的人一律不進上下文、不收樣本；他 @bot 的那一則已經隨自己的批次送過模型了。
         const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id)
+          && !isDeniedUser(cfg.discord, entry.author?.id)
           && (entry.author?.bot || !isSkippedMessage(entry.content, client.user.id)));
         // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）。
         for (const entry of history) {
@@ -3050,7 +3056,7 @@ async function main() {
           const since = Date.now() - 24 * 60 * 60 * 1000;
           const messages = [...fetched.values()]
             .filter((message) => message.createdTimestamp >= since)
-            .filter((message) => !cfg.discord.deny.users.includes(message.author?.id))
+            .filter((message) => !isDeniedUser(cfg.discord, message.author?.id))
             .filter((message) => message.author?.bot || !isSkippedMessage(message.content, client.user.id))
             .map((message) => ({
               at: message.createdTimestamp,
@@ -3183,7 +3189,12 @@ async function main() {
       parentId: message.channel?.isThread?.() ? message.channel.parentId : null,
       userId: message.author.id,
     };
-    if (!isConversationAllowed(cfg.discord, ids)) return;
+    const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
+    const repliedUserId = message.mentions?.repliedUser?.id ?? null;
+    // 自己用 /blacklist 退出的人唯一的活路：@bot 或回覆 bot。管理員封鎖（deny.users）沒有例外。
+    const addressedToBot = Boolean(guildId)
+      && shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
+    if (!isConversationAllowed(cfg.discord, { ...ids, ignoreUserDeny: addressedToBot })) return;
     const key = conversationKeyFor(ids);
     // 發言頻率：這則在 handleMessage 最前面就記，早於所有 return（含 // 與空訊息）。
     activity.record(key);
@@ -3193,19 +3204,16 @@ async function main() {
       && bumpEmojiUsage(emojiUsage, guildId, message.content, { entries: usageCatalog.entries }) > 0) markEmojiUsageDirty();
     const quietAt = quietUntil(key);
 
-    const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
-    const repliedUserId = message.mentions?.repliedUser?.id ?? null;
     const rawText = stripBotMention(message.content, client.user.id);
     const text = resolveMentions(rawText, message);
-    // `\//`（畫面顯示 `//`）開頭＝這則只給人看。標記優先於 @、指令和提問回答。
+    // `\//`（畫面顯示 `//`）開頭＝這則只給人看。標記優先於 @ 和提問回答。
     if (isSkippedMessage(message.content, client.user.id)) {
       log(`跳過 ${key} user=${message.author.id}（// 標記）`);
       return;
     }
     // 有沒有在叫 bot：私聊一律算；頻道看 @ 或回覆。自由參與時沒叫 bot 的訊息也會進批次，
-    // 但指令與提問回答都只認叫 bot 的訊息。
-    const direct = !guildId
-      || shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
+    // 但提問的回答只認叫 bot 的訊息。
+    const direct = !guildId || addressedToBot;
 
     // 黑話語料：允許的頻道訊息都收（含沒叫 bot 的），才有足夠樣本。
     if (text) collectSlangSample(message, text);
@@ -3234,39 +3242,6 @@ async function main() {
     log(`收到 ${key}${guildId ? ` guild=${guildId}` : ''} user=${message.author.id}${direct ? '' : '（沒叫 bot）'}`);
 
     if (direct) {
-      // 橋接指令同時接受 `/` 與 `!`：Discord 客戶端對未註冊的 `/xxx` 會叫出指令選單，
-      // 有時根本送不出去；`!reset` 一定送得到。
-      const command = /^[!/]/.test(text) ? text.slice(1).trim().toLowerCase() : null;
-      if (command === 'forget') {
-        const statsRemoved = forgetTriggerUser(message.author.id);
-        if (!guildId) {
-          await sendLong(key, statsRemoved ? '已刪除你的觸發統計（私聊沒有群友記憶）。' : '私聊沒有群友記憶。');
-          return;
-        }
-        const removed = forgetUser(memoryStore, { userId: message.author.id });
-        if (removed) markMemoryDirty();
-        await sendLong(key, removed || statsRemoved
-          ? '已刪除我記下的關於你的事，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
-          : '我這邊沒有你的記憶。');
-        return;
-      }
-      if (command === 'reset' || command === 'new') {
-        if (!canResetConversation({ isOwner, guildId, permissions: message.member?.permissions })) {
-          await sendLong(key, '重置只有 bot 擁有者或這個伺服器的管理者（管理伺服器權限）能用。');
-          return;
-        }
-        log(`重置 ${key} by user=${message.author.id}${isOwner ? '' : '（伺服器管理者）'}`);
-        if (!(await retireSession(key))) { await sendLong(key, '目前沒有可重置的會話（下一則訊息會開新的）。'); return; }
-        await sendLong(key, '已重置會話，下一則訊息會開新上下文。');
-        return;
-      }
-      if (command === 'status') {
-        if (!isOwner) { await sendLong(key, '管理指令僅管理員可用。'); return; }
-        const quota = formatGoQuota(await quotaInfo());
-        await sendLong(key, `會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${guildId ? '頻道' : '私聊'}${quota ? `\n${quota}` : ''}`);
-        return;
-      }
-
       const hanging = pending.get(key);
       if (hanging) {
         if (hanging.kind === 'question') {
@@ -3307,7 +3282,8 @@ async function main() {
   }
 
   async function handleSlashCommand(interaction) {
-    if (!interaction.inGuild()) {
+    // 私聊只開放 forget/reset/status（其餘指令在 DM 沒有意義）。reset/status 執行時仍只認 ownerIds。
+    if (!interaction.inGuild() && !['forget', 'reset', 'status'].includes(interaction.commandName)) {
       await interaction.reply({ content: '這個指令只能在伺服器頻道使用。', flags: MessageFlags.Ephemeral });
       return;
     }
@@ -3335,21 +3311,25 @@ async function main() {
       return;
     }
     if (interaction.commandName === 'blacklist') {
-      const join = interaction.options.getBoolean('join');
-      if (join !== null) {
-        try {
-          await updateConfig({ deny: withDeniedUser(cfg.discord.deny, interaction.user.id, join) });
-        } catch (error) {
-          await interaction.reply({ content: `更新失敗：${error?.message ?? error}`, flags: MessageFlags.Ephemeral });
-          return;
-        }
-        log(`slash /blacklist join=${join} user=${interaction.user.id}`);
+      // 管理員封鎖不能自己解除，否則擁有者的名單形同虛設。
+      if (cfg.discord.deny.users.includes(interaction.user.id)) {
+        await interaction.reply({ content: '你在管理員的黑名單裡，只有管理員能移除。', flags: MessageFlags.Ephemeral });
+        return;
       }
-      const denied = cfg.discord.deny.users.includes(interaction.user.id);
-      const state = denied
-        ? '你在黑名單裡：bot 不會處理你的訊息（所有伺服器共用）。要移出用 /blacklist join:false。'
-        : '你不在黑名單裡。要加入用 /blacklist join:true。';
-      await interaction.reply({ content: `${join === null ? '' : '已更新。'}${state}`, flags: MessageFlags.Ephemeral });
+      const muted = cfg.discord.deny.self.includes(interaction.user.id);
+      try {
+        await updateConfig({ deny: withSelfMutedUser(cfg.discord.deny, interaction.user.id, !muted) });
+      } catch (error) {
+        await interaction.reply({ content: `更新失敗：${error?.message ?? error}`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      log(`slash /blacklist ${muted ? 'leave' : 'join'} user=${interaction.user.id}`);
+      await interaction.reply({
+        content: muted
+          ? '已把你移出黑名單，bot 又會處理你的訊息了。'
+          : '已把你加入黑名單：bot 不會處理你的訊息（所有伺服器共用），只有 @我 或回覆我時才會回。再跑一次 /blacklist 可以移出。',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
     const key = conversationKeyFor({
@@ -3368,12 +3348,15 @@ async function main() {
           guildId: interaction.guildId,
           channelId: interaction.channelId,
           parentId: interaction.channel?.isThread?.() ? interaction.channel.parentId : null,
-          userId: interaction.user.id,
+          // 這裡問的是「頻道有沒有開放」，不是這個人有沒有退出；他的名單狀態不影響頻道判定。
+          userId: '',
         });
       if (!allowed) {
         await interaction.reply({
           content: isReset
-            ? '重置只有 bot 擁有者或這個伺服器的管理者（管理伺服器權限）能用，而且頻道要有開放 bot。'
+            ? (interaction.guildId
+              ? '重置只有 bot 擁有者或這個伺服器的管理者（管理伺服器權限）能用，而且頻道要有開放 bot。'
+              : '重置只有 bot 擁有者能用。')
             : '這個指令只有 bot 擁有者能用。',
           flags: MessageFlags.Ephemeral,
         });
@@ -3493,25 +3476,23 @@ async function main() {
     }
     if (interaction.commandName === 'status') {
       const quota = formatGoQuota(await quotaInfo());
-      await interaction.editReply(`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜頻道${quota ? `\n${quota}` : ''}`);
+      await interaction.editReply(`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${interaction.guildId ? '頻道' : '私聊'}${quota ? `\n${quota}` : ''}`);
       return;
     }
     if (interaction.commandName === 'mention') {
       // 沒開意圖時跟控制台一樣不寫入：寫了 false，日後開意圖重啟就會突然變自由參與。
-      const required = cfg.discord.messageContentIntent ? interaction.options.getBoolean('required') : null;
-      if (required !== null) {
-        try {
-          await updateConfig({ requireMentionInGuild: required });
-        } catch (error) {
-          await interaction.editReply(`切換失敗：${error?.message ?? error}`);
-          return;
-        }
+      if (!cfg.discord.messageContentIntent) {
+        await interaction.editReply('沒開 Message Content 意圖，收不到沒 @bot 的訊息內容，所以一律要 @bot，不能切換。');
+        return;
+      }
+      try {
+        await updateConfig({ requireMentionInGuild: !requireMentionInGuild() });
+      } catch (error) {
+        await interaction.editReply(`切換失敗：${error?.message ?? error}`);
+        return;
       }
       const mode = requireMentionInGuild() ? '頻道要 @bot 或回覆 bot 才回' : '自由參與（模型自己決定要不要接話）';
-      const forced = !cfg.discord.messageContentIntent
-        ? '\n沒開 Message Content 意圖，收不到沒 @bot 的訊息內容，所以一律要 @bot。'
-        : '';
-      await interaction.editReply(`${required === null ? '目前' : '已切換成'}：${mode}。這個設定所有伺服器共用。${forced}`);
+      await interaction.editReply(`已切換成：${mode}。這個設定所有伺服器共用。`);
       return;
     }
     await interaction.editReply('未知的指令。');
@@ -3632,7 +3613,7 @@ async function main() {
     const next = normalizeDiscordConfig({
       ...cfg.discord,
       allow: patch?.allow ?? cfg.discord.allow,
-      deny: patch?.deny ?? cfg.discord.deny,
+      deny: { ...cfg.discord.deny, ...(patch?.deny ?? {}) },
       ownerIds: patch?.ownerIds ?? cfg.discord.ownerIds,
       // media 逐欄合併：表單只送數字欄位，不要把 enabled 之類的開關蓋回預設值。
       media: { ...cfg.discord.media, ...(patch?.media ?? {}) },
@@ -3642,16 +3623,8 @@ async function main() {
         : cfg.discord.requireMentionInGuild,
     });
 
-    // 切到自由參與：讓每個頻道下一批重新帶一次上下文，@ 模式期間沒叫 bot 的閒聊，模型沒看過。
-    if (cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) primedKeys.clear();
-    cfg.discord.allow = next.allow;
-    cfg.discord.deny = next.deny;
-    cfg.discord.ownerIds = next.ownerIds;
-    cfg.discord.media = next.media;
-    cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
-    ownerIds.clear();
-    for (const id of next.ownerIds) ownerIds.add(id);
-
+    // 先寫檔再改記憶體：寫檔失敗時直接拋錯，設定和檔案都還是舊的。
+    // 以前反過來做，toggle（/blacklist、/mention）失敗後重試會切到相反狀態。
     const doc = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     doc.discord = {
       ...(doc.discord ?? {}),
@@ -3664,6 +3637,17 @@ async function main() {
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, CONFIG_FILE);
+
+    // 切到自由參與：讓每個頻道下一批重新帶一次上下文，@ 模式期間沒叫 bot 的閒聊，模型沒看過。
+    if (cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) primedKeys.clear();
+    cfg.discord.allow = next.allow;
+    cfg.discord.deny = next.deny;
+    cfg.discord.ownerIds = next.ownerIds;
+    cfg.discord.media = next.media;
+    cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
+    ownerIds.clear();
+    for (const id of next.ownerIds) ownerIds.add(id);
+
     log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}`);
     return editableConfig();
   }

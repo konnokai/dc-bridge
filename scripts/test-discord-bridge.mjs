@@ -22,12 +22,13 @@ import {
   formatProgress,
   invitePermissionsBitfield,
   isConversationAllowed,
+  isDeniedUser,
   isTransientDshError,
   matchesTerms,
   searchTerms,
   sessionTitleFor,
   shouldAutoCompact,
-  withDeniedUser,
+  withSelfMutedUser,
   loadSessions,
   normalizeDiscordConfig,
   parseApprovalAnswer,
@@ -226,16 +227,29 @@ console.log('## 2. 白名單');
   const open = normalizeDiscordConfig({ allow: { guilds: [GUILD] }, deny: { users: ['555555555555555555'] } });
   ok(isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '伺服器命中白名單 → 放行');
   ok(!isConversationAllowed(open, { guildId: '999999999999999999', channelId: CHANNEL, userId: USER }), '未列出的伺服器 → 擋');
-  ok(!isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: '555555555555555555' }), '黑名單使用者優先於伺服器白名單');
+  ok(!isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: '555555555555555555' }), 'deny.users 優先於伺服器白名單');
+  ok(!isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: '555555555555555555', ignoreUserDeny: true }),
+    '管理員封鎖（deny.users）沒有 @bot 例外');
 
-  // /blacklist：自己加入、移出；其他人與 guilds/channels 不受影響。
-  const joined = withDeniedUser(open.deny, USER, true);
-  ok(joined.users.includes(USER) && joined.users.includes('555555555555555555'), '/blacklist join:true 加入自己，保留原有名單');
-  ok(withDeniedUser(joined, USER, true).users.filter((id) => id === USER).length === 1, '重複加入不會重複');
-  const left = withDeniedUser(joined, USER, false);
-  ok(!left.users.includes(USER) && left.users.includes('555555555555555555'), '/blacklist join:false 只移出自己');
+  // /blacklist 只寫 deny.self，管理員的 deny.users 動不到。
+  const muted = withSelfMutedUser(open.deny, USER, true);
+  ok(muted.self.includes(USER) && !muted.users.includes(USER), '/blacklist 只改 deny.self');
+  ok(muted.users.join() === open.deny.users.join(), '/blacklist 不動管理員封鎖名單');
+  ok(withSelfMutedUser(muted, USER, true).self.filter((id) => id === USER).length === 1, '重複加入不會重複');
+  const left = withSelfMutedUser(muted, USER, false);
+  ok(!left.self.includes(USER) && left.users.includes('555555555555555555'), '/blacklist 再切換一次只移出自己');
   ok(left.guilds === open.deny.guilds && left.channels === open.deny.channels, '不動 deny.guilds / deny.channels');
-  ok(!isConversationAllowed({ ...open, deny: joined }, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '加入後自己的訊息被擋');
+  const selfDeny = { ...open, deny: muted };
+  ok(!isConversationAllowed(selfDeny, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '自己退出後沒叫 bot 的訊息被擋');
+  ok(isConversationAllowed(selfDeny, { guildId: GUILD, channelId: CHANNEL, userId: USER, ignoreUserDeny: true }),
+    '自己退出後 @bot 或回覆 bot 的訊息仍放行');
+  ok(!isConversationAllowed(selfDeny, { guildId: '999999999999999999', channelId: CHANNEL, userId: USER, ignoreUserDeny: true }),
+    '@bot 例外不能繞過伺服器白名單');
+  ok(!isConversationAllowed(normalizeDiscordConfig({ allowAllWhenEmpty: true, deny: { self: [USER], channels: [CHANNEL] } }),
+    { guildId: GUILD, channelId: CHANNEL, userId: USER, ignoreUserDeny: true }),
+    '@bot 例外不能繞過頻道黑名單');
+  ok(isDeniedUser(selfDeny, USER) && isDeniedUser(open, '555555555555555555') && !isDeniedUser(open, USER),
+    'isDeniedUser 把兩種名單都算進去');
 
   const byChannel = normalizeDiscordConfig({ allow: { channels: [CHANNEL] } });
   ok(isConversationAllowed(byChannel, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '頻道白名單 → 放行');
@@ -245,6 +259,8 @@ console.log('## 2. 白名單');
   ok(isConversationAllowed(dm, { guildId: null, channelId: 'dm', userId: USER }), '私聊白名單 → 放行');
   ok(!isConversationAllowed(dm, { guildId: GUILD, channelId: CHANNEL, userId: USER }), 'allow.users 不授權伺服器頻道');
   ok(!isConversationAllowed(dm, { guildId: null, channelId: 'dm', userId: '999999999999999999' }), '未列出的私聊 → 擋');
+  ok(!isConversationAllowed({ ...dm, deny: muted }, { guildId: null, channelId: 'dm', userId: USER, ignoreUserDeny: true }),
+    '私聊不適用 @bot 例外（自己退出的人私聊照樣全擋）');
 
   ok(!isConversationAllowed(baseCfg(), { guildId: GUILD, channelId: CHANNEL, userId: USER }), '全空 + allowAllWhenEmpty=false → 全擋');
   ok(isConversationAllowed(normalizeDiscordConfig({ allowAllWhenEmpty: true }), { guildId: GUILD, channelId: CHANNEL, userId: USER }),
@@ -256,6 +272,8 @@ console.log('## 2. 白名單');
   const THREAD = '666666666666666666';
   ok(!isConversationAllowed(denied, { guildId: GUILD, channelId: THREAD, parentId: CHANNEL, userId: USER }),
     '被禁頻道底下的討論串也擋（不能開討論串繞過黑名單）');
+  ok(!isConversationAllowed(denied, { guildId: GUILD, channelId: THREAD, parentId: CHANNEL, userId: USER, ignoreUserDeny: true }),
+    '@bot 例外不能繞過母頻道的黑名單');
   ok(isConversationAllowed(denied, { guildId: GUILD, channelId: THREAD, parentId: '999999999999999999', userId: USER }),
     '其他頻道底下的討論串不受影響');
   ok(!isConversationAllowed(byChannel, { guildId: GUILD, channelId: THREAD, parentId: CHANNEL, userId: USER }),

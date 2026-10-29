@@ -92,6 +92,8 @@ export function normalizeDiscordConfig(raw) {
       guilds: idList(src.deny?.guilds, 'discord.deny.guilds'),
       channels: idList(src.deny?.channels, 'discord.deny.channels'),
       users: idList(src.deny?.users, 'discord.deny.users'),
+      // 自己用 /blacklist 退出的名單：只有這份允許「@bot 或回覆 bot」的例外。
+      self: idList(src.deny?.self, 'discord.deny.self'),
     },
     allowAllWhenEmpty: src.allowAllWhenEmpty === true,
     requireMentionInGuild: src.requireMentionInGuild !== false,
@@ -253,9 +255,14 @@ export function sessionTitleFor(key, { guildName, channelName, userName } = {}) 
  *
  * 討論串：白名單只看自己的 id（文件寫明），黑名單連母頻道（parentId）一起看；
  * 否則在被禁的頻道開一個討論串就能繞過黑名單。
+ *
+ * `ignoreUserDeny`：自己用 /blacklist 退出的人（`deny.self`）@bot 或回覆 bot 時，呼叫端傳 true，
+ * 只跳過 self 那一關（而且只在伺服器頻道生效）。`deny.users` 是管理員封鎖，一律擋，沒有例外。
  */
-export function isConversationAllowed(cfg, { guildId, channelId, parentId = null, userId }) {
-  if (cfg.deny.users.includes(String(userId))) return false;
+export function isConversationAllowed(cfg, { guildId, channelId, parentId = null, userId, ignoreUserDeny = false }) {
+  const id = String(userId);
+  if (cfg.deny.users.includes(id)) return false;
+  if (!(ignoreUserDeny && guildId) && cfg.deny.self.includes(id)) return false;
 
   if (guildId) {
     const guild = String(guildId);
@@ -290,11 +297,17 @@ export function canResetConversation({ isOwner, guildId, permissions }) {
   return Boolean(guildId) && Boolean(permissions?.has?.(MANAGE_GUILD));
 }
 
-/** `/blacklist`：把一個人加入或移出 deny.users，其他黑名單欄位原樣保留。 */
-export function withDeniedUser(deny, userId, denied) {
+/** 這個人的訊息要不要當成「沒看到」：管理員封鎖（deny.users）或自己退出（deny.self）。 */
+export function isDeniedUser(cfg, userId) {
+  const id = String(userId ?? '');
+  return cfg.deny.users.includes(id) || cfg.deny.self.includes(id);
+}
+
+/** `/blacklist`：把一個人加入或移出 deny.self（自己退出的名單），其他欄位原樣保留。 */
+export function withSelfMutedUser(deny, userId, muted) {
   const id = String(userId);
-  const others = deny.users.filter((user) => user !== id);
-  return { ...deny, users: denied ? [...others, id] : others };
+  const others = deny.self.filter((user) => user !== id);
+  return { ...deny, self: muted ? [...others, id] : others };
 }
 
 const PROGRESS_DETAIL_MAX = 80;

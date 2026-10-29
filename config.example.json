@@ -22,7 +22,8 @@
     "deny": {
       "guilds": [],
       "channels": [],
-      "users": []
+      "users": [],
+      "self": []
     },
     "allowAllWhenEmpty": false,
     "requireMentionInGuild": true,
