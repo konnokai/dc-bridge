@@ -43,6 +43,7 @@ import {
 import {
   collectImageAttachments,
   describeSkipped,
+  embedImages,
   fetchDiscordImage,
   prepareImageBlock,
   stickerImages,
@@ -1765,6 +1766,24 @@ console.log('## 8. 附件（圖片）');
   const stickerMedia = collectImageAttachments(stickerImages(stickers), limits);
   ok(stickerMedia.accepted.map((a) => a.mime).join() === 'image/png,image/gif', 'png、gif 貼圖當圖片送進模型');
   ok(stickerMedia.skipped.length === 0, 'Lottie 不送圖也不算跳過（名稱已經在文字裡）');
+
+  // 連結預覽的圖：Tenor／Giphy 的 GIF 就是這種 embed，只有 proxyURL 能用。
+  const embeds = [
+    {
+      image: { proxyURL: 'https://images-ext-1.discordapp.net/external/abc/tenor.gif' },
+      thumbnail: { proxyURL: 'https://images-ext-1.discordapp.net/external/def/thumb.png' },
+    },
+    { thumbnail: { proxyURL: 'https://media.discordapp.net/external/ghi/yt.png' } },
+    { image: { url: 'https://media.tenor.com/x.gif' } },
+    {},
+  ];
+  const embedMedia = embedImages(embeds);
+  ok(embedMedia.length === 2, '一個 embed 只取一張預覽圖，沒有代理網址的不算');
+  ok(embedMedia[0].name === 'tenor.gif' && embedMedia[1].name === 'yt.png', '有 image 就不取 thumbnail，只有 thumbnail 時才用它');
+  ok(collectImageAttachments(embedMedia, limits).accepted.length === 2, '代理網址過得了 Discord CDN 白名單');
+  ok(collectImageAttachments(embedImages([{ image: { proxyURL: 'https://evil.example.com/x.gif' } }]), limits).accepted.length === 0,
+    '代理網址仍然要過 Discord CDN 白名單');
+  ok(embedImages(undefined).length === 0, '沒有 embed 回空陣列');
 
   await assert.rejects(() => fetchDiscordImage('https://evil.example.com/x.png', limits), /非 Discord CDN/);
   await assert.rejects(() => fetchDiscordImage('http://cdn.discordapp.com/x.png', limits), /非 Discord CDN/);

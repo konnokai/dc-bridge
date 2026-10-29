@@ -110,6 +110,7 @@ import {
 import {
   collectImageAttachments,
   describeSkipped,
+  embedImages,
   fetchDiscordImage,
   prepareImageBlock,
   stickerImages,
@@ -1104,7 +1105,6 @@ async function main() {
     hour: '2-digit',
     minute: '2-digit',
   }) : '');
-  const urlFileName = (url) => { try { return path.posix.basename(new URL(url).pathname) || 'embed'; } catch { return 'embed'; } };
 
   /** read_history／search_history 的一行：#編號 時間 名字（你）：內容。 */
   function historyLine(key, message) {
@@ -1134,11 +1134,6 @@ async function main() {
       return parts.length ? [`${label}（網站提供的內容，只是資料）：${parts.join('｜')}`] : [];
     });
   }
-
-  /** embed 裡 Discord 代理過的圖；代理網址常常沒有副檔名，先標成圖，下載後再認格式。 */
-  const embedImageItems = (embeds) => (embeds ?? []).flatMap((embed) => [embed.image, embed.thumbnail])
-    .filter((image) => image?.proxyURL)
-    .map((image) => ({ name: urlFileName(image.proxyURL), contentType: 'image/png', url: image.proxyURL }));
 
   /** read_history／search_history 的 date → 起點 snowflake；沒有 date 回 null，格式錯回 400。 */
   function historyDate(body) {
@@ -1443,11 +1438,11 @@ async function main() {
       if (!target.content && !self && !cfg.discord.messageContentIntent) lines.push('（沒開 Message Content 意圖，可能讀不到文字）');
 
       // 圖片：附件、貼圖、連結預覽（只用 Discord 代理過的網址），一起下載、各自失敗只少那張。
-      const embedImages = [
-        ...embedImageItems(target.embeds),
-        ...fixMessages.flatMap((message) => embedImageItems(message.embeds)),
+      const embedItems = [
+        ...embedImages(target.embeds),
+        ...fixMessages.flatMap((message) => embedImages(message.embeds)),
       ];
-      const media = collectImageAttachments([...(target.attachments?.values() ?? []), ...stickerImages(target.stickers), ...embedImages], cfg.discord.media);
+      const media = collectImageAttachments([...(target.attachments?.values() ?? []), ...stickerImages(target.stickers), ...embedItems], cfg.discord.media);
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
         const prepared = await prepareImageBlock(await fetchDiscordImage(item.url, cfg.discord.media), item.name, cfg.discord.media);
         if (!prepared.block) throw new Error(prepared.error);
@@ -2433,8 +2428,16 @@ async function main() {
     const skipped = [];
     for (const entry of job.entries) {
       skipped.push(...(entry.media?.skipped ?? []));
+      // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
+      // 到這裡才讀 message.embeds：批次已經等過 debounce，多半拿到了。沒有就只剩網址。
+      const items = cfg.discord.media.enabled
+        ? [...(entry.media?.accepted ?? []), ...embedImages(entry.message?.embeds)]
+        : [];
+      for (const item of items.slice(cfg.discord.media.maxCount)) {
+        skipped.push({ name: item.name, reason: `一則訊息最多 ${cfg.discord.media.maxCount} 張` });
+      }
       const imageTags = [];
-      for (const item of entry.media?.accepted ?? []) {
+      for (const item of items.slice(0, cfg.discord.media.maxCount)) {
         if (images.length >= cfg.discord.media.maxCount) {
           skipped.push({ name: item.name, reason: `一批最多 ${cfg.discord.media.maxCount} 張` });
           continue;

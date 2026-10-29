@@ -98,11 +98,11 @@ pm2 logs dc-bridge
 | `typing` | 送出「正在輸入」提示，預設 `true` |
 | `sendDelayMs` | 連續送出的間隔，預設 300 毫秒 |
 | `sessionDir` | 會話工作目錄，預設 `<repo>/state/discord-agents` |
-| `media.enabled` | 是否把 Discord 圖片附件送進模型，預設 `true` |
+| `media.enabled` | 是否把 Discord 圖片（附件、貼圖、連結預覽圖）送進模型，預設 `true` |
 | `media.maxBytes` | 單張下載上限，預設 8MB；超過就不抓 |
 | `media.maxModelBytes` | 送進模型的單張上限，預設 1MB；超過用 ffmpeg 縮圖 |
 | `media.maxLongEdge` | 縮圖後的長邊上限，預設 1280（256 ~ 2048） |
-| `media.maxCount` | 一批訊息最多處理幾張，預設 4（1 ~ 8） |
+| `media.maxCount` | 一則訊息與整批各最多處理幾張，預設 4（1 ~ 8） |
 | `media.timeoutMs` | 單張縮圖的 ffmpeg 逾時，預設 25000 |
 | `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則） |
 | `context.messages` | 抓幾則，預設 12（0 = 關閉，上限 50） |
@@ -759,7 +759,10 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   引用不算在內：被引用的原文照上面的規則附上。
   私聊不加，DSH 會話本身就有上下文。
 - **圖片**：批次裡每則訊息的圖片依序編號，那一行會標 `[圖1]`、`[圖2]`，圖片本體跟著送進模型；
-  整批最多 `media.maxCount` 張。
+  一則訊息最多 `media.maxCount` 張、整批也是。來源是附件、貼圖，以及**連結預覽的圖**
+  （Tenor／Giphy 的 GIF 就是這種），都只用 Discord 代理過的網址，不直接連原站。
+  預覽圖是批次送出時才讀訊息上的 embed：Discord 先用 `messageCreate` 送訊息、稍後才用 `messageUpdate` 補上預覽，
+  趕不上的那批就只剩網址，模型可以用 `view_message` 再看。沒開 Message Content 意圖時 `embeds` 一律是空的，只有網址。
 - **貼圖**：群友送的貼圖寫成 `[貼圖：名稱]`；png/apng/gif 貼圖的圖也當成圖片送進模型（跟附件一起算 `[圖N]`、
   一起受 `media.maxCount` 限制）。Lottie 貼圖是向量動畫，模型看不了，只給名稱。
   頻道上下文、引用、`read_history` 裡的貼圖也寫成 `[貼圖：名稱]`（只有名稱，不送圖）。
@@ -827,7 +830,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - 圖片附件（png/jpeg/webp/gif）會轉成 base64 送進模型；超過 `media.maxLongEdge` 或
   `media.maxModelBytes` 時先用 ffmpeg 縮小，縮不動才跳過並告訴模型「附件未提供」。
   下載只認 `cdn.discordapp.com` / `media.discordapp.net`，不跟隨轉址。
-- **訊息文字裡貼的圖片 URL 不會被抓**：那只是一段文字。要讓模型看圖，請用 Discord 的附件上傳。
+- **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
+  和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
 - 模型側工具有 `ask_user_question`、`todo_write`、16 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具

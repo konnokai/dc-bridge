@@ -1,7 +1,7 @@
 # 計畫：補上模型自己說缺的工具（dc-chat）
 
-> 狀態：**2026-10-28 大部分完成**。D 與 S4 見對應章節；A、C、B、E、K、I、G0、G1、J 已完成，
-> H、F1、F2 略過，剩 L、G2。完成度見下表。
+> 狀態：**2026-10-29 F1 完成（分支 `feat/discord-embed-gif`，還沒部署）**。D 與 S4 見對應章節；
+> A、C、B、E、F1、K、I、G0、G1、J 已完成，H、F2 略過，剩 L、G2。完成度見下表。
 > 檔案位置：`docs/design/PLAN_AGENT_GAPS.md`。
 > 2026-10-28 起 `docs/design/` 已進版控，worktree 開的 session 也看得到。
 >
@@ -19,7 +19,8 @@
 | B 發言頻率／安靜／送出回饋 | ✅ 完成 | `cc46448` |
 | H 送固定的圖 | ⏭️ 略過 | 管理員決定不做 |
 | E 頻道事件筆記 v1 + v2 | ✅ 完成 | `da12990`；控制台卡片 `ad42d9a` |
-| F1 GIF／F2 影片 | ⏭️ 略過 | 管理員決定不做 |
+| F1 GIF 連結 | ✅ 完成 | 2026-10-29，分支 `feat/discord-embed-gif`，**還沒部署** |
+| F2 影片 | ⏭️ 略過 | 管理員決定不做 |
 | K 常用表情 | ✅ 完成 | `c590ad8` |
 | I 回訪 | ✅ 完成 | `c590ad8` |
 | G0 persona（連結先看預覽） | ✅ 完成 | `ad42d9a`、`a383f63` |
@@ -27,7 +28,7 @@
 | G2 外部網頁備援來源 | ⬜ 未開始 | 等管理員決定來源 |
 | J token 自動帶入 | ✅ 完成 | DSH 外掛 `dc-session-token`；DSH 鎖在 0.2.1-rc.2 |
 | L 專門的資料來源 | ⬜ 等管理員 | — |
-| S1~S4 探查 | S4 ✅ 完成；S1 ⬜ 未做；S2／S3 略過 | 見第 2 節 |
+| S1~S4 探查 | S4 ✅ 完成；S2 有結論（見 F1）；S1 ⬜ 未做；S3 略過 | 見第 2 節 |
 
 額外完成、不在原工作包裡：`556a98f` 擋掉把訊息編號當成 `content` 送出；
 `01ff4b3` 專案整理成 Discord 優先並把部署改成 git；`889e2af` 頻道風格只收穩定習慣、每頻道上限 5 條。
@@ -130,7 +131,7 @@
 每個探查都不改程式碼。結論寫在 session 的回報裡，或寫到 `docs/design/agent-gaps/S<n>.md`（見 0.3）。
 
 目前狀態：S1、S4 已完成。S1 的結論在 `docs/design/agent-gaps/S1.md`，工作包 J 已照它做完。
-S2 先不做（F1 目前略過）；S3 等 G2 選來源（第 5 節第 2 點）。
+S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源（第 5 節第 2 點）。
 
 ### S1：token 能不能自動帶入（給工作包 J）
 
@@ -360,7 +361,7 @@ S2 先不做（F1 目前略過）；S3 等 G2 選來源（第 5 節第 2 點）�
 
 ### F：看得到 GIF 和影片
 
-**狀態：⏭️ F1、F2 都略過（2026-10-28，管理員決定不做）。**
+**狀態：F1 ✅ 完成（2026-10-29，分支 `feat/discord-embed-gif`，還沒部署）；F2 ⏭️ 略過（2026-10-28，管理員決定不做）。**
 
 **現況**：
 - 批次 prompt 只收**附件**和**貼圖**的圖（`handleMessage` → `collectImageAttachments`），**不收 embed**。
@@ -380,10 +381,16 @@ S2 先不做（F1 目前略過）；S3 等 G2 選來源（第 5 節第 2 點）�
 
 **F2 影片附件（可以跟 Discord 線並行，只改 `src/media-normalize.js` 和 `src/core/discord-media.mjs` 的格式判斷）**
 - 用 ffmpeg 從影片取幾格拼圖，做法照 GIF。要有長度、大小、逾時上限。
-- 注意：`media-normalize.js` QQ 版也在用，改動不能改變 QQ 的行為（加新函式，不改舊函式的語意）。
+- QQ 版不再維護（2026-10-29）：動 `media-normalize.js` 不用保住 QQ 的行為；真的讓 QQ 那邊跑不過，就解耦 QQ 端的程式碼。
 - F2 改到 `discord-media.mjs` 的那一行格式判斷時，要等 F1 合併後再做，避免衝突。
 
 **驗收**：Tenor 連結（embed 已出現時）會帶圖；非 Discord 代理網址不下載；影片超過上限時有一行說明。
+
+**結果（2026-10-29）**：
+- 共用函式是 `embedImages(embeds)`（`src/core/discord-media.mjs`）：只收 `proxyURL`，同一個 embed 只拿一張（有 `image` 就不拿 `thumbnail`，那通常只是縮小版）。
+- 跟計畫第 2 點不同：批次不是在 `handleMessage` 收，而是在送出時讀 `entry.message.embeds`。S2 結論：預覽走 `messageUpdate`，discord.js 14.27.0 會 patch 同一個 Message 物件（`MessageUpdate.js` → `Message._patch`），批次本來就等 `batch.debounceMs`（預設 3 秒），所以在送出時讀才拿得到，`messageCreate` 當下多半還是空的。
+- 沒開 Message Content 意圖時 `embeds` 一律是空的，只有網址（官方文件警告）；`view_message` 同理。
+- persona 加了一句：只看到 tenor／giphy 網址就 `view_message` 看圖。沒實機貼 Tenor 連結驗證過。
 
 ### K：常用表情（低優先，可以不做）
 

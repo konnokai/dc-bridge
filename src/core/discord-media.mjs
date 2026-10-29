@@ -162,6 +162,23 @@ export function stickerImages(stickers) {
     .map((s) => ({ name: `${safeName(s.name)}.${s.format === 4 ? 'gif' : 'png'}`, contentType: STICKER_MIME[s.format], url: s.url }));
 }
 
+/**
+ * embed 裡 Discord 代理過的圖，形狀同附件，交給 collectImageAttachments 把關網址與張數。
+ * Tenor／Giphy 的 GIF 就是這種 embed；代理網址常常沒有副檔名，先標成圖，下載後再認格式。
+ * 同一個 embed 的 thumbnail 常常是 image 的縮小版，只取一張，不重複下載同一張圖。
+ */
+export function embedImages(embeds) {
+  return (embeds ?? []).flatMap((embed) => {
+    const image = [embed?.image, embed?.thumbnail].find((candidate) => candidate?.proxyURL);
+    if (!image) return [];
+    let name = 'embed';
+    try {
+      name = new URL(image.proxyURL).pathname.split('/').filter(Boolean).pop() ?? name;
+    } catch { /* 壞網址留給 collectImageAttachments 說明 */ }
+    return [{ name: safeName(name), contentType: 'image/png', url: image.proxyURL }];
+  });
+}
+
 /** 被跳過的附件寫成一行給模型看的說明（模型才知道要跟使用者說看不到什麼）。 */
 export function describeSkipped(skipped) {
   if (!skipped?.length) return '';
