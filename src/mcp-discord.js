@@ -247,7 +247,7 @@ tool(
 
 tool(
   'search_history',
-  '在這個頻道找訊息：query 的每個詞都要出現；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。預設在最近 300 則裡往回找；給了 date 就從那天往後找。範圍太大就用 date 縮小，不要一次翻太多。和 read_history 合計一輪最多 3 次。',
+  '在這個頻道找訊息：query 的每個詞都要出現，範圍是整個頻道的歷史；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。date 只找那個時間之後的。和 read_history 合計一輪最多 3 次。',
   {
     token: sessionToken,
     query: z.string().optional().describe('關鍵字，用空白分開，每個都要出現'),

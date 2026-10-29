@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
+import { ButtonStyle, ChannelType, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   COMPACT_NOTICE,
@@ -43,7 +43,7 @@ import {
   isSkippedMessage,
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
-import { bySnowflake, scanHistoryMessages } from './core/discord-history.mjs';
+import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
@@ -918,7 +918,7 @@ async function main() {
   const toolError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
   const HISTORY_MAX = 50;
   const HISTORY_MAX_CHARS = 6000;
-  const SEARCH_PAGES = 3; // search_history 一次最多掃幾頁（每頁 100 則）
+  const SEARCH_PAGES = 3; // 討論串與私聊沒有搜尋 API，search_history 一次最多掃幾頁（每頁 100 則）
   const SEARCH_RESULTS_MAX = 20;
   const VIEW_TEXT_MAX = 1500;
   // snowflake 從這時起算；更早的時間夾到這裡，代表「從最早的訊息開始」。
@@ -1154,6 +1154,32 @@ async function main() {
   }
 
   /**
+   * 伺服器頻道的搜尋走 Discord 的搜尋 API：整段歷史都找得到，不用一頁一頁往回掃。
+   * 只認文字與公告頻道：討論串、語音、私聊維持掃描（實測語音頻道回 403）。
+   * 回來的是 discord.js 的 Message，跟 read_history 共用 historyLine 的格式。
+   */
+  const canGuildSearch = (channel) => Boolean(channel.guild)
+    && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement);
+
+  async function guildSearch(channel, { query, authorId, afterId, limit, oldestFirst }) {
+    const { total, hits } = await collectSearchHits({
+      pages: SEARCH_PAGES,
+      limit,
+      channelId: channel.id,
+      oldestFirst,
+      fetchPage: (offset) => client.rest.get(`/guilds/${channel.guildId}/messages/search`, {
+        query: guildSearchParams({
+          channelId: channel.id, query, authorId, afterId, limit: SEARCH_PAGE_MAX, oldestFirst, offset, includeNsfw: channel.nsfw,
+        }),
+      }),
+      visible: (message) => !isDeniedUser(cfg.discord, message.author?.id)
+        && (message.author?.bot || !isSkippedMessage(message.content ?? '', client.user.id)),
+    });
+    // Message 的 channel 由 client 的頻道快取解析，不用另外傳。
+    return { total, messages: hits.map((raw) => new Message(client, raw)) };
+  }
+
+  /**
    * 記憶工具的共同關卡：令牌、開關、私聊／NSFW、每輪上限、#編號 → 發言者。
    * 有 name 就核對發言者：#編號 指錯人時（例如重啟前的舊編號）不能記到別人身上。
    */
@@ -1316,13 +1342,31 @@ async function main() {
       });
     },
     search: (body) => agentSender.history(body.token, async ({ key, channel }) => {
-      const terms = searchTerms(body.query);
+      const query = textArg(body.query, 200);
+      const terms = searchTerms(query);
       const fromRef = textArg(body.from);
       const authorId = fromRef ? (await fetchByRef(key, fromRef)).author?.id : null;
       if (!terms.length && !authorId) throw toolError('query 和 from 至少要給一個', 400);
       const date = historyDate(body);
       if (date && date.at.getTime() >= Date.now()) return { text: '還沒有訊息。' };
       const limit = Math.min(SEARCH_RESULTS_MAX, Math.max(1, Number(body.limit) || 10));
+      const note = cfg.discord.messageContentIntent ? '' : '\n（沒開 Message Content 意圖：別人的訊息讀不到文字，只找得到 @bot 的與你自己的）';
+      const scope = date ? `從 ${date.text} 起` : '';
+
+      // 討論串、語音和私聊沒有 guild 搜尋可用，只能一頁一頁往回掃。
+      if (canGuildSearch(channel)) {
+        const { total, messages } = await guildSearch(channel, {
+          query,
+          authorId,
+          afterId: date?.id ?? null,
+          limit,
+          oldestFirst: Boolean(date),
+        });
+        if (!messages.length) return { text: `${scope}沒有找到（共 ${total} 則符合）。${note}` };
+        const lines = messages.map((message) => historyLine(key, message));
+        return { text: `${scope}找到 ${messages.length} 則，共 ${total} 則符合（舊→新）：\n${lines.join('\n')}${note}` };
+      }
+
       const { found, scanned } = await scanHistoryMessages({
         direction: date ? 'forward' : 'backward',
         pages: SEARCH_PAGES,
@@ -1341,11 +1385,10 @@ async function main() {
           return true;
         },
       });
-      const scope = date ? `從 ${date.text} 起 ${scanned} 則` : `最近 ${scanned} 則`;
-      const note = cfg.discord.messageContentIntent ? '' : '\n（沒開 Message Content 意圖：別人的訊息讀不到文字，只找得到 @bot 的與你自己的）';
-      if (!found.length) return { text: `${scope}裡沒有找到。${note}` };
+      const scanScope = date ? `從 ${date.text} 起 ${scanned} 則` : `最近 ${scanned} 則`;
+      if (!found.length) return { text: `${scanScope}裡沒有找到。${note}` };
       const lines = found.map((message) => historyLine(key, message));
-      return { text: `${scope}裡找到 ${found.length} 則（舊→新）：\n${lines.join('\n')}${note}` };
+      return { text: `${scanScope}裡找到 ${found.length} 則（舊→新）：\n${lines.join('\n')}${note}` };
     }),
     async view(body) {
       const { key, channel } = await agentSender.resolve(body.token);

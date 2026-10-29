@@ -630,9 +630,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   只換網域的改寫連結也算同一條，例如 fxtwitter、fixupx、ddinstagram），
   因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
-  預設從最近 300 則往回找；給了 `date`（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`，bridge 主機時區）就從那天往後掃 300 則。
-  `query` 用空白分開的每個詞都要出現（不分大小寫、全形半形），比對文字、貼圖名稱、連結預覽標題；`from` 給某人說過的一則 #編號，只找他的。
-  Discord 的訊息搜尋 API 這裡沒用：這是往回或往後一頁一頁掃（每頁 100 則、最多 3 頁），私聊也能用。最多回 20 則。
+  伺服器頻道走 Discord 的訊息搜尋 API（`/guilds/{guild}/messages/search`），不用從最新一則一則往回翻；
+  一次最多比對 75 個符合（3 頁 × 25），更早的符合要再給 `date` 縮小範圍。
+  沒給 `date` 取最新的一批，給了 `date`（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`，bridge 主機時區）就取那之後最舊的一批。
+  `query` 用空白分開的每個詞都要出現（不分大小寫），比對訊息文字與連結預覽的內容；
+  `from` 給某人說過的一則 #編號，只找他的。最多回 20 則，結果一律舊→新。
+  討論串、語音和私聊沒有這條搜尋 API，維持往回掃最近 300 則（每頁 100 則、最多 3 頁）。
   和 `read_history` 合計一輪最多 3 次，超過回 429；沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
 - `mcp__discord__create_poll`（`question`、`answers`、`hours`／`multi` 可省略）：在這個頻道發一個 Discord 投票。
   題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。

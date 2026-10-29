@@ -50,7 +50,7 @@ import {
 import { sniffImage } from '../src/media-normalize.js';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
-import { scanHistoryMessages } from '../src/core/discord-history.mjs';
+import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
@@ -1146,6 +1146,70 @@ console.log('## 7d2c. 歷史翻頁');
   });
   ok(sameMs.found.length === 150 && new Set(sameMs.found.map((m) => m.id)).size === 150 && sameMs.found.at(-1).id === '200',
     '同一毫秒的訊息不會在翻頁時重複');
+}
+
+console.log('## 7d2d. 伺服器搜尋 API 的參數與結果');
+{
+  const params = guildSearchParams({ channelId: '100', query: '火影 海賊', authorId: null, afterId: null, limit: 10, oldestFirst: false });
+  ok(params.get('channel_id') === '100' && params.get('content') === '火影 海賊', '搜尋參數帶頻道與關鍵字');
+  ok(params.get('sort_order') === 'desc' && !params.has('min_id'), '沒給日期：先取最新的一批');
+  ok(!params.has('offset') && !params.has('include_nsfw'), '第一頁不帶 offset，一般頻道不帶 NSFW');
+
+  const dated = guildSearchParams({ channelId: '100', query: '', authorId: 'u1', afterId: '123', limit: 30, oldestFirst: true });
+  ok(dated.get('sort_order') === 'asc' && dated.get('min_id') === '123', '給了日期：只找那之後、從舊的開始取');
+  ok(dated.get('author_id') === 'u1' && !dated.has('content'), '只有 from 時不比對文字');
+  ok(dated.get('limit') === '25', '超過 Discord 單頁上限就夾到 25');
+
+  const later = guildSearchParams({ channelId: '100', query: '', limit: 25, oldestFirst: false, offset: 50, includeNsfw: true });
+  ok(later.get('offset') === '50' && later.get('include_nsfw') === 'true', '翻頁與 NSFW 頻道的參數');
+
+  const payload = {
+    total_results: 3,
+    messages: [
+      [{ id: '3', channel_id: '100' }, { id: '1', channel_id: '100' }],
+      [{ id: '9', channel_id: 'thread' }],
+    ],
+  };
+  const newest = orderSearchHits(payload, '100', 2, false);
+  ok(newest.total === 3 && newest.hits.map((m) => m.id).join() === '1,3', '搜尋結果去掉討論串、排成舊→新');
+  const oldest = orderSearchHits(payload, '100', 1, true);
+  ok(oldest.hits.map((m) => m.id).join() === '1', '從舊的開始取時留最舊的那則');
+  ok(orderSearchHits({}, '100', 5, false).hits.length === 0, '沒有結果時回空陣列');
+
+  // 假 Discord：desc 時第 0 頁是最新的 25 則，每頁內部照樣舊→新。
+  const page = (from, to) => ({
+    total_results: 100,
+    messages: [Array.from({ length: to - from + 1 }, (_, i) => ({ id: String(from + i), channel_id: '100' }))],
+  });
+  const pagesByOffset = (list) => async (offset) => list[offset / 25];
+
+  const seen = [];
+  const newestPage = await collectSearchHits({
+    pages: 3, limit: 5, channelId: '100', oldestFirst: false,
+    fetchPage: async (offset) => { seen.push(offset); return pagesByOffset([page(76, 100), page(51, 75), page(26, 50)])(offset); },
+  });
+  ok(seen.join() === '0' && newestPage.hits.map((m) => m.id).join() === '96,97,98,99,100', '最新的一批：取這頁最新的 5 則，只抓一頁');
+
+  const skipped = [];
+  const afterSkip = await collectSearchHits({
+    pages: 3, limit: 5, channelId: '100', oldestFirst: false,
+    fetchPage: async (offset) => { skipped.push(offset); return pagesByOffset([page(76, 100), page(51, 75)])(offset); },
+    visible: (m) => Number(m.id) < 76,
+  });
+  ok(skipped.join() === '0,25' && afterSkip.hits.map((m) => m.id).join() === '71,72,73,74,75', '整頁被濾掉時翻下一頁，湊滿 5 則');
+
+  const forward = await collectSearchHits({
+    pages: 3, limit: 3, channelId: '100', oldestFirst: true,
+    fetchPage: pagesByOffset([page(1, 25)]),
+  });
+  ok(forward.hits.map((m) => m.id).join() === '1,2,3', '從舊的開始取時留那頁最舊的');
+
+  const lastPage = [];
+  const short = await collectSearchHits({
+    pages: 3, limit: 10, channelId: '100', oldestFirst: false,
+    fetchPage: async (offset) => { lastPage.push(offset); return pagesByOffset([page(1, 4)])(offset); },
+  });
+  ok(short.hits.length === 4 && lastPage.length === 1, '最後一頁不滿 25 則就停，不再往下翻');
 }
 
 console.log('## 7d3. 批次');
