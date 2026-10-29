@@ -636,8 +636,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   只換網域的改寫連結也算同一條，例如 fxtwitter、fixupx、ddinstagram），
   因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到；
   修復 bot 的訊息本文（換過網域的完整網址）也會一起列出
-- `view_message` 的影片連結：訊息文字裡有白名單連結（YouTube 與 `youtu.be`、`music.youtube.com`、`youtube-nocookie.com`）
-  且 `videoLinks.enabled` 時，橋接用 `yt-dlp -g` 取**直連串流網址**（360p，拼圖一格才 240px 寬），再用同一套 ffmpeg 抽 6 格拼圖，
+- `view_message` 的影片連結：訊息文字裡有白名單連結（YouTube、`m.youtube.com`、`youtu.be`、`music.youtube.com`、`youtube-nocookie.com`）
+  且 `videoLinks.enabled`（而且 `media.enabled` 沒關）時，橋接用 `yt-dlp -g` 取**直連串流網址**（360p，拼圖一格才 240px 寬），再用同一套 ffmpeg 抽 6 格拼圖，
   不會把整支影片下載下來。抽格窗口跟影片附件一樣（`media.maxVideoSeconds`）。
   yt-dlp 失敗（私人影片、會員限定、地區鎖、直播、沒裝）只多一行「影片連結看不了：原因」，其它內容照回。
   白名單是防 SSRF：yt-dlp 會連原站，不能讓群友丟任何網址就讓伺服器去抓。抓 YouTube 違反其服務條款，要不要開由管理員決定；

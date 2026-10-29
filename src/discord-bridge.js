@@ -1389,6 +1389,7 @@ async function main() {
       return { text: `${scanScope}裡找到 ${found.length} 則（舊→新）：\n${lines.join('\n')}${note}` };
     }),
     async view(body) {
+      const viewStart = Date.now();
       const { key, channel } = await agentSender.resolve(body.token);
       const target = await fetchByRef(key, textArg(body.message));
       if (!canReadMessage(cfg.discord, target, client.user.id)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
@@ -1462,22 +1463,31 @@ async function main() {
       ];
 
       // 群友貼的影片連結（YouTube 等）：按需用 yt-dlp 取直連網址，跟附件同一套抽格。
-      // 只在這則訊息真的有白名單連結、而且還有圖片名額時才跑；失敗只多一行原因。
-      const linkUrl = cfg.discord.videoLinks.enabled && images.length < cfg.discord.media.maxCount
+      // 只在這則訊息真的有白名單連結、media 沒關、而且還有圖片名額時才跑；失敗只多一行原因。
+      const linkUrl = cfg.discord.videoLinks.enabled && cfg.discord.media.enabled && images.length < cfg.discord.media.maxCount
         ? videoLinks(target.content)[0]
         : '';
       if (linkUrl) {
-        const stream = await fetchStreamUrl(linkUrl, { ytDlpPath: cfg.discord.videoLinks.ytDlpPath })
-          .catch((error) => ({ ok: false, reason: error?.message ?? String(error) }));
-        if (!stream.ok) {
-          lines.push(`影片連結看不了：${flat(stream.reason, 120)}`);
+        // 整個工具呼叫有 60 秒上限（mcp-discord 的逾時）；花光的話連前面那些文字都會被丟掉。
+        // 所以 yt-dlp 與 ffmpeg 共用剩下的預算，不夠就放棄這次連結，保住其餘結果。
+        const budget = () => Math.max(10_000, Math.min(45_000, 55_000 - (Date.now() - viewStart)));
+        if (55_000 - (Date.now() - viewStart) < 12_000) {
+          lines.push('影片連結這次沒看：前面的內容已經花掉大部分時間，要看就再呼叫一次 view_message。');
         } else {
-          const sheet = await prepareVideoUrlBlock(stream.url, cfg.discord.media);
-          if (sheet.block) {
-            images.push({ data: sheet.block.data, mimeType: sheet.block.mediaType });
-            if (sheet.note) videoNotes.push(sheet.note);
+          const stream = await fetchStreamUrl(linkUrl, {
+            ytDlpPath: cfg.discord.videoLinks.ytDlpPath,
+            timeoutMs: Math.min(20_000, budget()),
+          }).catch((error) => ({ ok: false, reason: error?.message ?? String(error) }));
+          if (!stream.ok) {
+            lines.push(`影片連結看不了：${flat(stream.reason, 120)}`);
           } else {
-            lines.push(`影片連結看不了：${flat(sheet.error, 120)}`);
+            const sheet = await prepareVideoUrlBlock(stream.url, cfg.discord.media, { timeoutMs: budget() });
+            if (sheet.block) {
+              images.push({ data: sheet.block.data, mimeType: sheet.block.mediaType });
+              if (sheet.note) videoNotes.push(sheet.note);
+            } else {
+              lines.push(`影片連結看不了：${flat(sheet.error, 120)}`);
+            }
           }
         }
       }

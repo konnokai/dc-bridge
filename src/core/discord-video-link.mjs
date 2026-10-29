@@ -23,7 +23,7 @@ export function videoLinks(text) {
   const found = new Map();
   for (const match of String(text ?? '').matchAll(/https?:\/\/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+/g)) {
     // 句尾標點不算網址（群友常寫「看這個 https://youtu.be/xxx，很好笑」）。
-    const raw = match[0].replace(/[.,;:!?，。；：！？」』）】]+$/u, '');
+    const raw = match[0].replace(/[.,;:!?，。；：！？」』）)】]+$/u, '');
     let url;
     try {
       url = new URL(raw);
@@ -52,7 +52,7 @@ export function parseStreamUrl(raw) {
 }
 
 /**
- * 跑一次 yt-dlp -g，拿單一影片的直連網址（video-only、高度 ≤480，夠抽格就好）。
+ * 跑一次 yt-dlp -g，拿單一影片的直連網址（video-only、高度 ≤360，夠抽格就好）。
  * @returns {Promise<{ok:true,url:string}|{ok:false,reason:string}>}
  */
 export async function fetchStreamUrl(url, { ytDlpPath = null, timeoutMs = 30_000 } = {}) {

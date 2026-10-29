@@ -171,14 +171,14 @@ export async function prepareMediaBlock(buffer, name, limits) {
 }
 
 /** yt-dlp 的直連網址 → 跟附件一樣的圖像區塊（影片抽格拼圖）。 */
-export async function prepareVideoUrlBlock(url, limits) {
+export async function prepareVideoUrlBlock(url, limits, { timeoutMs } = {}) {
   const result = await normalizeVideoUrlForModel(url, {
     maxModelBytes: limits.maxModelBytes,
     maxVideoSeconds: limits.maxVideoSeconds,
     gifTile: 240,
     videoFrames: 6,
-    // 遠端串流要邊下載邊解碼，實測同一支片比本機檔多花一倍時間，25 秒不夠。
-    timeoutMs: Math.max(limits.timeoutMs ?? 25_000, 45_000),
+    // 呼叫端算好剩餘預算（MCP 整通只有 60 秒）；沒給就用 45 秒。
+    timeoutMs: timeoutMs ?? 45_000,
     ffmpegPath: limits.ffmpegPath ?? null,
   });
   if (!result.ok) return { error: result.error };

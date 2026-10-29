@@ -50,7 +50,7 @@ import {
   stickerLabel,
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
-import { parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
+import { fetchStreamUrl, parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
@@ -1760,7 +1760,12 @@ console.log('## 8. 附件（圖片與影片）');
   ok(links.length === 2 && links[0].includes('youtube.com/watch') && links[1].includes('youtu.be'), '只挑白名單的 YouTube 連結');
   ok(videoLinks('https://www.youtube.com/watch?v=abc123 https://www.youtube.com/watch?v=abc123').length === 1, '同一條連結只留一次');
   ok(videoLinks('https://youtube.com.evil.com/watch?v=1').length === 0, '子網域詐騙不算白名單');
+  ok(videoLinks('https://youtube.com@evil.com/x').length === 0, 'userinfo 偽裝 host 也不算白名單');
   ok(videoLinks('看這個 https://youtu.be/xyz，很好笑')[0] === 'https://youtu.be/xyz', '句尾標點不會黏進網址');
+  ok(videoLinks('（https://youtu.be/xyz）')[0] === 'https://youtu.be/xyz', '句尾括號不會黏進網址');
+  const noBinary = await fetchStreamUrl('https://youtu.be/xyz', { ytDlpPath: process.execPath, timeoutMs: 20_000 });
+  ok(noBinary.ok === false && /沒有給出直連網址/.test(noBinary.reason) && /退出碼/.test(noBinary.reason),
+    'yt-dlp 跑錯 binary：回原因、不丟例外（寫檔→讀回→清理都走過）');
   ok(parseStreamUrl('https://cdn.example/v.mp4\nhttps://cdn.example/a.m4a\n') === 'https://cdn.example/v.mp4', 'yt-dlp 多行輸出取第一條 https 網址');
   ok(parseStreamUrl('') === '' && parseStreamUrl('http://insecure/x') === '', '沒有 https 網址就回空字串');
   ok(resolveYtDlp({}) === 'yt-dlp' || resolveYtDlp({}), '沒有設定時回候選路徑不會丟例外');
