@@ -41,11 +41,11 @@ import {
   isSkippedMessage,
 } from '../src/core/discord-core.mjs';
 import {
-  collectImageAttachments,
+  collectMediaAttachments,
   describeSkipped,
   embedImages,
-  fetchDiscordImage,
-  prepareImageBlock,
+  fetchDiscordMedia,
+  prepareMediaBlock,
   stickerImages,
   stickerLabel,
 } from '../src/core/discord-media.mjs';
@@ -1720,7 +1720,7 @@ console.log('## 7f. 黑話 MCP');
   }
 }
 
-console.log('## 8. 附件（圖片）');
+console.log('## 8. 附件（圖片與影片）');
 {
   const limits = normalizeDiscordConfig({}).media;
   const att = (over = {}) => ({
@@ -1731,24 +1731,33 @@ console.log('## 8. 附件（圖片）');
     ...over,
   });
 
-  ok(collectImageAttachments([att()], limits).accepted.length === 1, 'Discord CDN 上的 png 會接受');
-  ok(collectImageAttachments([att({ url: 'https://evil.example.com/a.png' })], limits).accepted.length === 0,
+  ok(collectMediaAttachments([att()], limits).accepted.length === 1, 'Discord CDN 上的 png 會接受');
+  ok(collectMediaAttachments([att({ url: 'https://evil.example.com/a.png' })], limits).accepted.length === 0,
     '非 Discord CDN 的網址拒絕');
-  ok(collectImageAttachments([att({ url: 'https://cdn.discordapp.com.evil.com/a.png' })], limits).accepted.length === 0,
+  ok(collectMediaAttachments([att({ url: 'https://cdn.discordapp.com.evil.com/a.png' })], limits).accepted.length === 0,
     '子網域詐騙拒絕');
-  ok(collectImageAttachments([att({ url: 'http://cdn.discordapp.com/a.png' })], limits).accepted.length === 0,
+  ok(collectMediaAttachments([att({ url: 'http://cdn.discordapp.com/a.png' })], limits).accepted.length === 0,
     'http 拒絕');
-  ok(collectImageAttachments([att({ contentType: 'application/pdf', name: 'a.pdf' })], limits).accepted.length === 0,
+  ok(collectMediaAttachments([att({ contentType: 'application/pdf', name: 'a.pdf' })], limits).accepted.length === 0,
     '非圖片 contentType 拒絕');
-  ok(collectImageAttachments([att({ name: 'x.jpg', contentType: '' })], limits).accepted.length === 1,
+  ok(collectMediaAttachments([att({ name: 'x.jpg', contentType: '' })], limits).accepted.length === 1,
     '沒有 contentType 時用副檔名判斷');
-  ok(collectImageAttachments([att({ name: 'x', contentType: '' })], limits).accepted.length === 0,
+  ok(collectMediaAttachments([att({ name: 'x', contentType: '' })], limits).accepted.length === 0,
     '沒有 contentType 也沒有副檔名 → 拒絕');
-  const tooBig = collectImageAttachments([att({ size: limits.maxBytes + 1 })], limits);
+  ok(collectMediaAttachments([att({ name: 'clip.mp4', contentType: 'video/mp4' })], limits).accepted[0]?.mime === 'video/mp4',
+    '影片附件會收（抽格拼圖用）');
+  ok(collectMediaAttachments([att({ name: 'clip.mov', contentType: '' })], limits).accepted[0]?.mime === 'video/quicktime',
+    'mov 沒有 contentType 時用副檔名判斷');
+  ok(collectMediaAttachments([att({ name: 'clip.mp4', contentType: 'video/mp4', url: 'https://evil.example.com/clip.mp4' })], limits).accepted.length === 0,
+    '影片也只在 Discord CDN 上才收');
+  ok(collectMediaAttachments([att({ name: 'a.zip', contentType: 'application/zip' })], limits).skipped[0].reason.includes('影片'),
+    '不是圖片也不是影片的附件說明會講清楚');
+  ok(normalizeDiscordConfig({}).media.maxBytes === 20 * 1024 * 1024, '下載上限預設跟 Discord 免費額度（20MB）一致');
+  const tooBig = collectMediaAttachments([att({ size: limits.maxBytes + 1 })], limits);
   ok(tooBig.accepted.length === 0 && tooBig.skipped[0].reason.includes('上限'), '超過下載上限會跳過並說明原因');
 
   const many = Array.from({ length: limits.maxCount + 2 }, (_, i) => att({ name: `a${i}.png` }));
-  const capped = collectImageAttachments(many, limits);
+  const capped = collectMediaAttachments(many, limits);
   ok(capped.accepted.length === limits.maxCount, `一次最多 ${limits.maxCount} 張`);
   ok(capped.skipped.some((s) => s.reason.includes('最多')), '超過張數的附件有說明');
 
@@ -1763,7 +1772,7 @@ console.log('## 8. 附件（圖片）');
   ok(stickerLabel(stickers) === '[貼圖：貓貓震驚][貼圖：dance][貼圖：wave]', '貼圖寫成 [貼圖：名稱]');
   ok(stickerLabel(undefined) === '' && stickerLabel(new Map()) === '', '沒有貼圖回空字串');
   ok(stickerLabel(new Map([['x', { name: '換\n行' }]])) ==='[貼圖：換 行]', '貼圖名稱不能換行');
-  const stickerMedia = collectImageAttachments(stickerImages(stickers), limits);
+  const stickerMedia = collectMediaAttachments(stickerImages(stickers), limits);
   ok(stickerMedia.accepted.map((a) => a.mime).join() === 'image/png,image/gif', 'png、gif 貼圖當圖片送進模型');
   ok(stickerMedia.skipped.length === 0, 'Lottie 不送圖也不算跳過（名稱已經在文字裡）');
 
@@ -1780,13 +1789,13 @@ console.log('## 8. 附件（圖片）');
   const embedMedia = embedImages(embeds);
   ok(embedMedia.length === 2, '一個 embed 只取一張預覽圖，沒有代理網址的不算');
   ok(embedMedia[0].name === 'tenor.gif' && embedMedia[1].name === 'yt.png', '有 image 就不取 thumbnail，只有 thumbnail 時才用它');
-  ok(collectImageAttachments(embedMedia, limits).accepted.length === 2, '代理網址過得了 Discord CDN 白名單');
-  ok(collectImageAttachments(embedImages([{ image: { proxyURL: 'https://evil.example.com/x.gif' } }]), limits).accepted.length === 0,
+  ok(collectMediaAttachments(embedMedia, limits).accepted.length === 2, '代理網址過得了 Discord CDN 白名單');
+  ok(collectMediaAttachments(embedImages([{ image: { proxyURL: 'https://evil.example.com/x.gif' } }]), limits).accepted.length === 0,
     '代理網址仍然要過 Discord CDN 白名單');
   ok(embedImages(undefined).length === 0, '沒有 embed 回空陣列');
 
-  await assert.rejects(() => fetchDiscordImage('https://evil.example.com/x.png', limits), /非 Discord CDN/);
-  await assert.rejects(() => fetchDiscordImage('http://cdn.discordapp.com/x.png', limits), /非 Discord CDN/);
+  await assert.rejects(() => fetchDiscordMedia('https://evil.example.com/x.png', limits), /非 Discord CDN/);
+  await assert.rejects(() => fetchDiscordMedia('http://cdn.discordapp.com/x.png', limits), /非 Discord CDN/);
 
   // 32×32 純紅 PNG（不靠外部檔案）
   const table = new Int32Array(256).map((_, n) => {
@@ -1825,7 +1834,7 @@ console.log('## 8. 附件（圖片）');
   };
 
   const small = makePng(32, 32);
-  const prepared = await prepareImageBlock(small, 'red.png', limits);
+  const prepared = await prepareMediaBlock(small, 'red.png', limits);
   ok(prepared.block?.type === 'image' && prepared.block.mediaType === 'image/png', '小圖轉成 DSH image block');
   ok(Buffer.from(prepared.block.data, 'base64').equals(small), 'base64 可還原原始位元組（canonical）');
 
@@ -1839,7 +1848,7 @@ console.log('## 8. 附件（圖片）');
     if (gen.status !== 0 || !fs.existsSync(file)) {
       console.log('SKIP ffmpeg 產不出測試圖，跳過解析度縮小檢查');
     } else {
-      const out = await prepareImageBlock(fs.readFileSync(file), 'big.png', { ...limits, maxLongEdge: 1280, maxModelBytes: 512 * 1024 });
+      const out = await prepareMediaBlock(fs.readFileSync(file), 'big.png', { ...limits, maxLongEdge: 1280, maxModelBytes: 512 * 1024 });
       const info = out.block ? sniffImage(Buffer.from(out.block.data, 'base64')) : null;
       ok(Boolean(out.block) && Boolean(info) && Math.max(info.width, info.height) <= 1280,
         `2600×2600 會縮到長邊 ≤1280（${info?.width ?? '?'}×${info?.height ?? '?'}）`);

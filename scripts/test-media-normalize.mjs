@@ -18,9 +18,11 @@ import {
   MEDIA_DEFAULTS,
   describeImage,
   normalizeImageForModel,
+  normalizeVideoForModel,
   planAnimation,
   planNormalization,
-  sniffImage
+  sniffImage,
+  sniffVideo
 } from '../src/media-normalize.js';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 
@@ -156,9 +158,101 @@ await test('normalizeImageForModel：压不动的垃圾字节 ⇒ ok:false 且�
   assert.match(out.error, /上限|压不到/);
 });
 
+await test('sniffVideo 認得 mp4／mov 與 webm，圖片一律回 null', async () => {
+  // 只有容器標頭就夠了：0-3 任意，第 4-7 是 ftyp；webm 是 EBML。
+  assert.equal(sniffVideo(Buffer.from('000000186674797069736f6d', 'hex'))?.format, 'mp4');
+  assert.equal(sniffVideo(Buffer.from('1a45dfa39f4286810142f7810142f2810442f381', 'hex'))?.format, 'webm');
+  assert.equal(sniffVideo(PNG_1x1), null, '圖片不能當影片');
+  assert.equal(sniffVideo(Buffer.alloc(4)), null, '太短不能瞎猜');
+});
+
+await test('normalizeVideoForModel 對認不出的位元組回清楚的錯誤', async () => {
+  const out = await normalizeVideoForModel(Buffer.from('not a video at all'), MEDIA_DEFAULTS);
+  assert.equal(out.ok, false);
+  assert.match(out.error, /認不出影片格式/);
+});
+
 // ── 4. 真实 ffmpeg：抽帧拼图 / 降采样（没装 ffmpeg 就跳过） ─────────────────
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qqb-media-test-'));
 const ff = (args) => spawnSync('ffmpeg', ['-v', 'error', '-y', ...args], { stdio: 'ignore' });
+
+await test('真實影片 → 抽 6 格拼圖（單張 JPEG + 長度說明）', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const clip = path.join(tmp, 'clip.mp4');
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=3', '-pix_fmt', 'yuv420p', clip]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const src = fs.readFileSync(clip);
+  assert.equal(sniffVideo(src)?.format, 'mp4');
+
+  const out = await normalizeVideoForModel(src, { ...MEDIA_DEFAULTS, tmpDir: tmp });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(out.mimeType, 'image/jpeg');
+  const strip = sniffImage(out.buffer);
+  assert.equal(strip?.frames, 1, '拼圖是靜態圖');
+  assert.ok(strip.width > 320, `拼圖應該比單格寬（${strip.width}）`);
+  assert.match(out.note, /影片 \d+\.\d+s/);
+  assert.match(out.note, /抽 6 格拼成 3×2/);
+  assert.match(out.note, /沒有聲音/);
+});
+
+await test('影片超過 maxVideoSeconds 只看前面那段（note 說清楚）', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const clip = path.join(tmp, 'long.mp4');
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=10:duration=10', '-pix_fmt', 'yuv420p', clip]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const out = await normalizeVideoForModel(fs.readFileSync(clip), {
+    ...MEDIA_DEFAULTS, tmpDir: tmp, maxVideoSeconds: 5
+  });
+  assert.equal(out.ok, true, out.error);
+  assert.match(out.note, /只看前 5s/);
+});
+
+await test('ffprobe 問不到長度時退回 1 fps 取前 6 秒，note 講清楚', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const clip = path.join(tmp, 'nolen.mp4');
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=5', '-pix_fmt', 'yuv420p', clip]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const out = await normalizeVideoForModel(fs.readFileSync(clip), {
+    ...MEDIA_DEFAULTS, tmpDir: tmp, ffprobePath: 'no-such-ffprobe-for-test'
+  });
+  assert.equal(out.ok, true, out.error);
+  assert.match(out.note, /影片長度不明/);
+  assert.match(out.note, /只看前 6s/);
+});
+
+await test('webm 走同一條抽格流程', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const clip = path.join(tmp, 'clip.webm');
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=10:duration=3', '-c:v', 'libvpx-vp9', '-b:v', '200k', clip]);
+  if (made.status !== 0) throw skip('ffmpeg 没有 libvpx-vp9');
+  const src = fs.readFileSync(clip);
+  assert.equal(sniffVideo(src)?.format, 'webm');
+  const out = await normalizeVideoForModel(src, { ...MEDIA_DEFAULTS, tmpDir: tmp });
+  assert.equal(out.ok, true, out.error);
+  assert.match(out.note, /抽 6 格拼成 3×2/);
+});
+
+await test('影片抽不出畫面（壞檔）回錯誤，不丟例外', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const fake = path.join(tmp, 'broken.mp4');
+  fs.writeFileSync(fake, Buffer.concat([Buffer.from('000000186674797069736f6d', 'hex'), Buffer.alloc(512, 0)]));
+  const out = await normalizeVideoForModel(fs.readFileSync(fake), { ...MEDIA_DEFAULTS, tmpDir: tmp });
+  assert.equal(out.ok, false);
+  assert.match(out.error, /影片抽不出畫面/);
+});
+
+await test('maxVideoSeconds 再大，抽格窗口也只到 120 秒（fps 下限）', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const clip = path.join(tmp, 'long200.mp4');
+  // 1 fps 的 200 秒片子，編碼很快；重點是 probed > 120。
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=1:duration=200', '-pix_fmt', 'yuv420p', clip]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const out = await normalizeVideoForModel(fs.readFileSync(clip), {
+    ...MEDIA_DEFAULTS, tmpDir: tmp, maxVideoSeconds: 600
+  });
+  assert.equal(out.ok, true, out.error);
+  assert.match(out.note, /只看前 120s/);
+});
 
 await test('真实动图 → 抽帧拼图（单张 JPEG + 帧数说明）', async () => {
   if (!hasFfmpeg) throw skip('本机没有 ffmpeg');

@@ -24,7 +24,7 @@ v1 只注入 top 12（約 400~600 字），其餘靠目錄與檢索。v4 改成�
                   "usage": "覺得好笑時", "updatedAt": "…" }] }
   ```
 - **建立**：`scripts/build-discord-emojis.mjs`
-  - 抓 `emoji.imageURL({ size: 128 })`（pn/gif）→ 沿用 `prepareImageBlock` 縮圖。
+  - 抓 `emoji.imageURL({ size: 128 })`（pn/gif）→ 沿用 `prepareMediaBlock` 縮圖。
   - 一次 4~5 張丟給 DSH `dc-chat`（vision），要求只回 JSON。
   - 只重做新的/換圖的（hash）；失敗保留舊資料；刪掉的 emoji 從目錄移除。
   - 每次 batch 建一個新 session（避免圖片累積在 context）；結束歸檔。

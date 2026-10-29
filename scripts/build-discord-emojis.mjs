@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { NodeApiClient, unwrap, createTurnCollector } from '../src/dsh-client.js';
 import { normalizeDiscordConfig } from '../src/core/discord-core.mjs';
-import { fetchDiscordImage, prepareImageBlock } from '../src/core/discord-media.mjs';
+import { fetchDiscordMedia, prepareMediaBlock } from '../src/core/discord-media.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STATE_DIR = path.join(ROOT, 'state');
@@ -198,7 +198,7 @@ async function main() {
         const url = emoji.imageURL({ extension: emoji.animated ? 'gif' : 'png', size: 128 });
         let buffer;
         try {
-          buffer = await fetchDiscordImage(url, cfg.discord.media);
+          buffer = await fetchDiscordMedia(url, cfg.discord.media);
         } catch (error) {
           log(`下載 ${emoji.name} 失敗：${error?.message ?? error}`);
           continue;
@@ -220,7 +220,7 @@ async function main() {
         const batch = need.slice(i, i + batchSize);
         const prepared = [];
         for (const item of batch) {
-          const image = await prepareImageBlock(item.buffer, `${item.emoji.name}.${item.emoji.animated ? 'gif' : 'png'}`, cfg.discord.media);
+          const image = await prepareMediaBlock(item.buffer, `${item.emoji.name}.${item.emoji.animated ? 'gif' : 'png'}`, cfg.discord.media);
           if (image.block) prepared.push({ ...item, block: image.block });
           else log(`${item.emoji.name} 跳過：${image.error}`);
         }

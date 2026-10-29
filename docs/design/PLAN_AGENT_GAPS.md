@@ -1,7 +1,7 @@
 # 計畫：補上模型自己說缺的工具（dc-chat）
 
-> 狀態：**2026-10-29 F1 完成（分支 `feat/discord-embed-gif`，還沒部署）**。D 與 S4 見對應章節；
-> A、C、B、E、F1、K、I、G0、G1、J 已完成，H、F2 略過，剩 L、G2。完成度見下表。
+> 狀態：**2026-10-29 F1、F2 完成（F1 已合併 main；F2 在分支 `feat/discord-video-attachments`，都還沒部署）**。D 與 S4 見對應章節；
+> A、C、B、E、F1、F2、K、I、G0、G1、J 已完成，H 略過，剩 L、G2。完成度見下表。
 > 檔案位置：`docs/design/PLAN_AGENT_GAPS.md`。
 > 2026-10-28 起 `docs/design/` 已進版控，worktree 開的 session 也看得到。
 >
@@ -20,7 +20,7 @@
 | H 送固定的圖 | ⏭️ 略過 | 管理員決定不做 |
 | E 頻道事件筆記 v1 + v2 | ✅ 完成 | `da12990`；控制台卡片 `ad42d9a` |
 | F1 GIF 連結 | ✅ 完成 | 2026-10-29，分支 `feat/discord-embed-gif`，**還沒部署** |
-| F2 影片 | ⏭️ 略過 | 管理員決定不做 |
+| F2 影片 | ✅ 完成 | 2026-10-29，分支 `feat/discord-video-attachments`，**還沒部署** |
 | K 常用表情 | ✅ 完成 | `c590ad8` |
 | I 回訪 | ✅ 完成 | `c590ad8` |
 | G0 persona（連結先看預覽） | ✅ 完成 | `ad42d9a`、`a383f63` |
@@ -361,13 +361,13 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 
 ### F：看得到 GIF 和影片
 
-**狀態：F1 ✅ 完成（2026-10-29，分支 `feat/discord-embed-gif`，還沒部署）；F2 ⏭️ 略過（2026-10-28，管理員決定不做）。**
+**狀態：F1 ✅ 完成（2026-10-29，已合併 main，還沒部署）；F2 ✅ 完成（2026-10-29，分支 `feat/discord-video-attachments`，還沒部署）。**
 
 **現況**：
-- 批次 prompt 只收**附件**和**貼圖**的圖（`handleMessage` → `collectImageAttachments`），**不收 embed**。
+- 批次 prompt 只收**附件**和**貼圖**的圖（`handleMessage` → `collectMediaAttachments`），**不收 embed**。
   所以 Tenor／Giphy 的 GIF 連結，模型只看到一串網址。
 - `view_message` 已經會收 embed 的 `image`／`thumbnail`（只用 Discord 代理過的 `proxyURL`）。
-- `prepareImageBlock` 已經會把 GIF 取 6 格拼成一張圖（`gifFrames: 6`）。
+- `prepareMediaBlock` 已經會把 GIF 取 6 格拼成一張圖（`gifFrames: 6`）。
 - 影片附件（mp4／webm／mov）會被當成「不是支援的圖片格式」跳過。
 
 **F1 GIF 連結（Discord 線）**
@@ -391,6 +391,13 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 - 跟計畫第 2 點不同：批次不是在 `handleMessage` 收，而是在送出時讀 `entry.message.embeds`。S2 結論：預覽走 `messageUpdate`，discord.js 14.27.0 會 patch 同一個 Message 物件（`MessageUpdate.js` → `Message._patch`），批次本來就等 `batch.debounceMs`（預設 3 秒），所以在送出時讀才拿得到，`messageCreate` 當下多半還是空的。
 - 沒開 Message Content 意圖時 `embeds` 一律是空的，只有網址（官方文件警告）；`view_message` 同理。
 - persona 加了一句：只看到 tenor／giphy 網址就 `view_message` 看圖。沒實機貼 Tenor 連結驗證過。
+
+**F2 結果（2026-10-29）**：
+- `normalizeVideoForModel`（`src/media-normalize.js`）：ffprobe 拿長度（重用 `voice-core` 的 `probeAudio`，結果寫檔不碰 stdout）→ `fps=N/秒數` 均勻抽 6 格 → `tile=3x2` 拼一張 JPEG。ffprobe 問不到長度時退回 1 fps 取前 6 秒。
+- 上限：只看前 `media.maxVideoSeconds` 秒（預設 60、上限 120）、ffmpeg 逾時沿用 `media.timeoutMs`、輸出受 `maxModelBytes` 管。
+- Discord 免費上傳額度 2026-08 從 10MB 調到 20MB（官方 File Attachments FAQ），所以 `media.maxBytes` 預設跟著 8MB → 20MB；boost 伺服器可傳到 50／100MB，要收更大的再調（clamp 上限 64MB）。
+- 影片佔 `media.maxCount` 的 1 張。`prepareImageBlock`／`collectImageAttachments`／`fetchDiscordImage` 改名成 `prepareMediaBlock`／`collectMediaAttachments`／`fetchDiscordMedia`，callers 一起改。
+- 測試伺服器有 ffmpeg 7.1.3 與 ffprobe，F2 上線後可以真的抽格。還沒部署，也還沒貼真影片驗證。
 
 ### K：常用表情（低優先，可以不做）
 

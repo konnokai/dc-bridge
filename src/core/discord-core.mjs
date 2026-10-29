@@ -115,16 +115,19 @@ export function normalizeDiscordConfig(raw) {
       token: typeof src.console?.token === 'string' ? src.console.token.trim() : '',
     },
     media: {
-      // 附件（圖片）轉發。關掉就只送文字。
+      // 附件（圖片與影片）轉發。關掉就只送文字。
       enabled: src.media?.enabled !== false,
       // 下載上限：超過就不抓（避免一條訊息拖垮橋接）。
-      maxBytes: clamp(src.media?.maxBytes, 8 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
+      // 預設 20MB：Discord 免費帳號 2026-08 起從 10MB 調到 20MB；boost 伺服器可以傳更大，要收再往上開。
+      maxBytes: clamp(src.media?.maxBytes, 20 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
       // 送進模型前的單張上限；超過就本地縮圖（ffmpeg）。
       maxModelBytes: clamp(src.media?.maxModelBytes, 1024 * 1024, 128 * 1024, 3 * 1024 * 1024),
       // 縮圖後的長邊上限。256~2048 是 normalizeImageForModel 的硬範圍。
       maxLongEdge: clamp(src.media?.maxLongEdge, 1280, 256, 2048),
       maxCount: clamp(src.media?.maxCount, 4, 1, 8),
       timeoutMs: clamp(src.media?.timeoutMs, 25_000, 2000, 60_000),
+      // 影片只抽前面這麼多秒的畫面：後面再多也只是白解碼。6 格最多蓋住 120 秒（fps 下限）。
+      maxVideoSeconds: clamp(src.media?.maxVideoSeconds, 60, 5, 120),
     },
     context: {
       // 被 @／回覆時，抓最近幾則頻道訊息一起送進 prompt（Read Message History 權限）。

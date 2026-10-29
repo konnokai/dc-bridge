@@ -108,11 +108,11 @@ import {
   upsertCandidates,
 } from './core/discord-slang.mjs';
 import {
-  collectImageAttachments,
+  collectMediaAttachments,
   describeSkipped,
   embedImages,
-  fetchDiscordImage,
-  prepareImageBlock,
+  fetchDiscordMedia,
+  prepareMediaBlock,
   stickerImages,
   stickerLabel,
 } from './core/discord-media.mjs';
@@ -1442,18 +1442,24 @@ async function main() {
         ...embedImages(target.embeds),
         ...fixMessages.flatMap((message) => embedImages(message.embeds)),
       ];
-      const media = collectImageAttachments([...(target.attachments?.values() ?? []), ...stickerImages(target.stickers), ...embedItems], cfg.discord.media);
+      const media = collectMediaAttachments([...(target.attachments?.values() ?? []), ...stickerImages(target.stickers), ...embedItems], cfg.discord.media);
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
-        const prepared = await prepareImageBlock(await fetchDiscordImage(item.url, cfg.discord.media), item.name, cfg.discord.media);
+        const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media);
         if (!prepared.block) throw new Error(prepared.error);
-        return { data: prepared.block.data, mimeType: prepared.block.mediaType };
+        return {
+          data: prepared.block.data,
+          mimeType: prepared.block.mediaType,
+          note: item.mime?.startsWith('video/') ? prepared.note : '',
+        };
       }));
-      const images = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+      const images = settled.filter((r) => r.status === 'fulfilled').map(({ value }) => ({ data: value.data, mimeType: value.mimeType }));
+      const videoNotes = settled.flatMap((r) => (r.status === 'fulfilled' && r.value.note ? [r.value.note] : []));
       const missed = [
         ...media.skipped.map((s) => `${flat(s.name, 60)}（${s.reason}）`),
         ...settled.map((r, i) => (r.status === 'rejected' ? `${flat(media.accepted[i].name, 60)}（${flat(r.reason?.message ?? r.reason, 80)}）` : '')).filter(Boolean),
       ];
       if (images.length) lines.push(`附上 ${images.length} 張圖。`);
+      if (videoNotes.length) lines.push(`影片說明：${videoNotes.map((note) => flat(note, 80)).join('；')}`);
       if (missed.length) lines.push(`看不到的圖：${missed.join('；')}`);
       return { text: lines.join('\n'), images };
     },
@@ -1491,7 +1497,7 @@ async function main() {
       let avatar = null;
       try {
         const url = (member ?? target.author).displayAvatarURL({ extension: 'png', size: 128, forceStatic: true });
-        const prepared = await prepareImageBlock(await fetchDiscordImage(url, cfg.discord.media), 'avatar', cfg.discord.media);
+        const prepared = await prepareMediaBlock(await fetchDiscordMedia(url, cfg.discord.media), 'avatar', cfg.discord.media);
         if (prepared.block) avatar = { data: prepared.block.data, mimeType: prepared.block.mediaType };
         else lines.push(`（頭像看不到：${prepared.error}）`);
       } catch (error) {
@@ -2443,11 +2449,13 @@ async function main() {
           continue;
         }
         try {
-          const buffer = await fetchDiscordImage(item.url, cfg.discord.media);
-          const prepared = await prepareImageBlock(buffer, item.name, cfg.discord.media);
+          const buffer = await fetchDiscordMedia(item.url, cfg.discord.media);
+          const prepared = await prepareMediaBlock(buffer, item.name, cfg.discord.media);
           if (prepared.block) {
             images.push(prepared.block);
-            imageTags.push(`[圖${images.length}]`);
+            // 影片的 note 要讓模型看到：它得知道只抽了前幾十秒、這是一張格子圖。
+            const note = item.mime?.startsWith('video/') ? flat(prepared.note, 80) : '';
+            imageTags.push(note ? `[圖${images.length}：${note}]` : `[圖${images.length}]`);
             if (prepared.note) log(`圖片 ${item.name}：${prepared.note}`);
           } else {
             skipped.push({ name: item.name, reason: prepared.error });
@@ -3276,7 +3284,7 @@ async function main() {
 
     const stickers = stickerLabel(message.stickers);
     const media = cfg.discord.media.enabled
-      ? collectImageAttachments([...(message.attachments?.values() ?? []), ...stickerImages(message.stickers)], cfg.discord.media)
+      ? collectMediaAttachments([...(message.attachments?.values() ?? []), ...stickerImages(message.stickers)], cfg.discord.media)
       : { accepted: [], skipped: [] };
     if (!text && !stickers && media.accepted.length === 0) {
       if (direct && message.attachments?.size) {

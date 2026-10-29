@@ -38,11 +38,12 @@
     "sessionDir": "",
     "media": {
       "enabled": true,
-      "maxBytes": 8388608,
+      "maxBytes": 20971520,
       "maxModelBytes": 1048576,
       "maxLongEdge": 1280,
       "maxCount": 4,
-      "timeoutMs": 25000
+      "timeoutMs": 25000,
+      "maxVideoSeconds": 60
     },
     "context": {
       "enabled": true,

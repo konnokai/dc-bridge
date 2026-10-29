@@ -34,7 +34,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { resolveFfmpeg } from './voice-core.js';
+import { resolveFfmpeg, probeAudio } from './voice-core.js';
 
 /** 默认值集中一处，bridge.js 只做 config 覆盖（见 modelMediaLimits）。 */
 export const MEDIA_DEFAULTS = Object.freeze({
@@ -48,7 +48,9 @@ export const MEDIA_DEFAULTS = Object.freeze({
   // 每一格的目标宽度（px）：240 一格，3×2 拼图约 736×492，实测 92 KB。
   gifTile: 240,
   // 单张 ffmpeg 调用的硬超时。实测 200 帧 GIF 拼图 269 ms、4K 重编码 < 1 s，25 s 是兜底。
-  timeoutMs: 25000
+  timeoutMs: 25000,
+  // 影片只看前面這麼多秒：再長也只是多解碼、多 CPU，模型要的是大概發生什麼。
+  maxVideoSeconds: 60
 });
 
 /** 硬上限：不管 config 怎么写，都不允许超过 DSH 的实测炸栈线下沿。 */
@@ -232,6 +234,17 @@ export function sniffImage(buf) {
   };
 }
 
+/**
+ * 從位元組認影片容器：mp4／mov 在第 4 byte 有 `ftyp`，webm 是 EBML 標頭。
+ * 只認容器，不解析軌道；長度交給 ffprobe（見 normalizeVideoForModel）。
+ */
+export function sniffVideo(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  if (buf.toString('ascii', 4, 8) === 'ftyp') return { format: 'mp4' };
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return { format: 'webm' };
+  return null;
+}
+
 // ── 决策（纯函数，可单测） ────────────────────────────────────────────────
 
 /**
@@ -307,7 +320,11 @@ function runFfmpeg(ffmpeg, args, { timeoutMs = MEDIA_DEFAULTS.timeoutMs } = {}) 
         ? '找不到 ffmpeg（设置 FFMPEG_PATH 或 config.json 的 socialV2.voice.ffmpegPath）'
         : `ffmpeg 不可用：${error?.message ?? error}`
     }));
-    child.on('close', (code) => settle(code === 0 ? { ok: true } : { ok: false, error: `ffmpeg 退出码 ${code}` }));
+    child.on('close', (code) => settle(code === 0 ? { ok: true } : {
+      ok: false,
+      // 被 signal 中止時 code 是 null；Windows 上又可能變成 unsigned，|0 還原成負數。
+      error: `ffmpeg 退出碼 ${code == null ? '不明' : code | 0}`
+    }));
   });
 }
 
@@ -435,6 +452,65 @@ export async function normalizeImageForModel(buf, mimeType, opts = {}) {
     // 压不动：小图照发，大图明确拒绝（绝不发注定被 DSH 丢掉的东西）。
     if (bytes <= maxBytes) return { ok: true, buffer: buf, mimeType, note: `压缩失败（${lastError}），按原图提供` };
     return { ok: false, error: `${(bytes / 1024 / 1024).toFixed(2)}MB 压不到 ${(maxBytes / 1024).toFixed(0)}KB 以内（${lastError}）` };
+  } finally {
+    cleanupWorkspace(dir);
+  }
+}
+
+/**
+ * 影片 → 一張拼圖 JPEG。做法照 GIF 的抽帧拼图，差別是長度只有 ffprobe 知道。
+ * 超過 maxVideoSeconds 只看前面那一段：模型要的是大概發生什麼，不是整支片。
+ *
+ * @param opts { maxModelBytes, maxVideoSeconds, videoFrames, gifTile, timeoutMs, ffmpegPath, ffprobePath, tmpDir }
+ */
+export async function normalizeVideoForModel(buf, opts = {}) {
+  const bytes = Buffer.isBuffer(buf) ? buf.length : 0;
+  if (!bytes) return { ok: false, error: '影片位元組為空' };
+  const info = sniffVideo(buf);
+  if (!info) return { ok: false, error: '認不出影片格式（mp4／mov／webm）' };
+
+  const ffmpeg = resolveFfmpeg({ ffmpegPath: opts.ffmpegPath ?? null });
+  const maxBytes = clampInt(opts.maxModelBytes, 64 * 1024, HARD_MAX_MODEL_BYTES, MEDIA_DEFAULTS.maxModelBytes);
+  const maxSeconds = clampInt(opts.maxVideoSeconds, 5, 120, MEDIA_DEFAULTS.maxVideoSeconds);
+  const wanted = clampInt(opts.videoFrames, 2, 12, MEDIA_DEFAULTS.gifFrames);
+  const tileWidth = clampInt(opts.gifTile, 64, 400, MEDIA_DEFAULTS.gifTile);
+
+  const dir = makeTempWorkspace(opts.tmpDir);
+  try {
+    const inFile = path.join(dir, `in.${info.format}`);
+    fs.writeFileSync(inFile, buf);
+
+    // ffprobe 問不到長度（沒裝、格式怪）就當 1 fps 取前 6 秒：短片還是看得到每一格。
+    const probe = await probeAudio(inFile, {
+      ffprobePath: opts.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe',
+      // 只讀檔頭，不必跟 ffmpeg 共用 25 秒的預算。
+      timeoutMs: Math.min(opts.timeoutMs ?? MEDIA_DEFAULTS.timeoutMs, 10_000),
+      tmpDir: opts.tmpDir
+    });
+    const probed = probe.ok ? Number(probe.duration) || 0 : 0;
+    // planAnimation 的 fps 下限是 0.05，6 格最多蓋住 120 秒；窗口先封頂，
+    // note 才不會說「抽 6 格」卻其實只看到前面一小段。
+    const windowSeconds = Math.min(probed > 0 ? probed : wanted, maxSeconds, wanted / 0.05);
+    const durationMs = windowSeconds * 1000;
+    const layout = planAnimation({ frames: wanted, durationMs }, { gifFrames: wanted });
+    const outFile = path.join(dir, 'strip.jpg');
+    const vf = `fps=${layout.fps},scale=${tileWidth}:-1:flags=lanczos,` +
+      `tile=${layout.cols}x${layout.rows}:padding=4:margin=4:color=white`;
+    const run = await runFfmpeg(ffmpeg, [
+      '-v', 'error', '-y', '-t', String(windowSeconds), '-i', inFile,
+      '-filter_complex', `[0:v]${vf}[out]`, '-map', '[out]',
+      '-frames:v', '1', '-q:v', '4', outFile
+    ], { timeoutMs: opts.timeoutMs });
+    const out = run.ok ? readIfExists(outFile) : null;
+    if (!out) return { ok: false, error: `影片抽不出畫面，${run.ok ? '輸出是空的' : run.error}` };
+    if (out.length > maxBytes) {
+      return { ok: false, error: `影片拼圖 ${(out.length / 1024).toFixed(0)}KB 超過 ${(maxBytes / 1024).toFixed(0)}KB 上限` };
+    }
+    const parts = [probed > 0 ? `影片 ${probed.toFixed(1)}s` : '影片長度不明'];
+    if (probed <= 0 || probed > windowSeconds) parts.push(`只看前 ${windowSeconds}s`);
+    parts.push(`抽 ${layout.sampleFrames} 格拼成 ${layout.cols}×${layout.rows} 左上→右下`);
+    parts.push('只有畫面沒有聲音');
+    return { ok: true, buffer: out, mimeType: 'image/jpeg', note: parts.join('，') };
   } finally {
     cleanupWorkspace(dir);
   }
