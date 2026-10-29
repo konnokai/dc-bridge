@@ -312,9 +312,17 @@ export function canReadMessage(cfg, message, botUserId) {
   const id = String(message?.author?.id ?? '');
   if (cfg.deny.users.includes(id)) return false;
   if (!cfg.deny.self.includes(id)) return true;
-  return Boolean(message?.guildId) && shouldHandleGuildMessage({
-    mentionedUserIds: message?.mentions?.users ? [...message.mentions.users.keys()] : [],
-    repliedUserId: message?.mentions?.repliedUser?.id ?? null,
+  if (!message?.guildId) return false;
+  // discord.js 的 Message 給 Map + repliedUser；搜尋 API 的原始訊息只有 mention 陣列，認不出回覆對象。
+  const mentions = message.mentions;
+  const mentionedUserIds = Array.isArray(mentions)
+    ? mentions.map((user) => user?.id)
+    : [...(mentions?.users?.keys() ?? [])];
+  return shouldHandleGuildMessage({
+    mentionedUserIds,
+    repliedUserId: Array.isArray(mentions)
+      ? message?.referenced_message?.author?.id ?? null
+      : mentions?.repliedUser?.id ?? null,
   }, botUserId, true);
 }
 

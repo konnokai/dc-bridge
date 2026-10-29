@@ -309,6 +309,14 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(!canReadMessage(denyCfg, msgBy('muted'), BOT), '自己退出的人其他訊息不給讀');
   ok(!canReadMessage(denyCfg, { guildId: null, author: { id: 'muted' }, mentions: { users: new Map([[BOT, {}]]) } }, BOT),
     '私聊沒有例外');
+  ok(canReadMessage(denyCfg, { guildId: GUILD, author: { id: 'muted' }, mentions: [{ id: BOT }] }, BOT),
+    '搜尋 API 的 mention 陣列也認得');
+  ok(!canReadMessage(denyCfg, { guildId: GUILD, author: { id: 'blocked' }, mentions: [{ id: BOT }] }, BOT),
+    '管理員封鎖的人在搜尋結果裡也不給讀');
+  ok(canReadMessage(denyCfg, { guildId: GUILD, author: { id: 'muted' }, mentions: [{ id: 'u1' }], referenced_message: { author: { id: BOT } } }, BOT),
+    '搜尋 API 帶 referenced_message 時也認得回覆 bot');
+  ok(!canReadMessage(denyCfg, { guildId: GUILD, author: { id: 'muted' }, mentions: [] }, BOT),
+    '搜尋結果沒 @bot 的不給讀');
 
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');

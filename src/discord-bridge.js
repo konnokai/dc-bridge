@@ -1173,7 +1173,7 @@ async function main() {
           channelId: channel.id, query, authorId, afterId, limit: SEARCH_PAGE_MAX, oldestFirst, offset, includeNsfw: channel.nsfw,
         }),
       }),
-      visible: (message) => !isDeniedUser(cfg.discord, message.author?.id)
+      visible: (message) => canReadMessage(cfg.discord, { guildId: channel.guildId, author: message.author, mentions: message.mentions }, client.user.id)
         && (message.author?.bot || !isSkippedMessage(message.content ?? '', client.user.id)),
     });
     // Message 的 channel 由 client 的頻道快取解析，不用另外傳。
@@ -1331,7 +1331,7 @@ async function main() {
         // date 從指定時間往後讀；before 從最新往回裝，超過字數上限就停。
         for (const message of date ? messages : messages.reverse()) {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
-          if (isDeniedUser(cfg.discord, message.author?.id)) continue;
+          if (!canReadMessage(cfg.discord, message, client.user.id)) continue;
           const line = historyLine(key, message);
           if (used + line.length > HISTORY_MAX_CHARS) break;
           lines.push(line);
@@ -1380,7 +1380,7 @@ async function main() {
         }),
         matches: (message) => {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) return false;
-          if (isDeniedUser(cfg.discord, message.author?.id)) return false;
+          if (!canReadMessage(cfg.discord, message, client.user.id)) return false;
           if (authorId && message.author?.id !== authorId) return false;
           if (terms.length && !matchesTerms(searchableText(message), terms)) return false;
           return true;
@@ -1485,7 +1485,7 @@ async function main() {
         member?.premiumSince ? `從 ${date(member.premiumSince)} 開始加成這個伺服器` : '',
         mutedUntil && mutedUntil > new Date() ? `禁言中，到 ${shortTime(mutedUntil)}` : '',
       ];
-      const facts = cfg.discord.memory.enabled && !isDeniedUser(cfg.discord, target.author?.id)
+      const facts = cfg.discord.memory.enabled && canReadMessage(cfg.discord, target, client.user.id)
         ? userFacts(memoryStore, { userId: target.author?.id, now: Date.now() })
         : [];
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
