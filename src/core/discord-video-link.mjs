@@ -70,7 +70,8 @@ export async function fetchStreamUrl(url, { ytDlpPath = null, timeoutMs = 30_000
       try {
         child = spawn(bin, [
           '--no-playlist', '--no-warnings', '--no-progress',
-          '-f', 'bv*[height<=480]/b[height<=480]/b',
+          // 拼圖一格才 240px 寬，360p 就夠；高位元率只是多下載時間。
+          '-f', 'bv*[height<=360]/b[height<=360]/b',
           '-g', url,
         ], { windowsHide: true, stdio: ['ignore', outFd, errFd] });
       } catch (error) {

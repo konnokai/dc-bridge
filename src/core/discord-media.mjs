@@ -177,7 +177,8 @@ export async function prepareVideoUrlBlock(url, limits) {
     maxVideoSeconds: limits.maxVideoSeconds,
     gifTile: 240,
     videoFrames: 6,
-    timeoutMs: limits.timeoutMs,
+    // 遠端串流要邊下載邊解碼，實測同一支片比本機檔多花一倍時間，25 秒不夠。
+    timeoutMs: Math.max(limits.timeoutMs ?? 25_000, 45_000),
     ffmpegPath: limits.ffmpegPath ?? null,
   });
   if (!result.ok) return { error: result.error };
