@@ -21,6 +21,7 @@ import {
   buildInviteUrl,
   canResetConversation,
   conversationKeyFor,
+  canReadMessage,
   describeToolCall,
   formatProgress,
   invitePermissionsBitfield,
@@ -1393,7 +1394,7 @@ async function main() {
     async view(body) {
       const { key, channel } = await agentSender.resolve(body.token);
       const target = await fetchByRef(key, textArg(body.message));
-      if (isDeniedUser(cfg.discord, target.author?.id)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
+      if (!canReadMessage(cfg.discord, target, client.user.id)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
       const self = target.author?.id === client.user.id ? '（你）' : '';
       const lines = [
         `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,

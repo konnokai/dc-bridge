@@ -303,6 +303,21 @@ export function isDeniedUser(cfg, userId) {
   return cfg.deny.users.includes(id) || cfg.deny.self.includes(id);
 }
 
+/**
+ * 模型能不能讀這一則訊息。`deny.users`（管理員封鎖）一律不行；
+ * `deny.self` 只有 @bot／回覆 bot 的那一則可以，因為那一則本來就照正常流程處理。
+ * 私聊沒有這個例外。
+ */
+export function canReadMessage(cfg, message, botUserId) {
+  const id = String(message?.author?.id ?? '');
+  if (cfg.deny.users.includes(id)) return false;
+  if (!cfg.deny.self.includes(id)) return true;
+  return Boolean(message?.guildId) && shouldHandleGuildMessage({
+    mentionedUserIds: message?.mentions?.users ? [...message.mentions.users.keys()] : [],
+    repliedUserId: message?.mentions?.repliedUser?.id ?? null,
+  }, botUserId, true);
+}
+
 /** `/blacklist`：把一個人加入或移出 deny.self（自己退出的名單），其他欄位原樣保留。 */
 export function withSelfMutedUser(deny, userId, muted) {
   const id = String(userId);

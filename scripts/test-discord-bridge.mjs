@@ -16,6 +16,7 @@ import {
   INVITE_SCOPES,
   adminLinks,
   buildInviteUrl,
+  canReadMessage,
   canResetConversation,
   conversationKeyFor,
   describeToolCall,
@@ -298,6 +299,16 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(!shouldHandleGuildMessage({ mentionedUserIds: [], repliedUserId: null }, BOT, true), '沒 @ 也沒回覆 → 略過');
   ok(shouldHandleGuildMessage({ mentionedUserIds: [] }, BOT, false), 'requireMention=false → 全部處理');
   ok(!shouldHandleGuildMessage({ mentionedUserIds: [USER] }, BOT, true), '@別人 → 略過');
+
+  const denyCfg = { deny: { users: ['blocked'], self: ['muted'] } };
+  const msgBy = (authorId, mentions = { users: new Map() }) => ({ guildId: GUILD, author: { id: authorId }, mentions });
+  ok(canReadMessage(denyCfg, msgBy('normal'), BOT), '一般人的訊息可以讀');
+  ok(!canReadMessage(denyCfg, msgBy('blocked', { users: new Map([[BOT, {}]]) }), BOT), '管理員封鎖的人 @bot 也不給讀');
+  ok(canReadMessage(denyCfg, msgBy('muted', { users: new Map([[BOT, {}]]) }), BOT), '自己退出的人 @bot 那一則讀得到');
+  ok(canReadMessage(denyCfg, msgBy('muted', { users: new Map(), repliedUser: { id: BOT } }), BOT), '自己退出的人回覆 bot 那一則讀得到');
+  ok(!canReadMessage(denyCfg, msgBy('muted'), BOT), '自己退出的人其他訊息不給讀');
+  ok(!canReadMessage(denyCfg, { guildId: null, author: { id: 'muted' }, mentions: { users: new Map([[BOT, {}]]) } }, BOT),
+    '私聊沒有例外');
 
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
