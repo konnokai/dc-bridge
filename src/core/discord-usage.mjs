@@ -144,7 +144,8 @@ export function createGoQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeo
         key: name,
         label,
         status: String(usage[name].status ?? ''),
-        percent: usage[name].percent,
+        // 端點給的是已用百分比；卡片和 /status 跟 Codex 一樣顯示剩餘，從 100% 往下扣。
+        remainingPercent: Math.max(0, Math.min(100, 100 - usage[name].percent)),
         resetsAt: Date.parse(usage[name].resetsAt) || null,
       }));
     if (windows.length === 0) return { ok: false, error: 'OpenCode 回的格式看不懂' };
@@ -176,7 +177,7 @@ export function untilText(ms) {
 export function formatGoQuota(result, now = Date.now()) {
   if (!result || result.skipped) return '';
   if (!result.ok) return `OpenCode Go 額度：查不到（${result.error ?? '未知原因'}）`;
-  const parts = result.windows.map((w) => `${w.label} ${w.percent}%`
+  const parts = result.windows.map((w) => `${w.label}剩 ${Math.round(w.remainingPercent)}%`
     + (w.status && w.status !== 'ok' ? `（${w.status}）` : '')
     + (w.resetsAt ? `，${untilText(w.resetsAt - now)}後重置` : ''));
   return `OpenCode Go 額度：${parts.join('｜')}`;

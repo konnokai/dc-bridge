@@ -46,9 +46,9 @@ export function createQuietState({ now = Date.now } = {}) {
 
 const pad2 = (n) => (n < 10 ? `0${n}` : String(n));
 
-/** 這批要不要因為安靜丟掉：只有沒叫 bot 的批次會被丟。 */
-export function isQuietBatchSkipped({ direct, quietUntil } = {}) {
-  return !direct && Boolean(quietUntil);
+/** 這批要不要因為安靜丟掉：只有沒叫 bot 的批次會被丟；系統訊息（生圖完成）一定要送。 */
+export function isQuietBatchSkipped({ direct, quietUntil, system = false } = {}) {
+  return !system && !direct && Boolean(quietUntil);
 }
 
 /** 安靜到幾點（bridge 主機時區，跟【現在】一致）。 */

@@ -378,6 +378,14 @@ export function createAgentSender({
 
 const MAX_BODY_BYTES = 64 * 1024;
 
+/**
+ * 這兩個路徑本身不能要求會話令牌：
+ * - sessionToken：它就是拿會話令牌的入口。
+ * - imageJob：DSH 外掛回報背景生圖狀態；它用 x-agent-token 認身分，帶的是 sessionId。
+ * 兩者都仍然要 x-agent-token。
+ */
+const SESSIONLESS_ROUTES = new Set(['sessionToken', 'imageJob']);
+
 function tokenEquals(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
   const x = Buffer.from(a, 'utf8');
@@ -437,7 +445,7 @@ function readBody(req) {
  * @param options.handlers { 路徑名: async (body) => 額外回傳欄位 }，例如 { send, react }；
  *                         body.token（會話令牌）已檢查過是字串；丟出的錯誤可用 statusCode。
  *                         `sessionToken` 例外：它就是用來拿會話令牌的，本身不能要求令牌
- *                         （仍然要 x-agent-token）。
+ *                         （仍然要 x-agent-token）。`imageJob` 也一樣用 x-agent-token 與 sessionId。
  * @param options.log      日誌函式
  */
 export async function startAgentApi({ file, handlers, log = () => {} }) {
@@ -477,8 +485,9 @@ export async function startAgentApi({ file, handlers, log = () => {} }) {
         }
         const body = await readBody(req);
         const sessionToken = typeof body?.token === 'string' ? body.token.trim() : '';
-        // sessionToken 這個路徑的用途就是「拿會話令牌」，不能反過來要求呼叫方先有令牌。
-        if (route !== 'sessionToken' && (!sessionToken || sessionToken.length > 128)) {
+        // sessionToken／imageJob 這類路徑不要求會話令牌（sessionToken 是用來拿令牌的，
+        // imageJob 用 x-agent-token 與 sessionId）；其他路徑一定要有。
+        if (!SESSIONLESS_ROUTES.has(route) && (!sessionToken || sessionToken.length > 128)) {
           sendJson(res, 400, { error: '沒有帶會話令牌（正常由 DSH 外掛自動帶入）：這批送不出去，回報管理員' });
           return;
         }

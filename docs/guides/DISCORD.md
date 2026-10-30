@@ -340,7 +340,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **總覽**（`#overview`）
   - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批，
     以及觸發對話人數（今天／總計／次數、畫圖次數與最常觸發的人）
-  - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的已用百分比與重置時間（見「OpenCode Go 額度」）
+  - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的剩餘百分比與重置時間（見「OpenCode Go 額度」）
   - **Codex 額度**：生圖 preset 有開 `allowImageGen` 時，顯示 5 小時 / 每週剩餘百分比、重置時間與重置券（見「Codex 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
 - **黑話**（`#slang`）：「黑話詞庫」和「頻道風格」兩張卡片分開列。各自可以按狀態（全部／待確認／已確認／已拒絕）過濾，
@@ -396,8 +396,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 ## OpenCode Go 額度
 
 `dsh.provider` 是 `opencode-go` 時，控制台的「OpenCode Go 額度」卡片和 `/status` 會顯示訂閱額度：
-5 小時、每週、每月三個額度各用掉幾 %、多久後重置。上面的「花費」是橋接自己按價目表估算的；
-這裡是 OpenCode 伺服器算的，用完會被擋的是這個數字。
+5 小時、每週、每月三個額度各剩幾 %、多久後重置，跟 Codex 額度一樣從 100% 往下扣。
+上面的「花費」是橋接自己按價目表估算的；這裡是 OpenCode 伺服器算的，用完會被擋的是這個數字。
 
 - **資料來源**：`GET https://opencode.ai/zen/go/v1/usage`（跟 opencode.ai 後台的額度頁同一份資料）。
 - **API key**：先看環境變數 `OPENCODE_GO_API_KEY`，沒有就讀 DSH 的 `~/.dsh/.credentials.yaml` →
@@ -508,7 +508,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 流程：
 
-- 有人說「畫一張…」「幫我畫…」，persona 叫模型呼叫 `generate_image`。畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
+- 有人說「畫一張…」「幫我畫…」，persona 叫模型呼叫 `generate_image`。呼叫後工具立刻回「已開始」，
+  生圖在背景跑，不佔用會話；同一個會話的其他訊息照常處理。畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
   畫別的 AI 娘時填角色代號（`glm`、`gpt`、`ernie`、`qwen`、`kimi`、`doubao`、`minimax`、`grok`、`gemini`、`claude`），
   打中文名也可以。一張圖有多個角色時用逗號串起來（`self,claude`），最多 4 個。畫一般插畫時不要填。
 - `plugins/dc-agent-presets/dc-draw-image.mjs` 在執行前改寫參數：角色代號換成對應的
@@ -520,7 +521,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   所以 `/mnt` 底下的掛載讀不到，其他本機路徑也一樣是唯讀。
   prompt 裡有 URL、絕對路徑、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明顯的指令字樣會被拒絕；
   這是第二層，真正的邊界是 shell/exec/view_image 關閉與 permission profile。
-- 畫好用 `mcp__discord__send_image` 送圖：`file` 填 `generate_image` 回傳的 `path`，`content` 可以帶一句話。
+- 畫好後外掛會把一則【生圖完成】提示（含圖片路徑）送回同一個會話，模型再用 `mcp__discord__send_image` 送圖：
+  `file` 填提示裡的 `path`，`content` 可以帶一句話。
   橋接只認 `state/discord-images` 裡的檔名，會檢查是不是真的圖片、有沒有超過 10MB；不是就回錯誤，不會把主機其他檔案送出去。
 - 這個目錄只留最近 100 張，舊的會自動刪掉。bot 需要 **Attach Files** 權限（`/invite` 的連結已包含）。
 - 額度太低時暫停：5 小時剩不到 15% 或每週剩不到 5% 時，`generate_image` 會直接拒絕並說明原因；
@@ -528,7 +530,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 限制：
 
-- 一張要 1~3 分鐘。persona 會先送一句「等我一下」再畫；不要主動畫，也不要一次畫好幾張。
+- 一張要 1~3 分鐘，背景進行。persona 會先送一句「等我一下」再畫；不要主動畫，也不要一次畫好幾張。
+  生圖引擎同一時間只跑一張（Codex 的 `generated_images` 共用），其他排隊，但排隊不會卡住會話。
+- `/reset` 會取消這個會話還在跑或排隊的生圖工作（背景工作每 15 秒問橋接一次，最多 15 秒內停掉）。
+  DSH 或橋接重啟時，還沒畫完的工作會消失，不會補送。
 - DSH 和橋接要在同一台機器：`send_image` 是用本機路徑讀 `state/discord-images`，不是把圖上傳到別台。
 - 情色、血腥、真實人物攻擊、政治人物照【安全邊界】不畫。
 - 設定圖是外部作品：角色形象出自 ZipZipPipe，補全由 lmy414 做的，授權 **CC BY-NC-SA 4.0（非商業）**。
@@ -713,7 +718,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
   `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
 - `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道。
-  `file` 填 `generate_image` 回傳的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖；
+  `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖；
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
 - `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
@@ -835,7 +840,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
-`POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）與
+`POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
+`POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
 `/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/followup`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
@@ -929,13 +935,14 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
 6. **發送端點只在本機**：`mcp-discord` 與 `mcp-slang` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`
    （`state/discord-agent.json`，0600）加會話令牌；沒帶令牌的請求一律 401，不會因為漏帶而
-   升級成別的身分。端點只開 `POST /hello`、`POST /sessionToken` 與上面列的工具路徑；
+   升級成別的身分。端點只開 `POST /hello`、`POST /sessionToken`、`POST /imageJob` 與上面列的工具路徑；
    每個工具都先過同一個令牌檢查（會話還活著、頻道在白名單內），唯讀工具也一樣，
    而且只能讀令牌自己的頻道。
 7. **`/sessionToken` 的權限代價**：它讓持有端點 secret 的呼叫方用任何活著的 `sessionId` 換令牌。
    `sessionId` 不是秘密（`state/discord-sessions.json`、日誌、DSH 介面都看得到），所以實際效果是
    **有 secret 就等於有所有活著會話的發送權**。這是 `dc-session-token` 自動帶令牌的必要代價；
-   端點只回還活著的會話，不提供「列出全部」。`dc-chat` 沒有任何檔案／shell 工具，
+   端點只回還活著的會話，不提供「列出全部」。`/imageJob` 同樣只認端點 secret，持有人可以往活著的
+   會話塞一段提示，信任層級跟 `/sessionToken` 一樣。`dc-chat` 沒有任何檔案／shell 工具，
    模型讀不到 `state/discord-agent.json`。
 
 ## 已知限制
@@ -953,8 +960,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
-- **畫圖要 1~3 分鐘**，而且吃 Codex 額度；DSH profile 沒裝 `dsh-generate-image` 或 Codex 沒登入時，
-  `generate_image` 不存在或直接失敗。生成檔只留最近 100 張，上傳上限 10MB。
+- **畫圖要 1~3 分鐘**，而且吃 Codex 額度；生圖在背景跑，不卡會話，但 DSH 重啟時還沒完成的工作會消失。
+  DSH profile 沒裝 `dsh-generate-image` 或 Codex 沒登入時，`generate_image` 不存在或直接失敗。
+  生成檔只留最近 100 張，上傳上限 10MB。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。
 - 頻道上下文需要 bot 的 **Read Message History** 權限；沒有權限時會跳過上下文並記一行 log。

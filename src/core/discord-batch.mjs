@@ -186,11 +186,14 @@ export function createTurnGate({
     if (job?.ask) {
       // 指令（/ask、重載提示）獨佔一輪，不能跟頻道批次合併；照到達順序排。
       queue.push({ job, noStuckRelease });
+    } else if (job?.system) {
+      // 系統訊息（例如背景生圖完成）不能跟頻道批次合併，不然 text 會被吃掉。
+      queue.push({ job, noStuckRelease });
     } else {
-      // 只跟「佇列最後一筆」普通批次合併；最後一筆是指令就新增一筆，後續訊息才不會
-      // 被併到指令前面的舊批次、提早進舊會話。
+      // 只跟「佇列最後一筆」普通批次合併；最後一筆是指令或系統訊息就新增一筆，
+      // 後續訊息才不會被併到它前面、或把它的 text 蓋掉。
       const last = queue.at(-1);
-      if (last && !last.job?.ask) {
+      if (last && !last.job?.ask && !last.job?.system) {
         queue[queue.length - 1] = {
           job: mergeJobs(last.job, job, maxEntries),
           noStuckRelease: last.noStuckRelease,

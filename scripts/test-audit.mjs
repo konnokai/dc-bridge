@@ -18,6 +18,7 @@ const tests = [
   // Discord 橋接：准入白名單、會話鍵（字串 snowflake）、@/回覆判斷、提問與審批配對、2000 字分條、
   // 會話映射檔容錯，以及 dc-chat preset 的守衛邊界（純離線，不需要 Discord/DSH）。
   'test-discord-bridge.mjs',
+  'test-discord-image-jobs.mjs',
   'test-discord-memory.mjs',
   'test-discord-notes.mjs',
   'test-discord-followup.mjs',

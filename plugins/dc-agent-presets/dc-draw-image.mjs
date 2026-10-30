@@ -14,6 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -91,6 +92,13 @@ export const IMAGE_DIR = path.resolve(path.dirname(MODULE_FILE), '../../state/di
 // 快照過期或不存在（橋接沒跑）就放行，避免額度其實已重置卻一直擋著。
 const QUOTA_FILE = path.join(path.dirname(IMAGE_DIR), 'discord-codex-quota.json')
 const QUOTA_MAX_AGE_MS = 10 * 60_000
+
+// 背景生圖完成後要通知橋接；橋接的端點檔跟 dc-session-token 共用，重啟後埠會變，所以每次重讀。
+const AGENT_ENDPOINT_FILE = process.env.DC_AGENT_FILE
+  || path.join(path.dirname(IMAGE_DIR), 'discord-agent.json')
+const REPORT_TIMEOUT_MS = 5000
+// 背景工作每 15 秒問橋接還在不在：/reset、橋接重啟或外掛當掉時才能停掉 Codex。
+const JOB_POLL_MS = Math.max(10, Number(process.env.DC_IMAGE_JOB_POLL_MS) || 15_000)
 
 /** 快照說額度太低時回原因；過期、壞掉或不存在回 null（放行）。 */
 export function drawQuotaBlock() {
@@ -235,12 +243,152 @@ export function codexOptions({ prompt, inputImage = null, signal } = {}) {
 }
 
 function renderResult(value) {
-  const lines = [`${value.edit ? 'Edited image' : 'Generated image'}: ${value.path}`]
-  if (value.note) lines.push(value.note)
-  return lines.join('\n')
+  return value.message ?? value.status
+}
+
+/** sessionId -> Set<AbortController>：會話被 DSH 移除時，取消還在跑或還在排隊的生圖。 */
+const activeJobs = new Map()
+
+function trackJob(sessionId, controller) {
+  let set = activeJobs.get(sessionId)
+  if (!set) {
+    set = new Set()
+    activeJobs.set(sessionId, set)
+  }
+  set.add(controller)
+}
+
+function releaseJob(sessionId, controller) {
+  const set = activeJobs.get(sessionId)
+  if (!set) return
+  set.delete(controller)
+  if (set.size === 0) activeJobs.delete(sessionId)
+}
+
+/**
+ * 回報生圖狀態給橋接；由橋接排進會話閘門，不能直接 agent.followup。
+ * 直接 followup 會搶在橋接正在等的批次前面，讓 /ask 與回合歸屬認錯。橋接沒跑就只留在 log。
+ */
+async function reportImageJob(payload, { quiet = false } = {}) {
+  const logError = (message) => { if (!quiet) console.error(`[dc-draw-image] ${message}`) }
+  let endpoint
+  try {
+    endpoint = JSON.parse(fs.readFileSync(AGENT_ENDPOINT_FILE, 'utf8'))
+  } catch (error) {
+    logError(`讀不到橋接端點（${AGENT_ENDPOINT_FILE}）：${error?.message ?? error}`)
+    return null
+  }
+  if (!endpoint?.url || !endpoint?.token) {
+    logError('橋接端點檔缺少 url/token：本次生圖不通知頻道')
+    return null
+  }
+  try {
+    const res = await fetch(`${endpoint.url}/imageJob`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-agent-token': endpoint.token },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(REPORT_TIMEOUT_MS),
+    })
+    let body = null
+    try { body = await res.json() } catch { body = null }
+    if (!res.ok) {
+      logError(`橋接拒絕生圖通知（${payload.phase}）：${body?.error ?? `HTTP ${res.status}`}`)
+      return null
+    }
+    return body
+  } catch (error) {
+    logError(`連不上橋接，生圖通知沒送出（${payload.phase}）：${error?.message ?? error}`)
+    return null
+  }
+}
+
+/**
+ * 背景生圖：execute 先回「已開始」，這裡才真的開 Codex。
+ * 完成或失敗都回報橋接，由橋接排進同一個會話的閘門；1~3 分鐘的生成不會卡住其他訊息。
+ * queue 仍是一條：Codex 的 generated_images 共用，兩個行程同時畫會撿到對方的圖。
+ */
+async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputImages, codexBin, controller }) {
+  const signal = controller?.signal
+  let dest = null
+  let text
+  let pollTimer = null
+  let pollFailures = 0
+  const poll = async () => {
+    if (signal?.aborted) return
+    const body = await reportImageJob({ phase: 'poll', sessionId, jobId }, { quiet: true })
+    if (body?.cancel) {
+      controller?.abort(new Error('生圖工作已取消'))
+      return
+    }
+    if (!body) {
+      pollFailures += 1
+      if (pollFailures >= 2) controller?.abort(new Error('連不上橋接，取消生圖'))
+      return
+    }
+    pollFailures = 0
+  }
+  pollTimer = setInterval(() => { void poll() }, JOB_POLL_MS)
+  pollTimer.unref?.()
+  try {
+    const result = await serialize(() => {
+      if (signal?.aborted) throw new Error('已取消')
+      // 排隊期間額度可能用完；真正開 Codex 前再檢查一次。
+      const queuedQuotaBlock = drawQuotaBlock()
+      if (queuedQuotaBlock) throw new Error(queuedQuotaBlock)
+      return codex.runCodexGenerate({
+        ...codexOptions({ prompt, inputImage, signal }),
+        codexBin: CODEX_WRAPPER,
+        extraArgs: [
+          ...CODEX_EXTRA_ARGS,
+          ...inputImages.slice(1).flatMap((image) => ['-i', image]),
+          '--dc-real-codex', codexBin,
+        ],
+        nodeBin: process.execPath,
+        timeoutMs: codex.DEFAULT_TIMEOUT_MS,
+      })
+    })
+
+    if (result.code !== 0) {
+      const evErr = result.events.find((event) => event?.item?.type === 'error')
+      const detail = String(evErr?.item?.message || result.stderr || result.stdoutTail || '').trim().slice(0, 600)
+      throw new Error(`codex failed (exit ${result.code}): ${detail}`)
+    }
+    if (!result.file) throw new Error('codex finished but produced no image file; check the Codex model supports image generation.')
+
+    dest = path.join(IMAGE_DIR, path.basename(result.file))
+    fs.copyFileSync(result.file, dest)
+    text = `【生圖完成】圖片已存到 ${dest}\n用 mcp__discord__send_image 送出（file 填這個路徑，content 帶一句話）。不要重新生圖。`
+  } catch (error) {
+    // 會話被 /reset 或移除：不用回報，橋接也已經不認這個 session。
+    if (signal?.aborted) return
+    text = `【生圖失敗】${String(error?.message ?? error).slice(0, 600)}\n跟頻道說這次沒畫成，不要假裝畫了；同一個要求最多再試一次。`
+  } finally {
+    if (pollTimer) clearInterval(pollTimer)
+    pollTimer = null
+    pruneImages()
+    releaseJob(sessionId, controller)
+  }
+  await reportImageJob({
+    phase: dest ? 'done' : 'failed',
+    sessionId,
+    jobId,
+    file: dest ?? undefined,
+    text,
+  })
 }
 
 export function apply(ctx) {
+  // /reset 或會話結束：DSH 會移除 agent／session。還在跑或排隊的生圖要一起取消，
+  // 不然會繼續吃 Codex 額度、佔共用 queue，完成後還對著舊會話回報。
+  function cancelSessionJobs(sessionId) {
+    const controllers = sessionId ? activeJobs.get(sessionId) : null
+    if (!controllers) return
+    for (const controller of controllers) controller.abort(new Error('會話已結束，取消背景生圖'))
+    activeJobs.delete(sessionId)
+  }
+  ctx.on('agent/disposed', ({ agent } = {}) => cancelSessionJobs(agent?.id))
+  ctx.on('session/disposed', (session) => cancelSessionJobs(session?.id))
+
   ctx.on('tools/execute', async (exec, next) => {
     if (exec.name !== 'generate_image') return next()
 
@@ -296,8 +444,9 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'generate_image',
     description:
-      'Generate an image from a text description, or use a reference image, with the local Codex image_gen tool. '
-      + 'Use for drawings, illustrations, and character art. The tool runs with shell and file writes disabled; '
+      'Start an image generation job from a text description, or use a reference image, with the local Codex image_gen tool. '
+      + 'Returns immediately; the image arrives later in a follow-up message, then send it with send_image. '
+      + 'The tool runs with shell and file writes disabled; '
       + 'inputImage is a character code (self, gpt, qwen, ...), comma-separated codes for multiple characters, or omitted.',
     parameters: {
       type: 'object',
@@ -321,17 +470,15 @@ export function apply(ctx) {
       schema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Absolute path to the generated image' },
-          source: { type: 'string', description: 'Original file inside the Codex generated_images dir' },
-          edit: { type: 'boolean', description: 'True when a reference image was used' },
-          note: { type: 'string', description: 'Human-readable summary' },
+          status: { type: 'string', description: 'Always "started"; the result arrives in a follow-up message' },
+          message: { type: 'string', description: 'What to do next' },
         },
-        required: ['path'],
+        required: ['status'],
       },
       render: (_args, value) => [{ type: 'text', text: renderResult(value) }],
     },
-    timeoutMs: codex ? codex.DEFAULT_TIMEOUT_MS + 20_000 : 320_000,
-    // 引擎用共用 generated_images 快照，不能並行；queue 是跨 agent 的第二層。
+    // execute 立刻回，真正的 Codex 由模組層的 queue 排隊；這裡維持 exclusive，
+    // 避免同一步同時排很多張圖。
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       const quotaBlock = drawQuotaBlock()
@@ -359,37 +506,22 @@ export function apply(ctx) {
 
       fs.mkdirSync(IMAGE_DIR, { recursive: true })
       fs.mkdirSync(WORK_DIR, { recursive: true })
-      const result = await serialize(() => {
-        // 排隊期間額度可能用完；真正開 Codex 前再檢查一次。
-        const queuedQuotaBlock = drawQuotaBlock()
-        if (queuedQuotaBlock) throw new Error(queuedQuotaBlock)
-        return codex.runCodexGenerate({
-          ...codexOptions({ prompt: args.prompt, inputImage, signal: exec?.signal }),
-          codexBin: CODEX_WRAPPER,
-          extraArgs: [
-            ...CODEX_EXTRA_ARGS,
-            ...inputImages.slice(1).flatMap((image) => ['-i', image]),
-            '--dc-real-codex', codexBin,
-          ],
-          nodeBin: process.execPath,
-          timeoutMs: codex.DEFAULT_TIMEOUT_MS,
-        })
-      })
-
-      if (result.code !== 0) {
-        const evErr = result.events.find((event) => event?.item?.type === 'error')
-        const detail = String(evErr?.item?.message || result.stderr || result.stdoutTail || '').trim().slice(0, 600)
-        throw new Error(`codex failed (exit ${result.code}): ${detail}`)
+      const sessionId = exec?.agent?.id
+      if (!sessionId) throw new Error('generate_image 需要會話身分（DSH 沒給 agent.id）：回報管理員')
+      const jobId = randomUUID()
+      const controller = new AbortController()
+      trackJob(sessionId, controller)
+      // 先回報開始，橋接才知道這張圖是誰要的；橋接沒受理就不畫，免得畫完沒人送。
+      const reported = await reportImageJob({ phase: 'start', sessionId, jobId })
+      if (!reported) {
+        releaseJob(sessionId, controller)
+        throw new Error('橋接沒有受理這次生圖（沒開或會話已結束），先不畫圖：回報管理員')
       }
-      if (!result.file) throw new Error('codex finished but produced no image file; check the Codex model supports image generation.')
-
-      const dest = path.join(IMAGE_DIR, path.basename(result.file))
-      fs.copyFileSync(result.file, dest)
+      void runGenerationJob({ sessionId, jobId, prompt: args.prompt, inputImage, inputImages, codexBin, controller })
       return {
-        path: dest,
-        source: result.file,
-        edit: Boolean(inputImage),
-        note: `${inputImage ? 'Edited' : 'Generated'} via Codex (shell disabled). ${(result.files?.length ?? 0) > 1 ? `${result.files.length} images produced; newest returned.` : 'One image produced.'}`,
+        status: 'started',
+        message: '生圖已在背景開始，約 1~3 分鐘。先用 send_message 跟頻道說一聲，然後結束這一輪；'
+          + '畫好後系統會送【生圖完成】給你，再用 send_image 送出。現在不要呼叫 send_image。',
       }
     },
   })

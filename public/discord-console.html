@@ -689,13 +689,14 @@
     }
     $('quota-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，60 秒更新一次）';
     $('quota').replaceChildren(...q.windows.map((w) => {
-      const level = w.percent >= 90 ? ' bad' : w.percent >= 70 ? ' warn' : '';
+      const percent = Math.max(0, Math.min(100, Math.round(w.remainingPercent)));
+      const level = percent <= 10 ? ' bad' : percent <= 30 ? ' warn' : '';
       const reset = w.resetsAt ? untilText(w.resetsAt - Date.now()) + '後重置' : '';
       return el('div', { className: 'quota-row' },
         el('span', { className: 'muted' }, w.label),
-        el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(w.percent), ariaLabel: w.label + '額度' },
-          el('div', { className: 'bar-fill' + level, style: 'width:' + Math.min(100, Math.max(0, w.percent)) + '%' })),
-        el('span', { className: 'num' }, w.percent + '%' + (w.status && w.status !== 'ok' ? '（' + w.status + '）' : '') + (reset ? '｜' + reset : '')),
+        el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(percent), ariaLabel: w.label + '剩餘額度' },
+          el('div', { className: 'bar-fill' + level, style: 'width:' + percent + '%' })),
+        el('span', { className: 'num' }, percent + '%' + (w.status && w.status !== 'ok' ? '（' + w.status + '）' : '') + (reset ? '｜' + reset : '')),
       );
     }));
   }

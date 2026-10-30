@@ -14,6 +14,7 @@ const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().
  * @param options.triggerStore 觸發統計 store
  * @param options.markTriggerDirty 標記統計要存檔
  * @param options.recordBotMessages 記 bot 發言頻率
+ * @param options.takeDrawUsers (key, file) => users：背景生圖完成後送圖的回合沒有觸發者；用檔名拿生圖開始時記下的人
  * @param options.log
  */
 export function createAgentSendHandler({
@@ -23,17 +24,20 @@ export function createAgentSendHandler({
   triggerStore,
   markTriggerDirty,
   recordBotMessages,
+  takeDrawUsers = () => [],
   log = () => {},
 }) {
   function recordSent(key, file) {
     const users = turnUsers.get(key) ?? [];
-    if (users.length === 0) return;
+    const drawUsers = file ? takeDrawUsers(key, file) : [];
     let changed = false;
-    if (!turnTriggerRecorded.has(key)) {
+    if (users.length > 0 && !turnTriggerRecorded.has(key)) {
       turnTriggerRecorded.add(key);
       if (recordTriggers(triggerStore, { users, key, at: Date.now() }) > 0) changed = true;
     }
-    if (file && recordDraws(triggerStore, { users, at: Date.now() }) > 0) changed = true;
+    // 背景生圖完成後送圖的回合不一定有觸發者；有先記下檔名對應的人就用那組。
+    const credited = drawUsers.length > 0 ? drawUsers : users;
+    if (file && credited.length > 0 && recordDraws(triggerStore, { users: credited, at: Date.now() }) > 0) changed = true;
     if (changed) markTriggerDirty();
   }
 

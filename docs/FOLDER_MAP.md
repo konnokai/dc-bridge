@@ -39,6 +39,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-codex-quota.mjs` | Codex 額度查詢與 5 小時窗口重置 ping |
 | `core/discord-trigger-stats.mjs` | 觸發統計 |
 | `core/discord-send-handler.mjs` | MCP `/send` 的送出統計（觸發與繪圖次數） |
+| `core/discord-image-jobs.mjs` | 背景生圖回報、完成提示排進會話閘門、畫圖次數歸屬 |
 | `core/discord-console.mjs` | 控制台 API 的純邏輯 |
 
 ### QQ 專用

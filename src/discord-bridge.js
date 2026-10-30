@@ -139,6 +139,7 @@ import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from '.
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { createAgentSendHandler } from './core/discord-send-handler.mjs';
+import { IMAGE_JOB_TTL_MS, createImageJobHandler, drawUsersForFile } from './core/discord-image-jobs.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -462,6 +463,9 @@ async function main() {
   const emojiShown = new Map(); // key -> Map：這個會話帶過的【常用表情】
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
   const turnUsers = new Map(); // key -> 目前回合的觸發者
+  // 背景生圖：jobId -> { key, users, at }；完成後把觸發者掛到檔名上，等 send_image 再記畫圖次數。
+  const imageJobs = new Map();
+  const pendingDraws = new Map(); // 檔名 -> { key, users, at }
   const turnTriggerRecorded = new Set(); // key -> 這個回合已經記過觸發
   const noToolRemindedAt = new Map(); // key -> 上次提醒「只回文字、沒呼叫工具」的時間
   const NO_TOOL_REMINDER_MS = 10 * 60_000;
@@ -879,6 +883,8 @@ async function main() {
     emojiShown.delete(key);
     pendingUsers.delete(key);
     turnUsers.delete(key);
+    for (const [jobId, job] of imageJobs) if (job.key === key) imageJobs.delete(jobId);
+    for (const [name, entry] of pendingDraws) if (entry.key === key) pendingDraws.delete(name);
     turnTriggerRecorded.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
@@ -1377,6 +1383,16 @@ async function main() {
   }
 
   const agentHandlers = {
+    imageJob: createImageJobHandler({
+      jobs: imageJobs,
+      pendingDraws,
+      turnUsers,
+      reverse,
+      sessions,
+      enqueuePrompt,
+      epochOf,
+      ttlMs: IMAGE_JOB_TTL_MS,
+    }),
     send: createAgentSendHandler({
       agentSender,
       turnUsers,
@@ -1384,6 +1400,12 @@ async function main() {
       triggerStore,
       markTriggerDirty,
       recordBotMessages,
+      takeDrawUsers: (key, file) => drawUsersForFile({
+        pendingDraws,
+        key,
+        file,
+        ttlMs: IMAGE_JOB_TTL_MS,
+      }),
       log,
     }),
     async react(body) {
@@ -2835,7 +2857,8 @@ async function main() {
       return false;
     }
     // 批次排隊期間才設的安靜也要生效：沒叫 bot 的不進模型，省下這一輪。
-    if (isQuietBatchSkipped({ direct: job.direct, quietUntil: quietUntil(key) })) {
+    // 背景生圖完成是系統訊息，不能因為頻道剛好安靜就把圖丟掉。
+    if (isQuietBatchSkipped({ direct: job.direct, quietUntil: quietUntil(key), system: Boolean(job.system) })) {
       // 回訪排隊期間才設的安靜：放回去，安靜結束後再送（額度已算過，不重扣）。
       if (job.followup) followups.restore(job.followup);
       log(job.followup
@@ -2850,11 +2873,13 @@ async function main() {
     }
     if (job.direct) startTyping(key, job.channel);
 
-    const prompt = job.reminder
-      ? { text: job.reminder, images: [], feedbackEntries: [] }
-      : job.followup
-        ? { text: formatFollowupPrompt(job.followup), images: [], feedbackEntries: [] }
-        : await buildBatchPrompt(key, job);
+    const prompt = job.text
+      ? { text: job.text, images: [], feedbackEntries: [] }
+      : job.reminder
+        ? { text: job.reminder, images: [], feedbackEntries: [] }
+        : job.followup
+          ? { text: formatFollowupPrompt(job.followup), images: [], feedbackEntries: [] }
+          : await buildBatchPrompt(key, job);
     if (epoch !== epochOf(key)) {
       log(`整理批次期間會話已重置，丟棄 (${key})`);
       return false;
