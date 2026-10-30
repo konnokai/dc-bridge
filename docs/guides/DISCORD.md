@@ -384,7 +384,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   頻道和狀態兩個過濾一起作用，換頻道會回到第 1 頁
 - **對話**（`#triggers`）：誰觸發過對話、各自幾次、畫圖幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
-- **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
+- **會話**（`#sessions`）：頻道／伺服器名稱（私聊顯示使用者名稱）、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
     `requireMentionInChannel`（一行一個 `頻道ID=true|false`）直接編輯，存檔後**立即生效**並寫回 `config.json`。

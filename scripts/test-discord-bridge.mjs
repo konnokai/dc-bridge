@@ -30,6 +30,7 @@ import {
   matchesTerms,
   searchTerms,
   sessionTitleFor,
+  sessionLabelFor,
   shouldAutoCompact,
   withSelfMutedUser,
   loadSessions,
@@ -338,6 +339,12 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(sessionTitleFor(`ch:${CHANNEL}`) === `Discord #${CHANNEL}`, '頻道名查不到 → 用 channel id');
   ok(sessionTitleFor(`dm:${USER}`, { userName: 'Sora' }) === 'Discord 私聊｜Sora', '私聊標題 = 私聊｜使用者名');
   ok(sessionTitleFor(`dm:${USER}`) === `Discord 私聊｜${USER}`, '使用者名查不到 → 用 user id');
+
+  ok(sessionLabelFor(`ch:${CHANNEL}`, { channelName: '閒聊', guildName: '魚缸' }) === '#閒聊 · 魚缸',
+    '會話欄顯示頻道 + 伺服器');
+  ok(sessionLabelFor(`ch:${CHANNEL}`) === '頻道（找不到名稱）', '會話欄查不到頻道名稱時不直接顯示 ID');
+  ok(sessionLabelFor(`dm:${USER}`, { userName: 'Sora' }) === '私聊 · Sora', '私聊會話顯示使用者名稱');
+  ok(sessionLabelFor(`dm:${USER}`) === '私聊', '私聊查不到使用者名稱時只顯示私聊');
 
   ok(shouldHandleGuildMessage({ mentionedUserIds: [BOT] }, BOT, true), '@bot → 處理');
   ok(shouldHandleGuildMessage({ mentionedUserIds: [], repliedUserId: BOT }, BOT, true), '回覆 bot → 處理');

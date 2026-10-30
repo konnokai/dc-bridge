@@ -1021,7 +1021,7 @@
 
   function renderSessions(list) {
     $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
-      el('td', { className: 'mono' }, s.key),
+      el('td', { title: s.key }, s.label || s.key),
       el('td', { className: 'mono' }, s.sessionId),
       el('td', {}, fmtAgo(s.lastActive)),
       el('td', { className: 'muted' }, s.quietUntil ? new Date(s.quietUntil).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'),

@@ -284,6 +284,14 @@ export function sessionTitleFor(key, { guildName, channelName, userName } = {}) 
   return `Discord #${channelName || id}${guildName ? `｜${guildName}` : ''}`;
 }
 
+/** 控制台「會話」欄的顯示名稱：跟頻道風格一樣用頻道 + 伺服器，不直接顯示 ID。 */
+export function sessionLabelFor(key, { guildName, channelName, userName } = {}) {
+  if (String(key).startsWith('dm:')) return `私聊${userName ? ` · ${userName}` : ''}`;
+  if (!String(key).startsWith('ch:')) return String(key);
+  const name = channelName ? `#${channelName}` : '頻道（找不到名稱）';
+  return guildName ? `${name} · ${guildName}` : name;
+}
+
 /**
  * 這則訊息所在的會話是否被允許。
  *

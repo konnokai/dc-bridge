@@ -39,6 +39,7 @@ import {
   questionAnswersFor,
   saveSessions,
   sessionTitleFor,
+  sessionLabelFor,
   shouldAutoCompact,
   shouldHandleGuildMessage,
   withSelfMutedUser,
@@ -4197,14 +4198,24 @@ async function main() {
   }
 
   const sessionsInfo = () => Object.entries(sessions)
-    .map(([key, sessionId]) => ({
-      key,
-      sessionId,
-      kind: key.startsWith('dm:') ? 'dm' : 'channel',
-      lastActive: lastActive.get(key) ?? null,
-      pending: pending.get(key)?.kind ?? null,
-      quietUntil: quietUntil(key),
-    }))
+    .map(([key, sessionId]) => {
+      const id = key.slice(key.indexOf(':') + 1);
+      const channel = key.startsWith('ch:') ? client.channels.cache.get(id) : null;
+      const user = key.startsWith('dm:') ? client.users.cache.get(id) : null;
+      return {
+        key,
+        sessionId,
+        kind: key.startsWith('dm:') ? 'dm' : 'channel',
+        label: sessionLabelFor(key, {
+          channelName: channel?.name,
+          guildName: channel?.guild?.name,
+          userName: user?.displayName || user?.username,
+        }),
+        lastActive: lastActive.get(key) ?? null,
+        pending: pending.get(key)?.kind ?? null,
+        quietUntil: quietUntil(key),
+      };
+    })
     .sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));
 
   let consoleHandle = null;

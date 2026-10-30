@@ -806,7 +806,7 @@ try {
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [{ userId: '1', name: '群友', facts: ['事情'], updatedAt: old }] }),
         notes: () => ({ enabled: true, notes: [{ id: 'n1', channelId: '123456789012345678', channelName: '很長的頻道名稱', text: '筆記', by: 'summary', at: new Date(old).toISOString(), expiresAt: old }] }),
-        sessions: () => [{ key: 'discord:ch:123456789012345678', sessionId: 'ses_0123456789abcdefghijklmn', lastActive: old, quietUntil: old, pending: 'question' }],
+        sessions: () => [{ key: 'discord:ch:123456789012345678', label: '#很長的頻道名稱 · 很長的伺服器名稱', sessionId: 'ses_0123456789abcdefghijklmn', lastActive: old, quietUntil: old, pending: 'question' }],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
         // 伺服器已按「次數多、最近觸發」排好；同次數時前端不能再重排。
@@ -833,6 +833,8 @@ try {
         assert.deepEqual(await overflowing(tab), [], `${tab} 分頁有儲存格溢出`);
       }
       assert.deepEqual(await p.locator('#trigger-rows tr td strong').allTextContents(), ['b-user', 'a-user']);
+      assert.match(await p.locator('#sessions tr td:first-child').textContent(), /#很長的頻道名稱 · 很長的伺服器名稱/,
+        '會話欄顯示頻道 + 伺服器名稱，不是 key');
     } finally {
       await dcContext.close();
       await dc.close();
