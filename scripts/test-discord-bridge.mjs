@@ -657,8 +657,8 @@ console.log(JSON.stringify({ ...fake.stats(), statuses: results.map((result) => 
     try { argv = JSON.parse(run.stdout.trim().split('\n').at(-1)); } catch {}
     ok(run.status === 0 && Array.isArray(argv) && !argv.includes('-s')
       && argv.includes('default_permissions="dc-imagegen"')
-      && argv.includes('permissions.dc-imagegen.filesystem.":root"="read"')
-      && argv.includes('permissions.dc-imagegen.filesystem."/mnt"="deny"')
+      && argv.includes('permissions.dc-imagegen.filesystem.:root=read')
+      && argv.includes('permissions.dc-imagegen.filesystem./mnt=deny')
       && !argv.some((arg) => String(arg).includes('="write"'))
       && !argv.includes('--dc-real-codex'), 'wrapper 拿掉 -s，加上 :root=read、只擋 /mnt、沒有 write 的 profile');
     fs.rmSync(fakeDir, { recursive: true, force: true });

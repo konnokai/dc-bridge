@@ -493,8 +493,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持設定圖的臉、髮色、服裝與配件。
   11 個角色的代號、中文名與資料夾對照在 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
 - 生圖用的 Codex 是受限版本：關掉 `shell_tool`、`unified_exec` 與 `view_image`，工作目錄在 `state/discord-imagegen-work`。
-  `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`、`$CODEX_HOME=write`；
-  所以 `/mnt` 底下的掛載讀不到。其他本機路徑仍是唯讀（`jun` 帳號自己的資料）。
+  `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（沒有 write 規則）；
+  所以 `/mnt` 底下的掛載讀不到，其他本機路徑也一樣是唯讀。
   prompt 裡有 URL、絕對路徑、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明顯的指令字樣會被拒絕；
   這是第二層，真正的邊界是 shell/exec/view_image 關閉與 permission profile。
 - 畫好用 `mcp__discord__send_image` 送圖：`file` 填 `generate_image` 回傳的 `path`，`content` 可以帶一句話。

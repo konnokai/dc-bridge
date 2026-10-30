@@ -19,10 +19,12 @@ args.splice(realIdx, 2)
 const sandboxIdx = args.indexOf('-s')
 if (sandboxIdx >= 0) args.splice(sandboxIdx, 2)
 
+// `-c` 的 dotted path 不會拆掉 key 的引號：`filesystem."/mnt"` 會讓 Codex 看到
+// 帶引號的路徑而拒絕啟動。這裡的 key 沒有 `.`，直接寫就不需要引號。
 const profile = [
   'default_permissions="dc-imagegen"',
-  'permissions.dc-imagegen.filesystem.":root"="read"',
-  'permissions.dc-imagegen.filesystem."/mnt"="deny"',
+  'permissions.dc-imagegen.filesystem.:root=read',
+  'permissions.dc-imagegen.filesystem./mnt=deny',
 ]
 const jsonIdx = args.indexOf('--json')
 const at = jsonIdx >= 0 ? jsonIdx : args.length
