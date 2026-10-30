@@ -38,10 +38,12 @@
   label input, label textarea { margin-top: 4px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
   .table-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  /* 所有表格固定欄寬：換頁或內容長短變動時，欄位不會左右跳。
+     固定欄寬下 nowrap 的長字串會壓到隔壁欄，所以日期、時間這類儲存格不加 nowrap。 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
   /* 黑話／頻道風格：欄寬與列高固定，內容變動時操作按鈕不會位移。 */
-  .entry-table { table-layout: fixed; min-width: 560px; }
+  .entry-table { min-width: 560px; }
   .entry-table tbody td { height: 84px; }
   .entry-table tbody td.empty-cell { height: auto; }
   .cell-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
@@ -50,6 +52,10 @@
   .entry-actions button { height: 28px; padding: 0 6px; font-size: 12px; white-space: nowrap; }
   .action-slot { display: block; height: 28px; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  th .sort { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+  th .sort:hover { color: var(--text); filter: none; }
+  th[aria-sort] .sort { color: var(--text); }
+  th .sort-mark { width: 1em; font-size: 10px; color: var(--accent); }
   td.mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
   .muted { color: var(--muted); }
   pre#logs { margin: 0; max-height: 320px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
@@ -157,7 +163,8 @@
     <div id="usage-chart" class="chart"></div>
     <div id="usage-note" class="muted" style="font-size:12px;margin-top:6px"></div>
     <div class="table-wrap" style="margin-top:10px">
-      <table>
+      <table style="min-width:820px">
+        <colgroup><col style="width:20%"><col style="width:7%"><col style="width:8%"><col style="width:10%"><col style="width:11%"><col style="width:10%"><col style="width:11%"><col style="width:23%"></colgroup>
         <thead><tr><th>會話</th><th class="num">輪</th><th class="num">步</th><th class="num">未命中</th><th class="num">命中輸入</th><th class="num">輸出</th><th class="num">花費</th><th>占比</th></tr></thead>
         <tbody id="usage-rows"></tbody>
       </table>
@@ -218,7 +225,8 @@
       <span id="emoji-job" class="muted"></span>
     </div>
     <div class="table-wrap">
-      <table>
+      <table style="min-width:420px">
+        <colgroup><col style="width:30%"><col style="width:12%"><col></colgroup>
         <thead><tr><th>伺服器</th><th>條目</th><th>建立時間</th></tr></thead>
         <tbody id="emoji-guilds"></tbody>
       </table>
@@ -247,7 +255,7 @@
   <section class="card">
     <h2>頻道風格 <span id="style-count" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
-      <select id="style-channel" aria-label="頻道"></select>
+      <select id="style-channel" aria-label="頻道" style="min-width:min(280px,100%);max-width:340px"></select>
       <div class="seg" id="style-filter"></div>
       <span class="muted" style="font-size:12px">跟黑話同一次抽；確認後才會注入那個頻道</span>
     </div>
@@ -270,8 +278,9 @@
       <input id="trigger-search" type="search" aria-label="搜尋群友" placeholder="搜尋名稱或 user id" style="max-width:260px">
     </div>
     <div class="table-wrap">
-      <table>
-        <thead><tr><th>群友</th><th class="num">次數</th><th class="num">畫圖</th><th>最後頻道</th><th>最後觸發</th><th>第一次</th></tr></thead>
+      <table style="min-width:720px">
+        <colgroup><col style="width:20%"><col style="width:9%"><col style="width:9%"><col style="width:20%"><col style="width:21%"><col style="width:21%"></colgroup>
+        <thead><tr><th>群友</th><th class="num" data-sort-key="count"><button type="button" class="sort" data-sort="count">次數<span class="sort-mark" aria-hidden="true">↓</span></button></th><th class="num" data-sort-key="drawCount"><button type="button" class="sort" data-sort="drawCount">畫圖<span class="sort-mark" aria-hidden="true"></span></button></th><th>最後頻道</th><th data-sort-key="lastAt"><button type="button" class="sort" data-sort="lastAt">最後觸發<span class="sort-mark" aria-hidden="true"></span></button></th><th data-sort-key="firstAt"><button type="button" class="sort" data-sort="firstAt">第一次<span class="sort-mark" aria-hidden="true"></span></button></th></tr></thead>
         <tbody id="trigger-rows"></tbody>
       </table>
     </div>
@@ -284,7 +293,8 @@
     <h2>群友記憶 <span id="memory-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 remember_user 記下的事，唯讀。要刪請當事人用 /forget。</p>
     <div class="table-wrap">
-      <table>
+      <table style="min-width:480px">
+        <colgroup><col style="width:20%"><col><col style="width:20%"></colgroup>
         <thead><tr><th>群友</th><th>記得的事</th><th>更新</th></tr></thead>
         <tbody id="memory-rows"></tbody>
       </table>
@@ -295,7 +305,8 @@
     <h2>頻道筆記 <span id="notes-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 note_event 記下的事，加上每天自動產生的頻道摘要。刪掉後模型就看不到那條。</p>
     <div class="table-wrap">
-      <table>
+      <table style="min-width:720px">
+        <colgroup><col style="width:16%"><col style="width:38%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
         <thead><tr><th>頻道</th><th>筆記</th><th>種類</th><th>記下</th><th>過期</th><th></th></tr></thead>
         <tbody id="note-rows"></tbody>
       </table>
@@ -307,7 +318,8 @@
   <section class="card">
     <h2>會話 <span id="session-count" class="muted"></span></h2>
     <div class="table-wrap">
-      <table>
+      <table style="min-width:680px">
+        <colgroup><col style="width:26%"><col style="width:20%"><col style="width:13%"><col style="width:9%"><col style="width:8%"><col style="width:24%"></colgroup>
         <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>安靜到</th><th>等待中</th><th></th></tr></thead>
         <tbody id="sessions"></tbody>
       </table>
@@ -318,7 +330,8 @@
     <h2>模型自己不理的人 <span id="ignored-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 ignore_user 設的暫時名單，時間到自動失效。跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開；這裡的人連 @ 都不處理。</p>
     <div class="table-wrap">
-      <table>
+      <table style="min-width:600px">
+        <colgroup><col style="width:20%"><col style="width:34%"><col style="width:20%"><col style="width:14%"><col style="width:12%"></colgroup>
         <thead><tr><th>群友</th><th>原因</th><th>到什麼時候</th><th>記下</th><th></th></tr></thead>
         <tbody id="ignored-rows"></tbody>
       </table>
@@ -803,6 +816,32 @@
   let triggerData = { users: [] };
   let triggerSearch = '';
   let triggerPage = 1;
+  // 對話表排序：點同一欄切換升冪/降冪，換欄位預設由大到小。
+  const TRIGGER_SORT = {
+    count: (user) => Number(user.count ?? 0),
+    drawCount: (user) => Number(user.drawCount ?? 0),
+    lastAt: (user) => Number(user.lastAt ?? 0),
+    firstAt: (user) => Number(user.firstAt ?? 0),
+  };
+  let triggerSort = { key: 'count', dir: 'desc' };
+
+  function syncTriggerSort() {
+    for (const th of document.querySelectorAll('#tab-triggers th[data-sort-key]')) {
+      const active = th.dataset.sortKey === triggerSort.key;
+      if (active) th.setAttribute('aria-sort', triggerSort.dir === 'asc' ? 'ascending' : 'descending');
+      else th.removeAttribute('aria-sort');
+      const mark = th.querySelector('.sort-mark');
+      if (mark) mark.textContent = active ? (triggerSort.dir === 'asc' ? '↑' : '↓') : '';
+    }
+  }
+
+  function sortedTriggers(users) {
+    const value = TRIGGER_SORT[triggerSort.key];
+    if (!value) return users;
+    const dir = triggerSort.dir === 'asc' ? 1 : -1;
+    // 同值時沿用伺服器給的順序（次數多、最近觸發在前）；sort 是穩定排序。
+    return [...users].sort((a, b) => ((value(a) || 0) - (value(b) || 0)) * dir);
+  }
 
   function entryActions(entry) {
     const button = (action, text, className = '') => el('button', {
@@ -849,16 +888,27 @@
     const view = listView.style;
     const channels = new Map();
     for (const entry of styles) {
-      const channel = channels.get(entry.channelId) ?? { id: entry.channelId, name: entry.channelName || entry.channelId, count: 0 };
+      const channel = channels.get(entry.channelId) ?? {
+        id: entry.channelId,
+        name: entry.channelName || entry.channelId,
+        guildName: '',
+        count: 0,
+      };
+      // 舊條目可能沒有 guildName，同頻道只要有一筆查得到就用。
+      channel.guildName ||= entry.guildName || '';
       channel.count += 1;
       channels.set(entry.channelId, channel);
     }
     if (view.channel !== 'all' && !channels.has(view.channel)) { view.channel = 'all'; view.page = 1; }
-    const list = [...channels.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant') || a.id.localeCompare(b.id));
-    const names = list.map((channel) => channel.name);
-    // 不同伺服器常有同名頻道（例如 general），補上 id 才分得出來。
-    const options = [['all', `全部頻道（${styles.length}）`], ...list.map((channel) => [channel.id,
-      '#' + channel.name + (names.indexOf(channel.name) !== names.lastIndexOf(channel.name) ? ' · ' + channel.id : '') + `（${channel.count}）`])];
+    const list = [...channels.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant')
+      || a.guildName.localeCompare(b.guildName, 'zh-Hant')
+      || a.id.localeCompare(b.id));
+    // 不同伺服器常有同名頻道：先補伺服器名稱，名稱還是撞（或舊資料沒有 guildName）才補 id。
+    const labelOf = (channel) => `#${channel.name}${channel.guildName ? ` · ${channel.guildName}` : ''}`;
+    const labels = list.map(labelOf);
+    const duplicated = new Set(labels.filter((label, index) => labels.indexOf(label) !== index));
+    const options = [['all', `全部頻道（${styles.length}）`], ...list.map((channel, index) => [channel.id,
+      labels[index] + (duplicated.has(labels[index]) ? ` · ${channel.id}` : '') + `（${channel.count}）`])];
     const select = $('style-channel');
     const values = options.map(([value]) => value).join('\n');
     if (values !== [...select.options].map((option) => option.value).join('\n')) {
@@ -889,7 +939,7 @@
     renderEntryList('style', renderStyleChannels(slangEntries.filter((entry) => entry.kind === 'style')), {
       empty: '還沒有頻道風格；黑話學習每次抽取時會順便產出。',
       cells: (entry) => {
-        const channel = '#' + (entry.channelName || entry.channelId);
+        const channel = '#' + (entry.channelName || entry.channelId) + (entry.guildName ? ` · ${entry.guildName}` : '');
         return [
           el('td', { className: 'muted', title: channel }, el('div', { className: 'cell-clamp' }, channel)),
           el('td', { title: String(entry.term ?? '') }, el('div', { className: 'cell-clamp' }, el('strong', {}, entry.term))),
@@ -909,9 +959,10 @@
     const filtered = query
       ? users.filter((user) => String(user.name ?? '').toLowerCase().includes(query) || String(user.userId).includes(query))
       : users;
-    const pages = Math.max(1, Math.ceil(filtered.length / LIST_PAGE_SIZE));
+    const sorted = sortedTriggers(filtered);
+    const pages = Math.max(1, Math.ceil(sorted.length / LIST_PAGE_SIZE));
     triggerPage = Math.min(Math.max(1, triggerPage), pages);
-    const rows = filtered.slice((triggerPage - 1) * LIST_PAGE_SIZE, triggerPage * LIST_PAGE_SIZE);
+    const rows = sorted.slice((triggerPage - 1) * LIST_PAGE_SIZE, triggerPage * LIST_PAGE_SIZE);
     $('trigger-rows').replaceChildren(...(rows.length ? rows.map((user) => el('tr', {},
       el('td', {},
         el('strong', {}, user.name || user.userId),
@@ -919,12 +970,12 @@
       el('td', { className: 'num' }, String(user.count ?? 0)),
       el('td', { className: 'num' }, String(user.drawCount ?? 0)),
       el('td', { className: 'muted' }, user.channelName || '—'),
-      el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(user.lastAt)),
-      el('td', { className: 'muted', style: 'white-space:nowrap' }, user.firstAt ? new Date(user.firstAt).toLocaleString() : '—'),
+      el('td', { className: 'muted' }, fmtAgo(user.lastAt)),
+      el('td', { className: 'muted' }, user.firstAt ? new Date(user.firstAt).toLocaleString() : '—'),
     )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, query ? '沒有符合的人。' : '還沒有對話紀錄。'))]));
     $('trigger-pager').replaceChildren(...(pages > 1 ? [
       el('button', { type: 'button', className: 'ghost', dataset: { page: String(triggerPage - 1) }, textContent: '上一頁', disabled: triggerPage <= 1 }),
-      el('span', { className: 'muted' }, `第 ${triggerPage} / ${pages} 頁（${filtered.length} 人）`),
+      el('span', { className: 'muted' }, `第 ${triggerPage} / ${pages} 頁（${sorted.length} 人）`),
       el('button', { type: 'button', className: 'ghost', dataset: { page: String(triggerPage + 1) }, textContent: '下一頁', disabled: triggerPage >= pages }),
     ] : []));
   }
@@ -937,7 +988,7 @@
     $('memory-rows').replaceChildren(...(rows.length ? rows.map((user) => el('tr', {},
       el('td', {}, el('strong', {}, user.name || user.userId)),
       el('td', {}, ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact))),
-      el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(user.updatedAt)),
+      el('td', { className: 'muted' }, fmtAgo(user.updatedAt)),
     )) : [el('tr', {}, el('td', { colSpan: 3, className: 'muted' }, '還沒有記住任何人。'))]));
   }
 
@@ -949,9 +1000,9 @@
     $('note-rows').replaceChildren(...(rows.length ? rows.map((note) => el('tr', {},
       el('td', { className: 'mono' }, '#' + (note.channelName || note.channelId)),
       el('td', {}, note.text),
-      el('td', { className: 'muted', style: 'white-space:nowrap' }, note.by === 'summary' ? '每日摘要' : '模型'),
-      el('td', { className: 'muted', style: 'white-space:nowrap' }, fmtAgo(Date.parse(note.at))),
-      el('td', { className: 'muted', style: 'white-space:nowrap' }, note.expiresAt ? new Date(note.expiresAt).toLocaleDateString() : '永久'),
+      el('td', { className: 'muted' }, note.by === 'summary' ? '每日摘要' : '模型'),
+      el('td', { className: 'muted' }, fmtAgo(Date.parse(note.at))),
+      el('td', { className: 'muted' }, note.expiresAt ? new Date(note.expiresAt).toLocaleDateString() : '永久'),
       el('td', {}, el('button', { className: 'danger', dataset: { noteId: note.id }, textContent: '刪除' })),
     )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有筆記。'))]));
   }
@@ -963,7 +1014,7 @@
       el('td', {}, fmtAgo(s.lastActive)),
       el('td', { className: 'muted' }, s.quietUntil ? new Date(s.quietUntil).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'),
       el('td', {}, s.pending ? (s.pending === 'question' ? '提問' : '審批') : '—'),
-      el('td', {}, el('div', { className: 'row', style: 'flex-wrap:nowrap' },
+      el('td', {}, el('div', { className: 'row' },
         el('button', {
           className: 'ghost', dataset: { key: s.key, action: 'reload' }, textContent: '重載提示詞',
         }),
@@ -982,8 +1033,8 @@
         el('strong', {}, user.name || user.userId),
         el('div', { className: 'muted', style: 'font-size:11px' }, user.userId)),
       el('td', { className: 'muted' }, user.reason || '—'),
-      el('td', { className: 'nowrap' }, new Date(user.until).toLocaleString('zh-TW', { hour12: false })),
-      el('td', { className: 'muted nowrap' }, fmtAgo(user.at)),
+      el('td', {}, new Date(user.until).toLocaleString('zh-TW', { hour12: false })),
+      el('td', { className: 'muted' }, fmtAgo(user.at)),
       el('td', {}, el('button', {
         className: 'danger',
         dataset: { ignoreUser: user.userId, name: user.name || user.userId },
@@ -1068,9 +1119,22 @@
   });
   $('refresh').addEventListener('click', () => refresh());
 
+  syncTriggerSort();
   $('trigger-search').addEventListener('input', () => {
     triggerSearch = $('trigger-search').value;
     triggerPage = 1;
+    renderTriggers(triggerData);
+  });
+  $('tab-triggers').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-sort]');
+    if (!button || !TRIGGER_SORT[button.dataset.sort]) return;
+    const key = button.dataset.sort;
+    triggerSort = {
+      key,
+      dir: triggerSort.key === key && triggerSort.dir === 'desc' ? 'asc' : 'desc',
+    };
+    triggerPage = 1;
+    syncTriggerSort();
     renderTriggers(triggerData);
   });
   $('trigger-pager').addEventListener('click', (event) => {

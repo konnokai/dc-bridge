@@ -4326,7 +4326,15 @@ async function main() {
                 || (b.seen || 0) - (a.seen || 0)
                 || String(b.updatedAt).localeCompare(String(a.updatedAt)))
                 .map((entry) => (entry.kind === 'style'
-                  ? { ...entry, channelName: client.channels.cache.get(entry.channelId)?.name ?? entry.channelId }
+                  ? (() => {
+                      const channel = client.channels.cache.get(entry.channelId);
+                      // 以頻道實際所在的伺服器為準；頻道不在快取（被刪、bot 離開）才退回學到時記的 guildId。
+                      return {
+                        ...entry,
+                        channelName: channel?.name ?? entry.channelId,
+                        guildName: channel?.guild?.name ?? client.guilds.cache.get(entry.guildId)?.name ?? '',
+                      };
+                    })()
                   : entry)),
               stats: slangStats(slangStore),
               learning: {

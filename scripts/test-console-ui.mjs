@@ -573,12 +573,12 @@ try {
     }
   }
   if (!original) await test('Discord 控制台：頻道風格可按頻道過濾，跟狀態過濾一起作用', async () => {
-    const style = (id, channelId, channelName, status) => ({ id, kind: 'style', channelId, channelName, term: id, meaning: '描述', status, seen: 1 });
+    const style = (id, channelId, channelName, status, guildName) => ({ id, kind: 'style', channelId, channelName, guildName, term: id, meaning: '描述', status, seen: 1 });
     let entries = [
       { id: 'w1', kind: 'slang', term: '難繃', meaning: '很難繃住', status: 'candidate', seen: 1 },
       ...Array.from({ length: 22 }, (_, i) => style(`chat${i}`, 'c1', '閒聊', i < 2 ? 'confirmed' : 'candidate')),
-      style('gen-a', 'c2', 'general', 'confirmed'),
-      style('gen-b', 'c3', 'general', 'candidate'),
+      style('gen-a', 'c2', 'general', 'confirmed', '伺服器甲'),
+      style('gen-b', 'c3', 'general', 'candidate', '伺服器乙'),
       // 橋接查不到頻道名稱時 channelName 會退回 id
       style('gone', '999', '999', 'rejected'),
     ];
@@ -606,8 +606,12 @@ try {
       await p.goto(`${dcBase}/?token=t#slang`);
       const select = p.locator('#style-channel');
       await p.waitForFunction(() => document.querySelectorAll('#style-channel option').length === 5);
-      assert.deepEqual(await select.locator('option').allTextContents(),
-        ['全部頻道（25）', '#999（1）', '#閒聊（22）', '#general · c2（1）', '#general · c3（1）']);
+      const optionTexts = await select.locator('option').allTextContents();
+      assert.equal(optionTexts[0], '全部頻道（25）');
+      // 中文排序依 ICU 版本可能不同，只比對集合。
+      assert.deepEqual(optionTexts.slice(1).sort(), [
+        '#999（1）', '#閒聊（22）', '#general · 伺服器甲（1）', '#general · 伺服器乙（1）',
+      ].sort());
       assert.equal(await select.inputValue(), 'all');
       assert.equal(await select.getAttribute('aria-label'), '頻道');
 
@@ -627,7 +631,7 @@ try {
       assert.equal(await p.locator('#style-filter button[data-status="candidate"]').textContent(), '待確認 20', '狀態計數只算選到的頻道');
 
       await select.selectOption('c2');
-      assert.deepEqual(await channelCells(), ['#general']);
+      assert.deepEqual(await channelCells(), ['#general · 伺服器甲']);
       assert.equal(await p.locator('#style-filter button[data-status="confirmed"]').getAttribute('aria-pressed'), 'true', '換頻道不重設狀態過濾');
 
       await select.selectOption('999');
@@ -714,6 +718,121 @@ try {
       await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(2)').textContent.startsWith('很長'));
       const after = await metrics('slang-rows');
       assert.deepEqual(after, before, '內容變長後欄寬、列高與按鈕位置都不能變');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
+  await test('Discord 控制台：對話表欄寬固定，換頁與內容變動不跳動', async () => {
+    let users = Array.from({ length: 22 }, (_, i) => ({
+      userId: String(1000 + i),
+      name: `群友 ${i}`,
+      count: 22 - i,
+      drawCount: (i * 7) % 22,
+      channelName: '#聊天區',
+      lastAt: Date.now(),
+      firstAt: Date.now(),
+    }));
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        triggers: () => ({ todayUsers: users.length, totalUsers: users.length, totalTriggers: 100, totalDraws: 0, users }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1204, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#triggers`);
+      await p.waitForFunction(() => document.querySelectorAll('#trigger-rows tr').length === 20);
+      const widths = () => p.locator('#trigger-rows tr:first-child td')
+        .evaluateAll((tds) => tds.map((td) => Math.round(td.getBoundingClientRect().width)));
+      const before = await widths();
+      await p.locator('#trigger-pager button', { hasText: '下一頁' }).click();
+      await p.waitForFunction(() => document.querySelector('#trigger-pager').textContent.includes('第 2 / 2 頁'));
+      assert.deepEqual(await widths(), before, '換頁後欄寬不能變');
+
+      const firstName = () => p.locator('#trigger-rows tr:first-child td strong').textContent();
+      const sortHeader = (key) => p.locator(`#tab-triggers th[data-sort-key="${key}"]`);
+      await sortHeader('count').locator('button').click();
+      assert.equal(await firstName(), '群友 21', '次數第一次點擊改遞增');
+      assert.equal(await sortHeader('count').getAttribute('aria-sort'), 'ascending');
+      await sortHeader('count').locator('button').click();
+      assert.equal(await firstName(), '群友 0', '再點一次改回遞減');
+      assert.equal(await sortHeader('count').getAttribute('aria-sort'), 'descending');
+      await sortHeader('drawCount').locator('button').click();
+      assert.equal(await firstName(), '群友 3', '畫圖預設由多到少');
+      assert.equal(await sortHeader('count').getAttribute('aria-sort'), null, '舊欄位的 aria-sort 要移除');
+      assert.equal(await sortHeader('drawCount').getAttribute('aria-sort'), 'descending');
+
+      users = users.map((user) => ({ ...user, name: `${user.name}${'很長'.repeat(20)}`, channelName: '#很長的頻道名稱' }));
+      await Promise.all([
+        p.waitForResponse((response) => new URL(response.url()).pathname === '/api/triggers'),
+        p.locator('#refresh').click(),
+      ]);
+      await p.waitForFunction(() => document.querySelector('#trigger-rows tr:first-child td').textContent.includes('很長'));
+      assert.deepEqual(await widths(), before, '內容變長後欄寬不能變');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
+  await test('Discord 控制台：手機寬度下各表儲存格內容不溢出到隔壁欄，排序同值保留伺服器順序', async () => {
+    const old = Date.parse('2026-01-02T03:04:05Z');
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({
+          bot: null, dsh: {}, sessions: 1, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 },
+          emoji: { entries: 1, guilds: 1, items: [{ guildId: '123456789012345678', guildName: '很長的伺服器名稱'.repeat(3), entries: 1234, builtAt: old }] },
+          ignored: [{ userId: '123456789012345678', name: '群友', reason: '很長的原因'.repeat(10), until: old, at: old }],
+        }),
+        invite: () => ({}),
+        usage: ({ range }) => ({
+          range, totals: { cost: 9999 }, series: { buckets: [] },
+          conversations: [{ key: 'discord:ch:123456789012345678', turns: 12345, steps: 123456, cost: 1234.56, buckets: { cacheMiss: 123456789, cacheHit: 98765432, output: 99999 } }],
+        }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [{ userId: '1', name: '群友', facts: ['事情'], updatedAt: old }] }),
+        notes: () => ({ enabled: true, notes: [{ id: 'n1', channelId: '123456789012345678', channelName: '很長的頻道名稱', text: '筆記', by: 'summary', at: new Date(old).toISOString(), expiresAt: old }] }),
+        sessions: () => [{ key: 'discord:ch:123456789012345678', sessionId: 'ses_0123456789abcdefghijklmn', lastActive: old, quietUntil: old, pending: 'question' }],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        // 伺服器已按「次數多、最近觸發」排好；同次數時前端不能再重排。
+        triggers: () => ({ todayUsers: 2, totalUsers: 2, totalTriggers: 2, totalDraws: 0, users: [
+          { userId: '2', name: 'b-user', count: 1, drawCount: 0, channelName: '#很長的頻道名稱', lastAt: old + 1000, firstAt: old },
+          { userId: '1', name: 'a-user', count: 1, drawCount: 0, channelName: '#很長的頻道名稱', lastAt: old, firstAt: old },
+        ] }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 375, height: 900 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#usage`);
+      const overflowing = (tab) => p.locator(`#tab-${tab}`).evaluate((panel) => [...panel.querySelectorAll('th, td')]
+        .filter((cell) => cell.scrollWidth > cell.clientWidth + 1)
+        .map((cell) => `${cell.closest('tbody, thead').id || 'thead'}: ${cell.textContent.trim().slice(0, 30)}`));
+      const tabs = [['usage', '#usage-rows tr.clickable'], ['settings', '#emoji-guilds tr td:nth-child(2)'], ['triggers', '#trigger-rows tr:nth-child(2)'],
+        ['memory', '#note-rows button'], ['sessions', '#ignored-rows button']];
+      for (const [tab, ready] of tabs) {
+        await p.locator(`#tabbtn-${tab}`).click();
+        await p.locator(ready).first().waitFor();
+        assert.deepEqual(await overflowing(tab), [], `${tab} 分頁有儲存格溢出`);
+      }
+      assert.deepEqual(await p.locator('#trigger-rows tr td strong').allTextContents(), ['b-user', 'a-user']);
     } finally {
       await dcContext.close();
       await dc.close();

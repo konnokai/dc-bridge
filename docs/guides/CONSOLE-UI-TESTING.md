@@ -53,7 +53,9 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 - 人格管理全流程：新建 → 点列表载入编辑（内容回填、按钮切到「保存修改」）→ 保存修改 → 改名保存（先重命名再保存）→ 删除（确认框自动接受），每步都断言列表随之更新。
 - 仿真提示词：默认可查看且只读、解锁后可编辑、保存后回到只读并提示「需重启 DSH」。
 - 思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。
-- Discord 版控制台（`public/discord-console.html`，用 `startConsole` 加 mock handler 起一个随机端口）：「频道风格」的频道下拉选单显示 `#频道名（笔数）`、同名频道补 id，跟状态过滤一起作用，换频道回到第 1 页，重新整理后保留选择，频道没有条目时退回「全部频道」。
+- Discord 版控制台（`public/discord-console.html`，用 `startConsole` 加 mock handler 起一个随机端口）：「频道风格」的频道下拉選單顯示 `#頻道名 · 伺服器名（筆數）`，名稱或伺服器還是撞才補 id，跟狀態過濾一起作用，換頻道回到第 1 頁，重新整理後保留選擇，頻道沒有條目時退回「全部頻道」。
+- Discord 對話表：次數、畫圖、最後觸發、第一次可點擊排序；同欄切換升冪/降冪，換欄預設降冪，排序後回第 1 頁，`aria-sort` 與箭頭同步，同值保留伺服器順序。
+- Discord 所有表格固定欄寬：換頁或內容變長時欄位與按鈕位置不變；375px 下各分頁的表格儲存格不溢出到隔壁欄。
 - 无 JavaScript 错误、未知 API 或外部网络请求。
 
 新增的控制台 API 都已在 `console-ui-fixture.mjs` 里 mock；**改动控制台时若加了新接口，必须同步补 mock**，否则本套件会在「未知 API」这一项失败。
