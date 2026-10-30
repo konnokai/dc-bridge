@@ -2933,8 +2933,20 @@ console.log('## 10. 引用、上下文、出站閘門');
   // 會話剛重置時，模型沒有自己的發言紀錄，常在第一批只按 reaction；第一批 prompt 要明講先用文字接話。
   ok(OPENING_HINT.includes('send_message') && OPENING_HINT.includes('不要只按 reaction'), '開場提醒要求用文字回話');
   const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  ok(bridgeSource.includes("primedKeys.has(key) ? '' :") && bridgeSource.includes('${OPENING_HINT}'),
-    '開場提醒只在會話第一批注入');
+  ok(bridgeSource.includes('needsOpening.has(key)') && bridgeSource.includes('${OPENING_HINT}'),
+    '開場提醒只在新會話第一批注入');
+  ok(!bridgeSource.includes("primedKeys.has(key) ? '' :"),
+    '安靜結束清掉 primedKeys 時不能重送開場提醒');
+  const openingAdd = bridgeSource.indexOf('needsOpening.add(key)');
+  ok(openingAdd > bridgeSource.indexOf('sessions[key] = sessionId')
+    && openingAdd > bridgeSource.indexOf('async function ensureSession(')
+    && openingAdd < bridgeSource.indexOf('async function retireSession(')
+    && bridgeSource.indexOf('needsOpening.add(key)', openingAdd + 1) === -1,
+    'needsOpening 只在真的新建會話時設定，重啟載入既有會話不補開場');
+  // 斜線命令不經過模型，開場提示不能在它之前就用掉。
+  const openingTake = bridgeSource.indexOf('needsOpening.delete(key)', bridgeSource.indexOf('async function deliverPrompt('));
+  ok(openingTake > bridgeSource.indexOf('const command = accepted.result.value?.command'),
+    '開場提示要等 prompt 真的進模型才用掉');
 
   const limited = formatRecentContext(
     Array.from({ length: 20 }, (_, i) => ({ author: 'A', content: `第${i}句` })),

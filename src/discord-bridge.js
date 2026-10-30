@@ -649,6 +649,7 @@ async function main() {
   let consoleTokenValue = '';
   let agentApiHandle = null;
   const primedKeys = new Set(); // 自由參與：這次啟動後已經帶過頻道上下文的會話
+  const needsOpening = new Set(); // key → 新會話的開場提示還沒真的送進模型
   const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
   const quietState = createQuietState(); // key -> 安靜到什麼時候
   const followups = createFollowupStore(); // 模型自己排的「N 分鐘後回來看」
@@ -864,6 +865,9 @@ async function main() {
       api.events.follow(sessionId);
       sessions[key] = sessionId;
       reverse.set(sessionId, key);
+      // 只有真的新建會話才標記開場。sessions 會從磁碟載入，重啟後 existing 分支
+      // 不會走到這裡，所以部署重啟後的第一批不會再被叫去主動說話。
+      needsOpening.add(key);
       saveSessions(SESSIONS_FILE, sessions);
       await applyModel(sessionId);
       log(`新會話 ${key} → ${sessionId}（preset ${cfg.discord.agentPreset}）`);
@@ -939,6 +943,7 @@ async function main() {
     snapshotReady.delete(sessionId);
     api.events.forget(sessionId);
     delete sessions[key];
+    needsOpening.delete(key);
     reverse.delete(sessionId);
     // 映射已經移除：之後就算存檔或歸檔失敗，也算「退役已發生」，交接摘要不能跟著刪。
     onRetired?.();
@@ -3039,7 +3044,9 @@ async function main() {
     // 換 system prompt 後的第一次發言：先把上一段對話的記憶放在最前面。
     const reload = peekReloadSummary(reloadStore, key);
     // 新會話的第一批：模型剛重置、還沒有自己的發言紀錄，容易只按 reaction 不說話。
-    const opening = primedKeys.has(key) ? '' : `\n${OPENING_HINT}`;
+    // 只看「是不是新會話」，不要用 primedKeys：安靜結束也會清掉 primedKeys（為了重帶上下文），
+    // 拿它判斷開場會在每次安靜後再叫模型主動說話一次。
+    const opening = needsOpening.has(key) ? `\n${OPENING_HINT}` : '';
     const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
@@ -3089,6 +3096,8 @@ async function main() {
       if (command.text) await sendLong(key, command.text);
       return false;
     }
+    // 開場提示真的跟著 prompt 進模型了才算用掉；送失敗或斜線命令都不算。
+    needsOpening.delete(key);
     // prompt 真的進 DSH 了才用掉交接摘要；送失敗時下一則還會再帶一次。
     if (reload && takeReloadSummary(reloadStore, key)) {
       saveReloadStore();
