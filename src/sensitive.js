@@ -12,4 +12,72 @@
 // 反过来，**不要**为了让这条正则"顺带"覆盖裸 32-hex 而往里加 [0-9a-f]{32}：
 // 表情 md5、图片 URL、消息里的十六进制串本身就是 32-hex，加进去会把正常的表情包与消息
 // 整条拦掉/打码（误伤面远大于收益）。要收紧令牌泄漏，请走精确名单那条路。
-export const SENSITIVE_RE = /((?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'<>|]+|\\\\[^\\\s"'<>|]+\\[^\s"'<>|]+|(?<![A-Za-z0-9])(?:\/home\/|\/Users\/|\/etc\/|\/var\/|\/root\/)[^\s"'<>|]*|(?:token|密码|密钥|口令|password|passwd|secret|api[_-]?key|authorization|bearer|access[_-]?key|credential)["']?(?:\s*(?:[:=：]|是|为)\s*["']?[^\s，。；、"']{3,}|\s+[A-Za-z0-9_\-./]{3,}))/i;
+//
+// ── 伪装归一化（为什么需要）────────────────────────────────────────────────
+//
+// 上面那条正则是**逐字匹配**的，而攻击者只需要让文本"看起来一样、字节不同"就能绕过：
+//
+//   `C:\Users\…`  →  `C：＼Users＼…`（全角冒号 + 全角反斜杠，NFKC 归一后相同）
+//   `C:\Users\…`  →  `C:` + U+200B + `\Users\…`（零宽空格，肉眼不可见）
+//   `token=abc`   →  base64(`token=abc`)（整段编码）
+//
+// 因此判定前先把文本**归一化成若干等价形式**，逐一看是否命中：
+//   · 规范形式：NFKC 归一 + 剥掉零宽/双向控制字符；
+//   · 紧凑形式：再吃掉空白与 `.` `_` `-`（`t o k e n = a b c` / `to-ken=abc`）；
+//   · base64 解码形式：对看起来是 base64 的片段**尝试解码**，解码结果同样过一遍。
+//     只接受"能严格往返"的候选（重新编码后与原文一致）与合法 UTF-8，
+//     避免把随机的十六进制串误当 base64 而误伤正常消息。
+//
+// 注意：归一化只影响**判定**，不改写要发送的原文（脱敏仍在原文上做替换）。
+
+/** NFKC 归一 + 剥掉零宽与双向控制字符。 */
+export function normalizeSensitiveText(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\u00ad\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g, '');
+}
+
+/** 只解码"看起来像 base64"的片段；要求严格往返，避免随机十六进制串被误判。 */
+function decodedSensitiveTexts(value) {
+  const out = [];
+  for (const match of value.matchAll(/[A-Za-z0-9+/_-]{16,}={0,2}/g)) {
+    const raw = match[0].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = raw.replace(/=+$/, '');
+    if (padded.length % 4 === 1) continue;
+    const buffer = Buffer.from(padded, 'base64');
+    if (buffer.length === 0) continue;
+    if (buffer.toString('base64').replace(/=+$/, '') !== padded) continue; // 非严格 base64
+    const decoded = buffer.toString('utf8');
+    if (!Buffer.from(decoded, 'utf8').equals(buffer)) continue;           // 非合法 UTF-8
+    out.push(normalizeSensitiveText(decoded));
+  }
+  return out;
+}
+
+// 路径与凭据分开判定：紧凑形式（吃掉空白/._-）只套凭据。
+// 否则 "A: /reset" 会黏成 "A:/reset" 被当成磁碟路径误挡。
+// 磁碟路径要求 drive 之后还有一层分隔符，"Q：/help" 这种聊天才不会中。
+const PATH_RE = /((?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'<>|]*[\\/][^\s"'<>|]*|\\\\[^\\\s"'<>|]+\\[^\s"'<>|]+|(?<![A-Za-z0-9])(?:\/home\/|\/Users\/|\/etc\/|\/var\/|\/root\/)[^\s"'<>|]*)/i;
+const CREDENTIAL_RE = /((?:token|密码|密钥|口令|password|passwd|secret|api[_-]?key|authorization|bearer|access[_-]?key|credential)["']?(?:\s*(?:[:=：]|是|为)\s*["']?[^\s，。；、"']{3,}|\s+[A-Za-z0-9_\-./]{3,}))/i;
+const BASE_SENSITIVE_RE = new RegExp(`(?:${PATH_RE.source}|${CREDENTIAL_RE.source})`, 'i');
+const compactText = (text) => text.replace(/[\s._-]+/g, '');
+
+/**
+ * 结构化敏感判定：`.test()` 会先归一化再匹配（伪装形态也能命中）。
+ *
+ * 保持 `RegExp` 的形状（`source` / `flags` / `.test()`）是为了不改动既有调用方 ——
+ * 桥接里有 15 处直接用 `SENSITIVE_RE.test(...)`，还有一处用 `SENSITIVE_RE.source`
+ * 动态补 `g` 做替换。
+ */
+export const SENSITIVE_RE = new class StructuredSensitiveRegExp extends RegExp {
+  test(value) {
+    const canonical = normalizeSensitiveText(value);
+    if (PATH_RE.test(canonical) || CREDENTIAL_RE.test(compactText(canonical))) return true;
+    return decodedSensitiveTexts(canonical).some((decoded) => (
+      PATH_RE.test(decoded) || CREDENTIAL_RE.test(compactText(decoded))
+    ));
+  }
+}(BASE_SENSITIVE_RE.source, BASE_SENSITIVE_RE.flags);
+
+/** 供需要"原始正则"的调用方使用（例如做替换时）。 */
+export const SENSITIVE_PATTERN = BASE_SENSITIVE_RE;

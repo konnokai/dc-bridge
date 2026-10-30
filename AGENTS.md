@@ -72,6 +72,11 @@ node -e "import('/home/jun/dc-bridge/node_modules/@modelcontextprotocol/sdk/dist
 `setup:discord` 最後出現 `auto-install failed to start/complete（ENOENT）` 是已知訊息；
 只要 exit 0、前面的 MCP 條目與 preset patch 都同步成功就繼續。
 
+## 上游對比基準
+
+見 [docs/guides/UPSTREAM_SYNC.md](docs/guides/UPSTREAM_SYNC.md)。要比對上游前先讀那份，
+裡面有基準 commit、已搬與不搬的清單，只跑基準之後的新 commit。
+
 ## 目前的程序
 
 | pm2 名稱 | 內容 | 工作目錄 |

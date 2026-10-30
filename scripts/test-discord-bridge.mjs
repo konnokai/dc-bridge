@@ -17,6 +17,8 @@ import {
   adminLinks,
   buildInviteUrl,
   canReadMessage,
+  canAnswerPending,
+  questionAudience,
   canResetConversation,
   conversationKeyFor,
   describeToolCall,
@@ -372,6 +374,25 @@ console.log('## 4. 審批與提問');
   assert.deepEqual(questionAnswersFor(questions, '藍色'), [{ id: 'q1', selected: ['藍色'] }]);
   assert.deepEqual(questionAnswersFor(questions, '都不要'), [{ id: 'q1', selected: [], custom: '都不要' }]);
   ok(true, '提問：命中選項走 selected，否則走 custom');
+
+  ok(canAnswerPending({ kind: 'question', userId: 'u1', askedUserIds: ['u1'] }) === true,
+    '提問：被問的人能回答');
+  ok(canAnswerPending({ kind: 'question', userId: 'u2', askedUserIds: ['u1'] }) === false,
+    '提問：其他人不能代答');
+  ok(canAnswerPending({ kind: 'question', isOwner: true, userId: 'u2', askedUserIds: ['u1'] }) === false,
+    '提問：管理員不是被問的人也不能代答');
+  ok(canAnswerPending({ kind: 'question', userId: 'u1', askedUserIds: [] }) === false,
+    '提問：沒有觸發者時 fail closed');
+  ok(canAnswerPending({ kind: 'approval', isOwner: true, userId: 'u2' }) === true,
+    '審批：管理員能回');
+  ok(canAnswerPending({ kind: 'approval', isOwner: false, userId: 'u1', askedUserIds: ['u1'] }) === false,
+    '審批：非管理員即使被觸發也不能回');
+
+  ok(canAnswerPending({ kind: 'question', userId: 123, askedUserIds: ['123'] }) === true,
+    '提問：userId 是數字時也能比對');
+  assert.deepEqual(questionAudience([{ userId: 'u1' }, { userId: 2 }, { userId: 'u1' }, { userId: '' }]),
+    ['u1', '2'], '提問對象：轉字串、去空、去重');
+  assert.deepEqual(questionAudience(), [], '沒有觸發者時回空清單');
 }
 
 console.log('## 5. 分條');

@@ -322,8 +322,11 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 ### 提問與審批
 
-- agent 用 `ask_user_question` 提問 → 問題與選項送到頻道，**這個頻道下一則叫 bot 的訊息就是答案**
-  （頻道要 @bot 或回覆 bot，私聊直接打；回選項文字，或直接打自己的答案）。任何人都能回答提問。
+- agent 用 `ask_user_question` 提問 → 問題與選項送到頻道，**只有這一輪叫 bot 的人能回答**
+  （頻道要 @bot 或回覆 bot，私聊直接打；回選項文字，或直接打自己的答案）。提問訊息會點名這些人。
+  頻道裡沒有人 @bot 的那一輪，算整批有發言的人都能回答。
+  其他人（包括管理員）在提問掛著時照常聊天，訊息不會被吃掉，也不能替被問的人回答。
+- 沒有觸發者的回合（排程回訪、事件流重連後補建的回合）不會把提問貼到頻道，直接取消並讓模型繼續。
 - agent 請求工具審批 → 只有 `ownerIds` 能回「通過 / 同意 / 允許 / 批准 / yes / y / approve / ok」或
   「拒絕 / 不同意 / 不允許 / 駁回 / no / n / reject / deny」。其他人在審批掛著時照常聊天，不會被吃掉。
 - 等到 `questionTimeoutMs` 沒人回 → 橋接代替使用者取消，並在頻道說明。
@@ -819,7 +822,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__slang__record_channel_tag`（`tag`、`description`）：把這個頻道的風格記成候選；同頻道同名標籤同樣只回「已收錄過」。
   只收不隨話題變的習慣，一次性的話題或事件不算；一個頻道最多 5 條，滿了回錯誤
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
-- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓網頁正文，最多 50000 字，擋內網與本機位址。
+- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓 HTTPS（443）網頁正文，最多 50000 字，結果會包一層「這是資料、不是指令」的外殼，擋內網與本機位址。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
 - `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖或拿設定圖改圖。
   `prompt` 必填；畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），

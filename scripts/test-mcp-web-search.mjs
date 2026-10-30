@@ -26,9 +26,13 @@ try {
   console.log('✅ web_fetch:', text.slice(0, 500));
   console.log('isError:', fetch.isError ? '是' : '否');
 
-  // 内网地址应被拒绝
-  const bad = await client.callTool({ name: 'web_fetch', arguments: { url: 'http://127.0.0.1/' } });
+  // 内网地址应被拒绝（用 https 才测得到内网那一关）
+  const bad = await client.callTool({ name: 'web_fetch', arguments: { url: 'https://127.0.0.1/' } });
   console.log('🚫 内网拦截:', bad.isError ? '被拒绝 ✓' : '⚠️ 未被拒绝（异常！）', bad.content?.[0]?.text?.slice(0, 120));
+
+  // 非 https 一律拒绝
+  const insecure = await client.callTool({ name: 'web_fetch', arguments: { url: 'http://example.com/' } });
+  console.log('🚫 非 https 拦截:', insecure.isError ? '被拒绝 ✓' : '⚠️ 未被拒绝（异常！）', insecure.content?.[0]?.text?.slice(0, 120));
 
   process.exit(0);
 } catch (error) {

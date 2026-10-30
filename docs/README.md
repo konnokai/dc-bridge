@@ -15,6 +15,7 @@
 | [guides/PRIVACY.md](guides/PRIVACY.md) | 資料會送到哪裡、哪些檔案含個資、`privacy-scan` 怎麼用 | ✅ |
 | [guides/TOKEN_USAGE_CONSOLE.md](guides/TOKEN_USAGE_CONSOLE.md) | 控制台「花費」看板：資料來源、計價口徑、API | ✅ |
 | [guides/CONSOLE-UI-TESTING.md](guides/CONSOLE-UI-TESTING.md) | 控制台離線預覽與瀏覽器回歸怎麼跑 | ✅ |
+| [guides/UPSTREAM_SYNC.md](guides/UPSTREAM_SYNC.md) | 上游對比基準：已對到哪個 commit、什麼要搬、什麼不搬 | ✅ 比對上游前先看 |
 | [guides/QQ.md](guides/QQ.md) | QQ（SnowLuma／OneBot）版說明 | 🗄️ 只作功能對照，不再部署 |
 | [../RULES.md](../RULES.md) | QQ 版權限邊界與安全承諾 | 🗄️ QQ 用 |
 | [FOLDER_MAP.md](FOLDER_MAP.md) | 目錄、腳本命名、檔案屬於哪條線 | ✅ |
@@ -42,4 +43,5 @@
 | 動安全相關程式 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) |
 | 看花了多少錢 | [guides/TOKEN_USAGE_CONSOLE.md](guides/TOKEN_USAGE_CONSOLE.md) |
 | 升級 DSH | [guides/DSH_021_ADAPTATION.md](guides/DSH_021_ADAPTATION.md) |
+| 比對上游新 commit | [guides/UPSTREAM_SYNC.md](guides/UPSTREAM_SYNC.md) |
 | QQ 版怎麼運作 | [guides/QQ.md](guides/QQ.md) |

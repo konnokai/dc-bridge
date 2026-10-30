@@ -20,6 +20,8 @@ import {
   adminLinks,
   buildInviteUrl,
   canResetConversation,
+  canAnswerPending,
+  questionAudience,
   conversationKeyFor,
   canReadMessage,
   describeToolCall,
@@ -2209,7 +2211,8 @@ async function main() {
     pending.set(key, entry);
   }
 
-  async function answerPending(p, text, key, isOwner) {
+  async function answerPending(p, text, key, isOwner, userId) {
+    if (!canAnswerPending({ kind: p.kind, isOwner, userId, askedUserIds: p.askedUserIds })) return false;
     if (p.kind === 'question') {
       try {
         await api.respond({
@@ -2225,17 +2228,13 @@ async function main() {
         log(`回答提問失敗（保留掛起以便重試）：${error?.message ?? error}`);
         await sendLong(key, '⚠️ 回答送出失敗，請再回一次。');
       }
-      return;
+      return true;
     }
 
-    if (!isOwner) {
-      await sendLong(key, '審批只有管理員能決定。');
-      return;
-    }
     const outcome = parseApprovalAnswer(text);
     if (!outcome) {
       await sendLong(key, '請回覆「通過」或「拒絕」來決定這個審批。');
-      return;
+      return true;
     }
     try {
       await api.respond({ clientId: p.clientId, eventId: p.eventId, outcome: { kind: 'result', value: outcome } });
@@ -2248,6 +2247,7 @@ async function main() {
       log(`送出審批失敗（保留掛起以便重試）：${error?.message ?? error}`);
       await sendLong(key, '⚠️ 審批送出失敗，請再回一次「通過」或「拒絕」。');
     }
+    return true;
   }
 
   // ── 事件流 ───────────────────────────────────────────────────────────────
@@ -2261,6 +2261,13 @@ async function main() {
       await cancelPendingEntry({ kind: 'question', clientId: frame.clientId, eventId: frame.eventId });
       return;
     }
+    const askedUserIds = questionAudience(turnUsers.get(key));
+    // 排程回訪、重連補建的回合沒有觸發者：貼出去只會卡到逾時，直接回空答案讓模型繼續。
+    if (!askedUserIds.length) {
+      log(`提問沒有可回答的觸發者，直接取消（${key}）`);
+      await cancelPendingEntry({ kind: 'question', clientId: frame.clientId, eventId: frame.eventId });
+      return;
+    }
     const lines = (frame.questions ?? []).map((q, i) => {
       const text = `${i + 1}. ${String(q.question ?? '')}`;
       const options = q.options ?? [];
@@ -2271,12 +2278,19 @@ async function main() {
       clientId: frame.clientId,
       eventId: frame.eventId,
       questions: frame.questions ?? [],
+      // 只讓這一輪叫 bot 的人回答。
+      askedUserIds,
     });
     // 先掛起再送出：送出失敗時至少還有一條逾時路徑會取消，不會讓 DSH 一直等。
     try {
       // 頻道裡只有叫 bot 的訊息才算回答（見 handleMessage），提示要講清楚，不然答案會被當成閒聊。
-      const how = key.startsWith('dm:') ? '直接回覆' : '@我或回覆這則訊息，';
-      await sendLong(key, `❓ agent 需要你回答：\n${lines.join('\n')}\n（${how}寫選項文字或你的回答）`);
+      // sendLong 關了 mention 解析，所以用名字點名，不用 <@id>。
+      const names = [...new Set((turnUsers.get(key) ?? [])
+        .map((user) => String(user?.name ?? '').trim()).filter(Boolean))];
+      const how = key.startsWith('dm:')
+        ? '直接回覆'
+        : `${names.length ? `${names.join('、')} ` : ''}請 @我或回覆這則訊息`;
+      await sendLong(key, `❓ agent 需要你回答：\n${lines.join('\n')}\n（${how}，寫選項文字或你的回答）`);
     } catch (error) {
       log(`送出提問失敗 (${key})：${error?.message ?? error}`);
     }
@@ -3779,18 +3793,9 @@ async function main() {
 
     if (direct) {
       const hanging = pending.get(key);
-      // 只有 @／回覆、沒有文字的空訊息不是提問或審批的答案，留給一般對話。
-      if (hanging && !emptyDirect) {
-        if (hanging.kind === 'question') {
-          await answerPending(hanging, text, key, isOwner);
-          return;
-        }
-        // 審批只有管理員能回；其他人這則訊息照常聊天，不因為「審批掛著」被吃掉。
-        if (isOwner) {
-          await answerPending(hanging, text, key, isOwner);
-          return;
-        }
-      }
+      // 提問只收這一輪被問的人；審批只收管理員。其他人的訊息照常進一般對話，不會被吃掉。
+      // 只有 @／回覆、沒有文字的空訊息不算答案，留給一般對話。
+      if (hanging && !emptyDirect && await answerPending(hanging, text, key, isOwner, message.author.id)) return;
 
       // 非管理員的斜線指令一律擋掉，不送進模型（模型會把它當一般文字回答）。
       if (text.startsWith('/') && !isOwner) {

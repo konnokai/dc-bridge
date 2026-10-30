@@ -309,6 +309,21 @@ export function canResetConversation({ isOwner, guildId, permissions }) {
   return Boolean(guildId) && Boolean(permissions?.has?.(ADMINISTRATOR));
 }
 
+/**
+ * 掛起的提問與審批誰能回答。
+ * 提問只認「這一輪叫 bot 的人」：問題是問他們的，其他人（包括管理員）不能代答。
+ * 審批是管理權限，只認 `ownerIds`。其他人的訊息照常進一般對話，不會被吃掉。
+ */
+export function canAnswerPending({ kind, isOwner, userId, askedUserIds = [] } = {}) {
+  if (kind === 'approval') return isOwner === true;
+  return askedUserIds.includes(String(userId ?? ''));
+}
+
+/** 這一輪的觸發者 → 可回答提問的 userId 清單（字串、去空、去重）。 */
+export function questionAudience(users = []) {
+  return [...new Set((users ?? []).map((user) => String(user?.userId ?? '')).filter(Boolean))];
+}
+
 /** 這個人的訊息要不要當成「沒看到」：管理員封鎖（deny.users）或自己退出（deny.self）。 */
 export function isDeniedUser(cfg, userId) {
   const id = String(userId ?? '');

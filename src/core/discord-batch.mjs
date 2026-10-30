@@ -5,13 +5,21 @@
 // 等待時間有上限（maxWaitMs）：頻道一直有人講話時，也不會無限延後。
 
 const clean = (value) => String(value ?? '')
-  .replace(/[\u0000-\u001f\u007f]/g, ' ')
+  .replace(/[\u0000-\u001f\u007f\u0085]/g, ' ')
   .replace(/\s+/g, ' ')
   .trim();
 
-// ★ 與【管理員】是橋接自己加的標記，persona 靠它們判斷「有沒有在叫你」「是不是管理員」；
-// 群友寫在暱稱或內文裡的同樣字樣要改掉，不然就能冒充。
-export const defang = (value) => String(value ?? '').replace(/【管理員】/g, '[管理員]').replace(/★/g, '☆');
+// ★ 與【】都是橋接自己加的結構標記，persona 靠它們判斷段落、「有沒有在叫你」「是不是管理員」；
+// 群友寫在暱稱或內文裡的同樣字樣要改掉，不然就能偽造段落。零寬字元也要剝掉，
+// 否則「【管\u200b理員】」看起來一樣、比對卻不同。
+// 不含 U+200C/U+200D（ZWJ）：家處 emoji 靠它連接，剝掉會拆成好幾個獨立的人。
+const ZERO_WIDTH = /[\u00ad\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g;
+export const defang = (value) => String(value ?? '')
+  .replace(/\r\n?|[\u2028\u2029\u0085]/g, '\n')
+  .replace(/【/g, '[')
+  .replace(/】/g, ']')
+  .replace(/★/g, '☆')
+  .replace(ZERO_WIDTH, '');
 
 // 有人故意把暱稱設成看不見的字，trim() 去不掉，畫面上卻是空白：U+17B5、U+3164、點字空白 U+2800、
 // Discord 常見的 U+1CBC、只有組合符號（\p{M}）沒有本字的名字。組合符號只在判斷時拿掉，泰文這類名字本字還在。
@@ -355,7 +363,7 @@ export function formatBatch(entries, { guild }) {
     // 內文保留換行：程式碼、清單壓成一行模型就看不懂了。續行縮排，
     // 群友才不能用換行在行首偽造一則「★【管理員】」。
     const text = defang(entry.text).trim().replace(/\n/g, guild ? '\n  ' : '\n');
-    const body = [text, media, defang(entry.quote)].filter(Boolean).join(' ');
+    const body = [text, media, defang(entry.quote).replace(/\n/g, ' ')].filter(Boolean).join(' ');
     // 頻道裡只有叫 bot 的那則才標管理員：管理員跟朋友聊天時也掛著標籤，模型會以為是在對它說話。
     const owner = entry.isOwner && (entry.direct || !guild) ? '【管理員】' : '';
     const ref = entry.ref ? `#${entry.ref} ` : '';
