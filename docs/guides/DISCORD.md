@@ -86,6 +86,7 @@ pm2 logs dc-bridge
 | `deny.self` | 使用者自己用 `/blacklist` 退出的名單。同樣不處理他的訊息，**唯一例外**是他 @bot 或回覆 bot 的那一則照常處理。管理員封鎖的人不能用 `/blacklist` 自己解除。控制台「白名單與媒體」卡片可以直接改這份名單 |
 | `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
+| `requireMentionInChannel` | 單頻道覆寫：`{ "頻道ID": true }` = 該頻道只能 @bot；`false` = 該頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。值必須是 JSON boolean（`"false"` 字串會被拒絕）。討論串用自己的 id，**不繼承**母頻道的覆寫（跟 `allow.channels` 一樣）；私聊不受影響。沒開 `messageContentIntent` 時一律要 @bot。控制台「設定」可以用 `頻道ID=true` 一行一個編輯 |
 | `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 3000（500~30000） |
 | `batch.maxWaitMs` | 一批從第一則算起最多等多久，預設 15000（1000~120000）；訊息一直進來也不會無限延後 |
 | `batch.maxMessages` | 一批最多幾則，滿了立刻送出，預設 20（1~50） |
@@ -211,9 +212,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 小美 ↪回覆 阿華：+1
 ```
 
-- 新會話（剛建立、`/reset`、`/reload-system-prompt` 之後）的第一批 prompt 會在【發送】前多一行【開場】，要求先用文字接一句；沒有這一行時，模型常在第一批只按 reaction、過幾批才開始說話。
+- 新會話（剛建立、`/reset`、`/reload-system-prompt` 之後）的**第一批如果有 ★**，會在【發送】前多一行【開場】，提醒先看話題接不接得上；
+  不強制用文字回：★ 接得上就說一句，接不上就按 reaction（persona 規定 ★ 一定要接到，不能跳過）；沒 ★ 的閒聊接不上就跳過。
+  第一批沒有 ★ 時不帶這行，而且開場就算用掉了，後面的 ★ 批次也不會再帶。
   只有橋接真的新建 DSH 會話才算：安靜結束（只會重帶頻道上下文）和橋接重啟（沿用 `sessions.json` 的舊會話）都不會再送【開場】。
-  prompt 送失敗或被當成斜線命令時不算用掉，下一批還會帶。
+  `/ask` 先建了會話時，它的提問不帶【開場】也不算用掉，之後第一批公開訊息照上面的規則。
+  prompt 送失敗或被當成斜線命令時不算用掉，下一批還會帶（一樣只有 ★ 批次才顯示）。
 - 訊息裡的 `<@id>`、`<@!id>`、`<#id>`、`<@&id>` 會換成 `@暱稱`、`#頻道名`、`@身分組名`
   （名字只從這則訊息的 mention 與快取取，不打 API；查不到寫「未知」，不把數字 id 給模型。
   頻道只換同一個伺服器、而且群友看得到的名字，避免洩漏別服或私密頻道）。
@@ -231,6 +235,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   模型照 persona 的規則一定會回。
 - **`requireMentionInGuild: false`（自由參與）**：頻道裡允許的訊息全部進批次。沒有 ★ 的是大家在聊，
   persona 規定預設不說話，只有真的有話想接才呼叫發送工具；有 ★ 的照樣要回。
+  - 單頻道可以用 `requireMentionInChannel` 覆寫：`{ "頻道ID": true }` = 這個頻道只能 @bot，
+    `false` = 這個頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。
   - 只有批次裡有 ★ 時才會亮「正在輸入」，也只有這時才送 `ackMessage`。
   - 提問的回答、非管理員 `/` 的拒絕訊息只認 ★ 的訊息；其餘文字（含 `!xxx`）就是一般聊天。
   - 沒有 ★ 的那批出錯（模型不可用、DSH 拒收、回合被中止）只記日誌，不在頻道貼錯誤訊息。
@@ -248,7 +254,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度；生圖 preset 開著時再加一行 Codex 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
-| `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。沒開 Message Content 意圖時不能切換（一定得 @bot） |
+| `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**；個別頻道的 `requireMentionInChannel` 優先。沒開 Message Content 意圖時不能切換（一定得 @bot） |
 | `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。前面還有回合時會排進同一條會話佇列，不會直接拒絕；等待期間這個頻道的一般訊息排到問完才送。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
 | `/forget` | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶與觸發統計，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
@@ -380,8 +386,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
 - **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
 - **設定**（`#settings`）
-  - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）直接編輯，
-    存檔後**立即生效**並寫回 `config.json`。沒開 `messageContentIntent` 時勾選框鎖住（一律要 @bot）
+  - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
+    `requireMentionInChannel`（一行一個 `頻道ID=true|false`）直接編輯，存檔後**立即生效**並寫回 `config.json`。
+    沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）
   - **表情目錄**：每個伺服器的表情條目數，可手動更新
   - **邀請機器人**：產生含目前功能權限的邀請連結，可開啟或複製
 - **日誌**（`#logs`）：最近 200 行（記憶體 ring buffer，重啟就清空）

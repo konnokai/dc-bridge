@@ -32,6 +32,7 @@ import {
   isTransientDshError,
   loadSessions,
   matchesTerms,
+  requireMentionForChannel,
   searchTerms,
   normalizeDiscordConfig,
   parseApprovalAnswer,
@@ -2091,8 +2092,8 @@ async function main() {
     },
   });
 
-  /** 佇列對不上（漏了 turn/start、重連）時的保守預設：私聊與 @ 模式本來就每批都在叫 bot。 */
-  const defaultDirect = (key) => key.startsWith('dm:') || requireMentionInGuild();
+  /** 佇列對不上（漏了 turn/start、重連）時的保守預設：私聊與 @ 模式頻道本來就每批都在叫 bot。 */
+  const defaultDirect = (key) => requireMentionFor(key);
 
   function startTyping(key, channel) {
     if (!cfg.discord.typing || !channel) return;
@@ -2802,6 +2803,8 @@ async function main() {
 
   // 沒開 Message Content 意圖時，Discord 只會把 @bot 的訊息內容送來，所以強制走 @ 模式。
   const requireMentionInGuild = () => cfg.discord.requireMentionInGuild || !cfg.discord.messageContentIntent;
+  // 單頻道覆寫優先；私聊一律算 direct。
+  const requireMentionFor = (key) => !key.startsWith('ch:') || requireMentionForChannel(cfg.discord, key.slice(3));
 
   /**
    * 一批訊息 → prompt 文字與圖片。附件、引用、上下文都在投遞時才抓：
@@ -2888,7 +2891,7 @@ async function main() {
     // 之後每一則都已經進過會話，再帶只是重複燒 token。
     let context = '';
     const wantContext = guild && cfg.discord.context.enabled && cfg.discord.context.messages > 0
-      && (requireMentionInGuild() || quietAt || !primedKeys.has(key));
+      && (requireMentionFor(key) || quietAt || !primedKeys.has(key));
     if (wantContext) {
       try {
         // 從最後一則往前抓，再扣掉批次自己的訊息：@ 模式下兩則 @ 之間的閒聊也要看得到。
@@ -3043,10 +3046,11 @@ async function main() {
     const sendHint = '【發送】要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。token 由系統自動帶入，不要自己填。不呼叫就是這次不說話；直接輸出文字不會送出。';
     // 換 system prompt 後的第一次發言：先把上一段對話的記憶放在最前面。
     const reload = peekReloadSummary(reloadStore, key);
-    // 新會話的第一批：模型剛重置、還沒有自己的發言紀錄，容易只按 reaction 不說話。
-    // 只看「是不是新會話」，不要用 primedKeys：安靜結束也會清掉 primedKeys（為了重帶上下文），
+    // 新會話的第一批，而且這批真的有人叫 bot（★）：給一句「先看話題接不接得上」。
+    // 不要求它一定要說話；沒 ★ 的批次連提示都不帶，避免自由參與頻道被催著開口。
+    // 只看「是不是新會話」：安靜結束也會清掉 primedKeys（為了重帶上下文），
     // 拿它判斷開場會在每次安靜後再叫模型主動說話一次。
-    const opening = needsOpening.has(key) ? `\n${OPENING_HINT}` : '';
+    const opening = needsOpening.has(key) && job.direct ? `\n${OPENING_HINT}` : '';
     const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
@@ -3096,7 +3100,8 @@ async function main() {
       if (command.text) await sendLong(key, command.text);
       return false;
     }
-    // 開場提示真的跟著 prompt 進模型了才算用掉；送失敗或斜線命令都不算。
+    // 第一批 prompt 真的進模型了才算用掉；送失敗或斜線命令都不算。
+    // 第一批沒 ★（沒帶開場）也一樣用掉：開場只給新會話的第一批，不留到後面的 ★ 批次。
     needsOpening.delete(key);
     // prompt 真的進 DSH 了才用掉交接摘要；送失敗時下一則還會再帶一次。
     if (reload && takeReloadSummary(reloadStore, key)) {
@@ -3778,7 +3783,7 @@ async function main() {
       // 沒叫 bot：偶爾留一個 reaction。預設模式到此為止；自由參與才送進批次讓模型決定。
       // 安靜期間連自動 reaction 都停，批次也直接丟掉（黑話語料上面已經收過）。
       if (!quietAt && text) await maybeReact(message, key, rawText).catch((error) => log(`表情反應失敗：${error?.message ?? error}`));
-      if (requireMentionInGuild() || isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
+      if (requireMentionFor(key) || isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
     }
 
     const stickers = stickerLabel(message.stickers);
@@ -4023,7 +4028,7 @@ async function main() {
         return;
       }
       const mode = requireMentionInGuild() ? '頻道要 @bot 或回覆 bot 才回' : '自由參與（模型自己決定要不要接話）';
-      await interaction.editReply(`已切換成：${mode}。這個設定所有伺服器共用。`);
+      await interaction.editReply(`已切換成：${mode}。這個設定所有伺服器共用；個別頻道的 requireMentionInChannel 優先。`);
       return;
     }
     await interaction.editReply('未知的指令。');
@@ -4130,6 +4135,7 @@ async function main() {
       ownerIds: cfg.discord.ownerIds,
       media: cfg.discord.media,
       requireMentionInGuild: cfg.discord.requireMentionInGuild,
+      requireMentionInChannel: cfg.discord.requireMentionInChannel,
       // 唯讀：改這些要重啟橋接或重生 preset
       messageContentIntent: cfg.discord.messageContentIntent,
       agentPreset: cfg.discord.agentPreset,
@@ -4140,7 +4146,7 @@ async function main() {
   }
 
   async function updateConfig(patch) {
-    // 只接受白名單、黑名單、ownerIds、media、requireMentionInGuild；其餘欄位一律沿用目前值。
+    // 只接受白名單、黑名單、ownerIds、media、requireMentionInGuild／InChannel；其餘欄位一律沿用目前值。
     // 整份候選設定都過一次 normalizeDiscordConfig：ID 格式、數字範圍都在那裡擋。
     const next = normalizeDiscordConfig({
       ...cfg.discord,
@@ -4153,6 +4159,7 @@ async function main() {
       requireMentionInGuild: typeof patch?.requireMentionInGuild === 'boolean'
         ? patch.requireMentionInGuild
         : cfg.discord.requireMentionInGuild,
+      requireMentionInChannel: patch?.requireMentionInChannel ?? cfg.discord.requireMentionInChannel,
     });
 
     // 先寫檔再改記憶體：寫檔失敗時直接拋錯，設定和檔案都還是舊的。
@@ -4165,22 +4172,27 @@ async function main() {
       ownerIds: next.ownerIds,
       media: next.media,
       requireMentionInGuild: next.requireMentionInGuild,
+      requireMentionInChannel: next.requireMentionInChannel,
     };
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
     fs.renameSync(tmp, CONFIG_FILE);
 
-    // 切到自由參與：讓每個頻道下一批重新帶一次上下文，@ 模式期間沒叫 bot 的閒聊，模型沒看過。
-    if (cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) primedKeys.clear();
+    // 切到自由參與（或改了單頻道覆寫）：讓受影響的頻道下一批重新帶一次上下文，
+    // @ 模式期間沒叫 bot 的閒聊，模型沒看過。這裡一次清全部，設定變更不常發生。
+    const mentionMapChanged = JSON.stringify(cfg.discord.requireMentionInChannel)
+      !== JSON.stringify(next.requireMentionInChannel);
+    if ((cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) || mentionMapChanged) primedKeys.clear();
     cfg.discord.allow = next.allow;
     cfg.discord.deny = next.deny;
     cfg.discord.ownerIds = next.ownerIds;
     cfg.discord.media = next.media;
     cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
+    cfg.discord.requireMentionInChannel = next.requireMentionInChannel;
     ownerIds.clear();
     for (const id of next.ownerIds) ownerIds.add(id);
 
-    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}`);
+    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}`);
     return editableConfig();
   }
 
@@ -4240,6 +4252,8 @@ async function main() {
             ownerIds: [...ownerIds],
             media: cfg.discord.media,
             requireMention: requireMentionInGuild(),
+            // 沒開意圖時覆寫不生效，算 0，免得總覽看起來有頻道在自由參與。
+            mentionOverrides: cfg.discord.messageContentIntent ? Object.keys(cfg.discord.requireMentionInChannel).length : 0,
             emoji: {
               guilds: emojiCatalogs.size,
               entries: [...emojiCatalogs.values()].reduce((sum, catalog) => sum + (catalog.entries?.length ?? 0), 0),

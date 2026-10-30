@@ -75,6 +75,10 @@ console.log('## Discord 控制台');
   const dcDups = [...new Set(dcIds.filter((v, i) => dcIds.indexOf(v) !== i))];
   ok(dcDups.length === 0, 'discord-console.html ID 唯一', dcDups.length ? `重复：${dcDups.join(', ')}` : `共 ${dcIds.length} 个`);
   ok(/<select id="style-channel"[^>]*aria-label="頻道"/.test(dc), '频道风格卡片有频道下拉选单');
+  ok(/id="require-mention-channels"/.test(dc), '設定有單頻道 requireMentionInChannel 欄位');
+  ok(/\.\.\.\(\$\('require-mention'\)\.disabled \? \{\} : \{[^}]*requireMentionInChannel:/.test(dc),
+    '沒開意圖（勾選框鎖住）時不送 requireMentionInChannel，不蓋掉 config.json');
+  ok(/mentionOverrides/.test(dc), '總覽的頻道模式列出單頻道覆寫數');
   ok(/id="notes-count"/.test(dc) && /id="note-rows"/.test(dc), '頻道筆記卡片有計數與表格');
   ok(/api\('\/api\/notes'\)/.test(dc) && /api\('\/api\/notes\/delete'/.test(dc), '頻道筆記卡片接上查詢與刪除端點');
   ok(/table\s*\{[^}]*table-layout:\s*fixed/.test(dc), '所有表格固定欄寬');

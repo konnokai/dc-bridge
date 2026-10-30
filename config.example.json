@@ -27,6 +27,7 @@
     },
     "allowAllWhenEmpty": false,
     "requireMentionInGuild": true,
+    "requireMentionInChannel": {},
     "messageContentIntent": true,
     "ackMessage": "",
     "maxMessageChars": 2000,

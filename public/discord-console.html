@@ -185,6 +185,9 @@
         requireMentionInGuild：頻道要 @bot 或回覆 bot 才回（取消勾選＝自由參與）
       </label>
       <p id="require-mention-note" class="muted" style="grid-column:1/-1;margin:0" hidden>沒開 messageContentIntent：收不到沒 @bot 的訊息內容，一律要 @bot。</p>
+      <label style="grid-column:1/-1">requireMentionInChannel（一行一個：頻道ID=true／false。true = 只能 @bot；false = 自由參與；沒列出的頻道跟上面的預設）
+        <textarea id="require-mention-channels" placeholder="123456789012345678=true"></textarea>
+      </label>
       <label>allow.guilds<textarea id="allow-guilds" placeholder="一行一個 ID"></textarea></label>
       <label>allow.channels<textarea id="allow-channels" placeholder="一行一個 ID"></textarea></label>
       <label>allow.users（私聊）<textarea id="allow-users" placeholder="一行一個 ID"></textarea></label>
@@ -419,6 +422,15 @@
     return new Date(ts).toLocaleString();
   };
   const lines = (value) => String(value ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+  function parseMentionChannels(value) {
+    const out = {};
+    for (const raw of lines(value)) {
+      const match = raw.match(/^(\d{5,25})\s*=\s*(true|false)$/i);
+      if (!match) throw new Error(`requireMentionInChannel 這行看不懂：${raw}（要 頻道ID=true 或 false）`);
+      out[match[1]] = match[2].toLowerCase() === 'true';
+    }
+    return out;
+  }
 
   function showGate(message) {
     $('app').classList.add('hidden');
@@ -465,7 +477,7 @@
       ['會話', s.sessions + ' 個｜等待回答 ' + s.pending + '｜離線佇列 ' + (s.queue ?? 0) + ' 條'],
       ['白名單', 'guilds ' + s.allow.guilds + '｜channels ' + s.allow.channels + '｜users ' + s.allow.users],
       ['管理員', s.ownerIds.length ? s.ownerIds.join(', ') : '未設定'],
-      ['頻道模式', s.requireMention ? '要 @bot 才回' : '自由參與'],
+      ['頻道模式', (s.requireMention ? '要 @bot 才回' : '自由參與') + (s.mentionOverrides ? '（' + s.mentionOverrides + ' 個頻道覆寫）' : '')],
       ['圖片', s.media.enabled ? ('≤' + Math.round(s.media.maxBytes / 1048576) + 'MB，長邊 ≤' + s.media.maxLongEdge + '，最多 ' + s.media.maxCount + ' 張') : '關閉'],
       ['表情目錄', (s.emoji?.entries ?? 0) + ' 條／' + (s.emoji?.guilds ?? 0) + ' 個伺服器'],
       ['黑話', s.slang ? (s.slang.enabled ? ('待確認 ' + s.slang.candidate + '｜已確認 ' + s.slang.confirmed) : '關閉') : '—'],
@@ -1068,6 +1080,9 @@
     $('require-mention').checked = c.requireMentionInGuild || !c.messageContentIntent;
     $('require-mention').disabled = !c.messageContentIntent;
     $('require-mention-note').hidden = c.messageContentIntent;
+    $('require-mention-channels').value = Object.entries(c.requireMentionInChannel ?? {})
+      .map(([id, on]) => `${id}=${on}`).join('\n');
+    $('require-mention-channels').disabled = !c.messageContentIntent;
   }
 
   async function loadConfig() {
@@ -1360,7 +1375,10 @@
             timeoutMs: Number($('media-timeout').value),
           },
           // disabled 時沒得選，不送，免得把 config.json 裡原本的值蓋掉
-          ...($('require-mention').disabled ? {} : { requireMentionInGuild: $('require-mention').checked }),
+          ...($('require-mention').disabled ? {} : {
+            requireMentionInGuild: $('require-mention').checked,
+            requireMentionInChannel: parseMentionChannels($('require-mention-channels').value),
+          }),
         }),
       });
       fillConfig(result.config);

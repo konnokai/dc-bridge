@@ -36,6 +36,7 @@ import {
   normalizeDiscordConfig,
   parseApprovalAnswer,
   questionAnswersFor,
+  requireMentionForChannel,
   saveSessions,
   shouldHandleGuildMessage,
   splitDiscordMessage,
@@ -125,6 +126,24 @@ console.log('## 1. 設定收斂');
   ok(cfg.agentPreset === 'dc-chat', '預設 preset = dc-chat');
   ok(cfg.allowAllWhenEmpty === false, '白名單空時預設全擋（fail-closed）');
   ok(cfg.requireMentionInGuild === true, '頻道預設要 @bot');
+  ok(Object.keys(cfg.requireMentionInChannel).length === 0, '單頻道覆寫預設空');
+  const override = normalizeDiscordConfig({
+    requireMentionInChannel: { '111111111111111111': true, '222222222222222222': false },
+  });
+  ok(override.requireMentionInChannel['111111111111111111'] === true, '單頻道覆寫 true 保留');
+  ok(override.requireMentionInChannel['222222222222222222'] === false, '單頻道覆寫 false 保留');
+  throws(() => normalizeDiscordConfig({ requireMentionInChannel: { abc: true } }), /頻道 ID/, '單頻道覆寫 key 必須是 ID');
+  throws(() => normalizeDiscordConfig({ requireMentionInChannel: { '111111111111111111': 'yes' } }), /true 或 false/, '單頻道覆寫值必須是 boolean');
+  throws(() => normalizeDiscordConfig({ requireMentionInChannel: ['111111111111111111'] }), /必須是物件/, '單頻道覆寫不能是陣列');
+  ok(Object.keys(normalizeDiscordConfig({ requireMentionInChannel: null }).requireMentionInChannel).length === 0, '單頻道覆寫 null 當成空');
+  const mentionOn = normalizeDiscordConfig({ requireMentionInGuild: true, requireMentionInChannel: { '111111111111111111': false, '222222222222222222': true } });
+  ok(requireMentionForChannel(mentionOn, '111111111111111111') === false, '單頻道 false = 自由參與');
+  ok(requireMentionForChannel(mentionOn, '222222222222222222') === true, '單頻道 true = 要 @bot');
+  ok(requireMentionForChannel(mentionOn, '333333333333333333') === true, '沒覆寫跟 guild 預設');
+  const mentionOff = normalizeDiscordConfig({ requireMentionInGuild: false });
+  ok(requireMentionForChannel(mentionOff, '333333333333333333') === false, 'guild 自由參與時沒覆寫是 false');
+  ok(requireMentionForChannel({ ...mentionOff, messageContentIntent: false }, '333333333333333333') === true,
+    '沒開 Message Content 意圖一律要 @bot');
   ok(cfg.messageContentIntent === true, '預設申請 Message Content 意圖');
   ok(cfg.maxMessageChars === DISCORD_MAX_CHARS, '單則上限預設 2000');
   ok(cfg.notes.enabled === false && cfg.notes.injectMax === 5 && cfg.notes.maxChars === 600,
@@ -2930,11 +2949,20 @@ console.log('## 10. 引用、上下文、出站閘門');
     '最近頻道訊息的內文也過 defang');
   ok(formatRecentContext([], { maxMessages: 10, maxChars: 100 }) === '', '空上下文回空字串');
 
-  // 會話剛重置時，模型沒有自己的發言紀錄，常在第一批只按 reaction；第一批 prompt 要明講先用文字接話。
-  ok(OPENING_HINT.includes('send_message') && OPENING_HINT.includes('不要只按 reaction'), '開場提醒要求用文字回話');
+  // 會話剛重置時，模型沒有自己的發言紀錄；第一批有 ★ 時提醒先看話題，不強制用文字回。
+  // 但 persona 規定每則 ★ 都要接到（回一句或按 reaction），開場不能叫它跳過 ★。
+  ok(OPENING_HINT.includes('接得上'), '開場提醒先看話題');
+  const starRule = OPENING_HINT.split('。').find((sentence) => sentence.includes('★')) ?? '';
+  ok(starRule.includes('reaction') && !starRule.includes('跳過'), '開場提醒：★ 接不上可以按 reaction，不能跳過');
   const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  ok(bridgeSource.includes('needsOpening.has(key)') && bridgeSource.includes('${OPENING_HINT}'),
-    '開場提醒只在新會話第一批注入');
+  ok(bridgeSource.includes('needsOpening.has(key) && job.direct'), '開場只在新會話且有 ★ 的批次注入');
+  // 單頻道覆寫：判斷「要不要 @bot」的地方都要走 requireMentionFor，不能留全域的 requireMentionInGuild()。
+  ok(bridgeSource.includes('const defaultDirect = (key) => requireMentionFor(key)'), '回合預設 direct 看單頻道設定');
+  ok(bridgeSource.includes('(requireMentionFor(key) || quietAt || !primedKeys.has(key))'), '頻道上下文看單頻道設定');
+  ok(bridgeSource.includes('if (requireMentionFor(key) || isQuietBatchSkipped('), '非 ★ 訊息進不進批次看單頻道設定');
+  ok(!/requireMentionInGuild\(\) \|\| (quietAt|isQuietBatchSkipped)/.test(bridgeSource)
+    && !bridgeSource.includes("key.startsWith('dm:') || requireMentionInGuild()"), '判斷點沒有殘留全域 requireMentionInGuild()');
+  ok(bridgeSource.includes('mentionMapChanged) primedKeys.clear()'), '改單頻道覆寫要清 primedKeys，下一批重帶上下文');
   ok(!bridgeSource.includes("primedKeys.has(key) ? '' :"),
     '安靜結束清掉 primedKeys 時不能重送開場提醒');
   const openingAdd = bridgeSource.indexOf('needsOpening.add(key)');

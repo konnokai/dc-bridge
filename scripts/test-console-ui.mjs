@@ -839,6 +839,65 @@ try {
     }
   });
 
+  await test('Discord 控制台：單頻道 requireMentionInChannel 讀寫，沒開意圖時鎖住且不送', async () => {
+    const posts = [];
+    let current = {
+      allow: {}, deny: {}, ownerIds: [], media: {},
+      requireMentionInGuild: true, messageContentIntent: true,
+      requireMentionInChannel: { '111111111111111111': false },
+    };
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, requireMention: true, mentionOverrides: 1, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        sessions: () => [],
+        config: () => current,
+        updateConfig: async (body) => { posts.push(body); return current; },
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1204, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      const base = `http://127.0.0.1:${dc.server.address().port}/?token=t`;
+      await p.goto(`${base}#settings`);
+      const box = p.locator('#require-mention-channels');
+      await p.waitForFunction(() => document.querySelector('#require-mention-channels').value === '111111111111111111=false');
+      await p.locator('#tabbtn-overview').click();
+      await p.waitForFunction(() => document.body.textContent.includes('1 個頻道覆寫'));
+      await p.locator('#tabbtn-settings').click();
+      const submit = () => p.locator('#config-form button[type="submit"]').click();
+
+      await box.fill('111111111111111111 = TRUE\n\n222222222222222222=false');
+      await submit();
+      await p.waitForFunction(() => document.querySelector('#config-msg').textContent.includes('已儲存'));
+      assert.deepEqual(posts.at(-1).requireMentionInChannel, { '111111111111111111': true, '222222222222222222': false });
+      assert.equal(posts.at(-1).requireMentionInGuild, true);
+
+      await box.fill('abc=true');
+      await submit();
+      await p.waitForFunction(() => document.querySelector('#config-msg').textContent.includes('看不懂'));
+      assert.equal(posts.length, 1, '格式錯就不送出');
+
+      current = { ...current, messageContentIntent: false };
+      await p.goto(`${base}#settings`);
+      await p.waitForFunction(() => document.querySelector('#require-mention-channels').disabled);
+      await submit();
+      await p.waitForFunction(() => document.querySelector('#config-msg').textContent.includes('已儲存'));
+      assert.equal(posts.length, 2);
+      assert(!('requireMentionInChannel' in posts[1]) && !('requireMentionInGuild' in posts[1]), '鎖住時兩個 mention 欄位都不送');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('No JavaScript errors, unknown API routes or external requests', async () => {
     assert.deepEqual(errors, []);
     assert.deepEqual(fixture.unknownRequests, []);

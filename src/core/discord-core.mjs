@@ -99,6 +99,8 @@ export function normalizeDiscordConfig(raw) {
     },
     allowAllWhenEmpty: src.allowAllWhenEmpty === true,
     requireMentionInGuild: src.requireMentionInGuild !== false,
+    // 單頻道覆寫：{ "頻道ID": true } = 只能 @bot；false = 自由參與；沒列出的頻道跟 guild 預設。
+    requireMentionInChannel: booleanMap(src.requireMentionInChannel, 'discord.requireMentionInChannel'),
     messageContentIntent: src.messageContentIntent !== false,
     ackMessage: typeof src.ackMessage === 'string' ? src.ackMessage : '',
     maxMessageChars: clamp(src.maxMessageChars, DISCORD_MAX_CHARS, 200, DISCORD_MAX_CHARS),
@@ -235,6 +237,31 @@ function idList(value, label) {
     if (!/^\d{5,25}$/.test(id)) throw new TypeError(`${label} 含非法 Discord ID：${JSON.stringify(item)}`);
     return id;
   });
+}
+
+function booleanMap(value, label) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} 必須是物件：{ "頻道ID": true|false }`);
+  }
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    const id = String(key).trim();
+    if (!/^\d{5,25}$/.test(id)) throw new TypeError(`${label} 的 key 必須是 Discord 頻道 ID：${JSON.stringify(key)}`);
+    if (typeof item !== 'boolean') throw new TypeError(`${label}.${id} 必須是 true 或 false`);
+    out[id] = item;
+  }
+  return out;
+}
+
+/**
+ * 這個頻道要不要 @bot 才處理：單頻道設定優先，沒設定才跟 guild 預設。
+ * 沒開 Message Content 意圖時 Discord 根本收不到沒 @ 的內容，一律強制 true。
+ */
+export function requireMentionForChannel(cfg, channelId) {
+  if (!cfg?.messageContentIntent) return true;
+  const override = cfg?.requireMentionInChannel?.[String(channelId ?? '')];
+  return typeof override === 'boolean' ? override : cfg?.requireMentionInGuild !== false;
 }
 
 /**
