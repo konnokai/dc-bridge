@@ -1559,10 +1559,16 @@ async function main() {
         `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
         `內容：${flat(labelEmojiTags(resolveMentions(withStickers(target), target), emojiCatalogs), VIEW_TEXT_MAX) || '（沒有文字）'}`,
       ];
+      let repliedMessage = null;
       try {
         // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它就看不懂在回什麼。
         const replied = await referencedMessage(target);
-        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
+        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) {
+          repliedMessage = replied;
+          lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
+          // 被回覆的那則本身可能是 embed（例如其他 bot 的圖文），只寫「沒有文字」會讓模型看不到內容。
+          lines.push(...embedLines(replied.embeds, replied, '回覆的連結預覽'));
+        }
       } catch { /* 被回覆的那則刪了就不寫 */ }
       for (const snapshot of target.messageSnapshots?.values() ?? []) {
         lines.push(`轉發的內容：${flat(labelEmojiTags(resolveMentions(withStickers(snapshot), snapshot), emojiCatalogs), 500) || '[沒有文字]'}`);
@@ -1604,6 +1610,7 @@ async function main() {
       // 圖片：附件、貼圖、連結預覽（只用 Discord 代理過的網址），一起下載、各自失敗只少那張。
       const embedItems = [
         ...embedImages(target.embeds),
+        ...(repliedMessage ? embedImages(repliedMessage.embeds) : []),
         ...fixMessages.flatMap((message) => embedImages(message.embeds)),
       ];
       const media = collectMediaAttachments([...(target.attachments?.values() ?? []), ...stickerImages(target.stickers), ...embedItems], cfg.discord.media);

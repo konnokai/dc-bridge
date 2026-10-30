@@ -274,7 +274,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 它會排進這個頻道的同一條會話佇列，不會因為前面還有回合就直接拒絕：
 
 1. 等前面的回合結束，用目前的 DSH 會話產生一段對話總結（這是後台回合，不會貼到頻道，也不會公開）。
-2. 把總結存進 `state/discord-reload-summaries.json`。
+2. 把總結存進 `state/discord-reload-summaries.json`。摘要以 600 字為目標，硬上限 1200 字；真的超過才會截斷。
 3. 停掉並歸檔舊會話（跟 `/reset` 一樣）。
 4. 排隊中的頻道訊息會留在 bridge，重載完成後送進新會話；新會話的第一則一般 prompt 開頭會帶上總結，當成「最近對話的記憶」；同一份只用一次。
 

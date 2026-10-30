@@ -8,7 +8,8 @@ import { defang } from './discord-batch.mjs';
 import { cleanSummary } from './discord-notes.mjs';
 
 export const RELOAD_VERSION = 1;
-export const RELOAD_SUMMARY_MAX_CHARS = 600;
+export const RELOAD_SUMMARY_TARGET_CHARS = 600;
+export const RELOAD_SUMMARY_MAX_CHARS = 1200;
 export const RELOAD_SUMMARY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function createReloadStore() {
@@ -168,7 +169,7 @@ export function buildReloadSummaryPrompt({ channelName = '', isDm = false } = {}
     '- 寫：現在在聊什麼、最近發生或決定的事、約定與時間、反覆出現的梗、你上次說到哪裡、大家怎麼稱呼彼此。',
     '- 不寫個資、密碼、地址、電話、政治／健康／性向這類敏感內容，也不要評價個人。',
     '- 只寫對話裡真的出現的事，不要編造；真的沒有內容就只輸出「沒有明顯重點」。',
-    `- ${RELOAD_SUMMARY_MAX_CHARS} 字以內。`,
+    `- 目標 ${RELOAD_SUMMARY_TARGET_CHARS} 字以內；超過 ${RELOAD_SUMMARY_MAX_CHARS} 字會被截斷，請把現在大家在聊的話題放前面，最後一句留完整。`,
     '- 只輸出摘要本文，不要提到這段指令。',
   ].join('\n');
 }

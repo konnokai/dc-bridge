@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   RELOAD_SUMMARY_MAX_AGE_MS,
   RELOAD_SUMMARY_MAX_CHARS,
+  RELOAD_SUMMARY_TARGET_CHARS,
   buildReloadSummaryPrompt,
   clearReloadSummaryOrThrow,
   createReloadStore,
@@ -102,6 +103,9 @@ console.log('## 4. 總結指令');
   ok(buildReloadSummaryPrompt({ isDm: true }).includes('這個私聊'), '私聊版');
   ok(channel.includes('只輸出摘要本文') && channel.includes('沒有明顯重點'), '有輸出格式與空摘要規則');
   ok(channel.includes('- 不寫個資'), '有敏感內容規則');
+  ok(channel.includes(`${RELOAD_SUMMARY_TARGET_CHARS} 字以內`), `prompt 目標 ${RELOAD_SUMMARY_TARGET_CHARS} 字`);
+  ok(RELOAD_SUMMARY_MAX_CHARS > RELOAD_SUMMARY_TARGET_CHARS,
+    `硬上限 ${RELOAD_SUMMARY_MAX_CHARS} 字，留給模型 overshoot 的空間`);
 }
 
 console.log('## 5. 所有權與 reset 清除');
