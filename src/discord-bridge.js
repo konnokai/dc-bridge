@@ -128,6 +128,7 @@ import {
   resolveGeneratedImage,
   stickerImages,
   stickerLabel,
+  viewMediaItems,
 } from './core/discord-media.mjs';
 import { fetchStreamUrl, videoLinks } from './core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
@@ -1617,13 +1618,9 @@ async function main() {
       if (reactions.length) lines.push(`reaction：${reactions.join(' ')}`);
       if (!target.content && !self && !cfg.discord.messageContentIntent) lines.push('（沒開 Message Content 意圖，可能讀不到文字）');
 
-      // 圖片：附件、貼圖、連結預覽（只用 Discord 代理過的網址），一起下載、各自失敗只少那張。
-      const embedItems = [
-        ...embedImages(target.embeds),
-        ...(repliedMessage ? embedImages(repliedMessage.embeds) : []),
-        ...fixMessages.flatMap((message) => embedImages(message.embeds)),
-      ];
-      const media = collectMediaAttachments([...(target.attachments?.values() ?? []), ...stickerImages(target.stickers), ...embedItems], cfg.discord.media);
+      // 圖片：本則與被回覆那則的附件與連結預覽、貼圖（只用 Discord 代理過的網址），
+      // 一起下載、各自失敗只少那張。
+      const media = collectMediaAttachments(viewMediaItems({ target, replied: repliedMessage, fixMessages }), cfg.discord.media);
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
         const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media);
         if (!prepared.block) throw new Error(prepared.error);

@@ -292,3 +292,19 @@ export function describeSkipped(skipped) {
   const items = skipped.map((s) => `${safeName(s.name)}（${s.reason}）`).join('；');
   return `\n[附件未送給模型：${items}]`;
 }
+
+/**
+ * view_message 的圖片來源：本則附件、被回覆那則的附件、本則貼圖，
+ * 以及本則、被回覆那則、修復 bot 補上的連結預覽。
+ * 被回覆那則的附件也要帶：引文只留 300 字，原圖只有這裡看得到。
+ */
+export function viewMediaItems({ target, replied = null, fixMessages = [] } = {}) {
+  return [
+    ...(target?.attachments?.values?.() ?? []),
+    ...(replied?.attachments?.values?.() ?? []),
+    ...stickerImages(target?.stickers),
+    ...embedImages(target?.embeds),
+    ...embedImages(replied?.embeds),
+    ...fixMessages.flatMap((message) => embedImages(message.embeds)),
+  ];
+}

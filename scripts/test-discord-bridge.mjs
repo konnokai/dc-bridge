@@ -49,6 +49,7 @@ import {
   resolveGeneratedImage,
   stickerImages,
   stickerLabel,
+  viewMediaItems,
 } from '../src/core/discord-media.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { fetchStreamUrl, parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
@@ -2311,6 +2312,15 @@ console.log('## 8. 附件（圖片與影片）');
   ok(collectMediaAttachments(embedImages([{ image: { proxyURL: 'https://evil.example.com/x.gif' } }]), limits).accepted.length === 0,
     '代理網址仍然要過 Discord CDN 白名單');
   ok(embedImages(undefined).length === 0, '沒有 embed 回空陣列');
+
+  // 引文不帶圖，要看被引用那則的原圖只能靠 view_message：圖片來源要把被回覆那則的附件也算進去。
+  const viewed = viewMediaItems({
+    target: { attachments: [att({ name: 'reply.png' })], embeds: [] },
+    replied: { attachments: [att({ name: 'quoted.jpg', contentType: 'image/jpeg' })], embeds: [] },
+  });
+  ok(viewed.length === 2, 'view_message 的圖片來源含本則與被回覆那則的附件');
+  ok(collectMediaAttachments(viewed, limits).accepted.length === 2, '被回覆那則的附件照同一套規則把關');
+  ok(viewMediaItems({ target: {} }).length === 0, '沒有附件、貼圖、embed 就沒有圖');
 
   await assert.rejects(() => fetchDiscordMedia('https://evil.example.com/x.png', limits), /非 Discord CDN/);
   await assert.rejects(() => fetchDiscordMedia('http://cdn.discordapp.com/x.png', limits), /非 Discord CDN/);
