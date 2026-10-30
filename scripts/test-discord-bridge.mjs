@@ -2465,6 +2465,8 @@ console.log('## 9. 控制台');
 console.log('## 10. 引用、上下文、出站閘門');
 {
   ok(formatQuote({ author: '小明', content: '你好' }) === '[引用 小明：你好]', '引用格式');
+  ok(formatQuote({ ref: 'k7f3ab', author: '小明', content: '你好' }) === '[引用 #k7f3ab 小明：你好]',
+    '引用帶被引用那則的 #編號，模型才能用 view_message 看全文');
   ok(formatQuote({ author: '小明', content: '', hasImage: true }) === '[引用 小明：[圖片]]', '引用只有圖片');
   ok(formatQuote({}) === '', '空引用回空字串');
   const longQuote = formatQuote({ author: 'a', content: 'x'.repeat(500) });

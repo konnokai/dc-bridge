@@ -362,5 +362,5 @@ export function formatBatch(entries, { guild }) {
     return `${ref}${entry.direct ? '★' : ''}${owner}${clean(defang(entry.author)) || '未知'}${reply}：${body}`;
   });
   if (!guild) return lines.join('\n');
-  return `【新訊息】（★ = 在叫你：@你或回覆你；#編號 用來指定要回覆或按 reaction 的訊息）\n${lines.join('\n')}`;
+  return `【新訊息】（★ = 在叫你：@你或回覆你；#編號 用來指定要回覆、查看或按 reaction 的訊息）\n${lines.join('\n')}`;
 }

@@ -2693,6 +2693,7 @@ async function main() {
         // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它模型看不懂在回什麼。
         if (referenced && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
+            ref: messageRefs.register(key, referenced.id),
             author: authorName(referenced),
             content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
             hasImage: referenced.attachments?.size > 0,

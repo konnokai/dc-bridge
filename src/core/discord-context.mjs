@@ -14,12 +14,15 @@ const clean = (value) => String(value ?? '')
 
 const cut = (value, max) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
-/** 引用訊息的一行摘要；沒有內容也沒有圖片就回空字串。 */
-export function formatQuote({ author, content, hasImage } = {}) {
+/**
+ * 引用訊息的一行摘要；沒有內容也沒有圖片就回空字串。
+ * ref 是被引用那則的 #編號：原文只留 300 字，模型要用 view_message 看全文或看附件時靠它。
+ */
+export function formatQuote({ ref, author, content, hasImage } = {}) {
   const who = clean(author) || '未知';
   const text = clean(content) || (hasImage ? '[圖片]' : '');
   if (!text) return '';
-  return `[引用 ${who}：${cut(text, 300)}]`;
+  return `[引用 ${ref ? `#${ref} ` : ''}${who}：${cut(text, 300)}]`;
 }
 
 /**
