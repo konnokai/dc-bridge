@@ -39,7 +39,7 @@ npm install
 #    Privileged Gateway Intents → 勾 Message Content Intent（不想開就跳過，改設定見下）
 #    OAuth2 → URL Generator → scopes: bot + applications.commands
 #    （slash command 需要 applications.commands；只勾 bot 的話指令叫不出來）
-#    bot permissions：見下方「邀請機器人」的 7 個權限（啟動後用 /invite 或控制台產生的連結最省事）
+#    bot permissions：見下方「邀請機器人」的 8 個權限（啟動後用 /invite 或控制台產生的連結最省事）
 #    用產生的網址把 bot 邀進伺服器
 
 # 2) 填 config.json（沒有就從 config.example.json 複製）
@@ -294,10 +294,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | 新增反應 | 偶爾加 reaction |
 | 使用外部表情 | 送其他伺服器的自訂表情 |
 | 建立投票 | `create_poll` |
+| 附加檔案 | `send_image` 把生圖上傳到頻道 |
 
 - scope 是 `bot applications.commands`。**`applications.commands` 不能省**，少了它 slash command 不會註冊。
-- bitfield 是 `563224831659072`；不含 Administrator、Manage Guild、Manage Messages、Attach Files。
-- 2026-10-27 加了「建立投票」。之前邀請的 bot 沒有重開連結也通常能發（@everyone 預設有這個權限），被頻道擋掉時工具會回錯誤。
+- bitfield 是 `563224831691840`；不含 Administrator、Manage Guild、Manage Messages。
+- 2026-10-27 加了「建立投票」，2026-10-30 加了「附加檔案」。之前邀請的 bot 沒有重開連結也通常能發投票（@everyone 預設有這個權限），
+  但「附加檔案」不一定有；舊 bot 要重開一次 `/invite` 連結，或由管理員手動給權限。
 - 已經在伺服器裡的 bot 再開一次連結，Discord 會用新權限更新它的身分組，不會重複邀請。
 - 頻道層級的權限覆蓋仍可能擋掉；邀請連結只給伺服器層級。
 
@@ -427,7 +429,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
 就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
-用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `563224831659072`）。
+用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `563224831691840`）。
 貼圖（guild sticker）才是綁伺服器的：`send_sticker` 只送當前伺服器的貼圖，私聊與別服的送不了。
 
 ### 表情反應（reaction）
@@ -447,6 +449,43 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - 用的是 bridge 端的關鍵字分數，**不額外呼叫模型**，所以不會燒 token。
 - 需要 **Add Reactions** 權限（`1<<6 = 64`）；`/invite` 的連結已包含。
 - 只加 reaction，不回訊息；失敗（多半是權限）只記 log，不會吵使用者。
+
+## 畫圖（選用）
+
+大肥魚可以真的生圖，不是用文字形容畫面。這條路要另外裝兩樣東西：
+
+1. DSH profile 裝 [`dsh-generate-image`](https://github.com/zemul/dsh-generate-image)：它把本機 Codex CLI 的 `image_gen` 包成 `generate_image` 工具。
+   ```sh
+   dsh plugin --profile web add github:zemul/dsh-generate-image
+   ```
+   `node scripts/setup-dsh.mjs --discord` 會檢查 profile；沒裝就印一行警告，不會自動連網安裝。
+2. 本機 Codex CLI 已登入（`codex` 跑一次）。生圖走 Codex 額度，不用另外的 API key。
+
+流程：
+
+- 有人說「畫一張…」「幫我畫…」，persona 叫模型呼叫 `generate_image`。畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
+  畫別的 AI 娘時填角色代號（`glm`、`gpt`、`ernie`、`qwen`、`kimi`、`doubao`、`minimax`、`grok`、`gemini`、`claude`），
+  打中文名也可以。畫一般插畫時不要填。
+- `plugins/dc-agent-presets/dc-draw-image.mjs` 在執行前改寫參數：角色代號換成
+  `assets/ai-chan-sheets/<角色>/便于查看/横版完整设定图_01_三视图_查看用.jpg`，`outputDir` 固定 `state/discord-images`。
+  模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持設定圖的臉、髮色、服裝與配件。
+  11 個角色的代號、中文名與資料夾對照在 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
+- 生圖用的 Codex 是受限版本：關掉 `shell_tool`、`unified_exec` 與 `view_image`，工作目錄在 `state/discord-imagegen-work`。
+  `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`、`$CODEX_HOME=write`；
+  所以 `/mnt` 底下的掛載讀不到。其他本機路徑仍是唯讀（`jun` 帳號自己的資料）。
+  prompt 裡有 URL、絕對路徑、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明顯的指令字樣會被拒絕；
+  這是第二層，真正的邊界是 shell/exec/view_image 關閉與 permission profile。
+- 畫好用 `mcp__discord__send_image` 送圖：`file` 填 `generate_image` 回傳的 `path`，`content` 可以帶一句話。
+  橋接只認 `state/discord-images` 裡的檔名，會檢查是不是真的圖片、有沒有超過 10MB；不是就回錯誤，不會把主機其他檔案送出去。
+- 這個目錄只留最近 100 張，舊的會自動刪掉。bot 需要 **Attach Files** 權限（`/invite` 的連結已包含）。
+
+限制：
+
+- 一張要 1~3 分鐘。persona 會先送一句「等我一下」再畫；不要主動畫，也不要一次畫好幾張。
+- DSH 和橋接要在同一台機器：`send_image` 是用本機路徑讀 `state/discord-images`，不是把圖上傳到別台。
+- 情色、血腥、真實人物攻擊、政治人物照【安全邊界】不畫。
+- 設定圖是外部作品：角色形象出自 ZipZipPipe，補全由 lmy414 做的，授權 **CC BY-NC-SA 4.0（非商業）**。
+  來源、署名與授權全文見 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
 
 ## 群友記憶（選用）
 
@@ -600,7 +639,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 ### 觸發對話統計
 
-- 只有模型真的送出訊息（`send_message`／`send_sticker`／`create_poll`）才記一次；
+- 只有模型真的送出訊息（`send_message`／`send_image`／`send_sticker`／`create_poll`）才記一次；
   同一個回合送好幾則只算一次，避免模型連發把數字洗高。
 - 這批訊息有 ★ 就只記叫 bot 的人；沒有 ★（自由參與）記整批的發言者；同一個人只算一次。
 - 存在 `state/discord-triggers.json`（`state/` 已被 gitignore）。控制台總覽顯示今天人數、總人數、
@@ -613,7 +652,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
 
-模型能用的工具就是下面這些（2026-10-28 從線上會話最新一次 `request/header` 的 `tools` 取出）。
+模型能用的工具就是下面這些（2026-10-30 以 `src/mcp-discord.js` 與 preset 現況為準）。
 `dc-chat` 的 `dc-tool-restrict` 會藏掉 DSH 其他內建工具（讀寫檔、shell 等）。
 `mcp__discord__*` 與 `mcp__slang__*` 的 `token` 由 DSH 外掛 `dc-session-token` 自動帶入
 （模型看不到令牌，也不用填）；下面只列其他參數：
@@ -622,6 +661,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   沒有 `message` 參數：正文只放 `content`，要接的那則 `#編號` 只放 `reply_to`；`content` 只有一個查得到的 `#編號` 會被擋（400）。
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
   `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
+- `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道。
+  `file` 填 `generate_image` 回傳的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖；
+  可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
 - `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
   （送出時橋接記下的，每個頻道最近 200 則，橋接重啟就清空）；進度、壓縮提示、審批、提問、錯誤、指令回覆這些橋接自己發的不能改。
@@ -691,6 +733,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
 - `mcp__web-search-safe__web_fetch`（`url`）：只讀抓網頁正文，最多 50000 字，擋內網與本機位址。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
+- `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖或拿設定圖改圖。
+  `prompt` 必填；畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
+  不指定角色就不要填。參數由 `dc-draw-image` 鎖死（見「畫圖」）
 - `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 
@@ -739,16 +784,16 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）與
-`/send`、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/followup`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/followup`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
 ## 行為細節
 
-- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_sticker`／`create_poll` 時送出；回合文字不會自動貼出。不做逐字串流。
+- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_image`／`send_sticker`／`create_poll` 時送出；回合文字不會自動貼出。不做逐字串流。
 - **進度訊息**：模型在一個回合裡第一次用工具時（不管有沒有人叫 bot），橋接會在頻道貼一則灰色小字（`-#`）的進度，
-  回合結束就刪掉。每呼叫一個工具加一行，例如「🔍 搜尋：關鍵字」、「🌐 讀取網頁：網域」、「📜 翻聊天紀錄」、「🔎 搜尋聊天紀錄：關鍵字」。
-  只在思考、沒用工具時不貼（「正在輸入」就夠了）。發訊息、貼圖、reaction、投票、修改、收回不列（那本身就看得到）。
+  回合結束就刪掉。每呼叫一個工具加一行，例如「🔍 搜尋：關鍵字」、「🌐 讀取網頁：網域」、「📜 翻聊天紀錄」、「🔎 搜尋聊天紀錄：關鍵字」、「🎨 畫圖」。
+  只在思考、沒用工具時不貼（「正在輸入」就夠了）。發訊息、貼圖、送圖、reaction、投票、修改、收回不列（那本身就看得到）。
   模型已經回覆後不再新貼進度。不顯示模型的思考原文（可能有群友記憶、人設）；
   每行一樣過敏感資訊閘門，命中就只寫「🔧 使用工具」。訊息是靜音的、不解析 @，不會吵到人。
   橋接在回合中途掛掉時，那則進度會留在頻道裡，要手動刪。
@@ -818,7 +863,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 ## 安全邊界
 
 1. **沒有本地工具**：`dc-chat` preset 不掛 bash / 檔案讀寫 / 子代理 / 工作流。`dc-tool-restrict` 會把它們
-   從工具清單隱藏，執行期再用白名單擋一次。
+   從工具清單隱藏，執行期再用白名單擋一次。畫圖是唯一的例外：`generate_image` 由 `dc-draw-image`
+   鎖成「只拿專案內的角色設定圖當參考（或不帶參考圖）、只能寫 `state/discord-images`」，
+   `send_image` 也只讀這個目錄；`/mnt` 以外的其他本機路徑仍可能被 Codex 唯讀存取（`jun` 帳號自己的資料）。
 2. **fail-closed preset**：啟動時向 DSH 要 preset 清單；`agentPreset` 不在清單裡就拒絕建立會話，並在頻道
    回報安裝提示。**絕不**回退到 DSH 預設 preset（那通常有完整本地工具）。
 3. **白名單**：預設全擋。`deny` 優先於 `allow`；`deny.channels` 也擋母頻道底下的討論串。
@@ -847,11 +894,13 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、16 個 `mcp__discord__*` 工具（唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 23 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
+- **畫圖要 1~3 分鐘**，而且吃 Codex 額度；DSH profile 沒裝 `dsh-generate-image` 或 Codex 沒登入時，
+  `generate_image` 不存在或直接失敗。生成檔只留最近 100 張，上傳上限 10MB。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。
 - 頻道上下文需要 bot 的 **Read Message History** 權限；沒有權限時會跳過上下文並記一行 log。
@@ -867,4 +916,6 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 | `DSH 鉴权不可用` | `~/.dsh/.credentials.yaml` 讀不到，或 DSH 不在本機。確認 `DSH_HOME` |
 | 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但沒有呼叫發送工具」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
 | 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |
+| 叫它畫圖卻只回文字 | DSH profile 沒裝 `dsh-generate-image`，或 Codex CLI 沒登入。跑 `dsh plugin --profile web add github:zemul/dsh-generate-image`，終端機跑一次 `codex` 登入，再重啟 DSH |
+| 圖畫好了但送不出去 | bot 有沒有 **Attach Files** 權限？檔案有沒有超過 10MB？日誌看 `MCP 送出 ... 圖片` 那一行 |
 | 回合直接失敗 `session/model-unavailable` | `dsh.provider` / `dsh.model` 不在 DSH 的 `routableProviders`。用 `session/modelCatalog` 查可用組合，改 `config.json` |

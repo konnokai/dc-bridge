@@ -109,7 +109,7 @@ export function createMessageRefs({ perKey = MESSAGE_REFS_PER_KEY } = {}) {
  * @param options.secrets         () => 已知令牌清單（會話令牌另外自動加入）
  * @param options.blockSensitive  () => boolean
  * @param options.refs            createMessageRefs()：送出的訊息登記成 #編號，改／收回時查回 id
- * @param options.deliver         async (key, { content, replyTo, sticker }) => 送出的 Discord 訊息 id 陣列
+ * @param options.deliver         async (key, { content, replyTo, sticker, file }) => 送出的 Discord 訊息 id 陣列
  * @param options.deliverReaction async (key, { message, emoji }) => void
  * @param options.deliverUnreact  async (key, { message, emoji }) => void
  * @param options.deliverEdit     async (key, { id, content }) => void
@@ -262,11 +262,11 @@ export function createAgentSender({
 
   const channelName = (kind, channel, key) => (kind === 'dm' ? '私聊' : (channel?.name ?? key));
 
-  async function send({ token, content = '', replyTo = '', sticker = '' }) {
+  async function send({ token, content = '', replyTo = '', sticker = '', file = '' }) {
     if (typeof content !== 'string' || content.length > AGENT_MAX_CONTENT) {
       throw statusError(`content 超過 ${AGENT_MAX_CONTENT} 字`, 400);
     }
-    if (!content.trim() && !sticker) throw statusError('content 是空的', 400);
+    if (!content.trim() && !sticker && !file) throw statusError('content 是空的', 400);
     const { sessionId, key, kind, channel } = await resolve(token);
     // 模型偶爾把回覆目標塞進 content（其他工具的參數叫 message，send_message 沒有）。
     // 只送一個查得到的 #編號 一定是放錯位置：擋下來，讓它同一輪自己改。
@@ -274,7 +274,7 @@ export function createAgentSender({
       throw statusError('content 只有一個 #編號：正文放 content，回覆目標放 reply_to；send_message 沒有 message 參數', 400);
     }
     checkSensitive(sessionId, content);
-    const ids = await visible(key, sessionId, () => deliver(key, { content, replyTo, sticker }));
+    const ids = await visible(key, sessionId, () => deliver(key, { content, replyTo, sticker, file }));
     return { key, channel: channelName(kind, channel, key), refs: own(key, ids ?? []) };
   }
 

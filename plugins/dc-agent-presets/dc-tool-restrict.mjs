@@ -58,6 +58,7 @@ const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-sa
 // 裸的 send_message 是 DSH 的 subagent 控制工具，留在 DANGEROUS。
 const DISCORD_TOOLS = [
   'mcp__discord__send_message',
+  'mcp__discord__send_image',
   'mcp__discord__send_sticker',
   'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction',
@@ -99,16 +100,26 @@ const SAFE_EXACT = new Set([
  *
  * `allowDiscordSend: false` 同理：學習會話是純抽取器，所有 Discord 工具（含唯讀的）都拿掉，
  * 不該有辦法把字送進頻道，也不需要讀頻道。
+ *
+ * `allowImageGen: true` 才放行 `generate_image`（dc-chat 專用）。這個工具會 spawn Codex
+ * 並寫檔，參數由 dc-draw-image 在執行前鎖成固定設定圖與固定目錄；學習會話不需要畫圖，
+ * 所以預設隱藏並拒絕。
  */
 export function apply(ctx, config = {}) {
   const allowWebSearch = config?.allowWebSearch !== false
   const allowDiscordSend = config?.allowDiscordSend !== false
+  const allowImageGen = config?.allowImageGen === true
   const denyList = [
     ...DANGEROUS,
     ...(allowWebSearch ? [] : WEB_SEARCH_TOOLS),
     ...(allowDiscordSend ? [] : [...DISCORD_TOOLS, ...SLANG_TOOLS]),
+    // 不能在這裡 restrict generate_image：preset 的 scoped 安全版和這條 restrict
+    // 同屬 preset generation layer，restrict 會連安全版一起藏掉。allowImageGen
+    // 時改用 guard 檢查 scoped 版的 description；沒有安全版就 fail closed。
+    ...(allowImageGen ? [] : ['generate_image']),
   ]
   const exact = new Set(SAFE_EXACT)
+  if (allowImageGen) exact.add('generate_image')
   if (allowDiscordSend) for (const tool of [...DISCORD_TOOLS, ...SLANG_TOOLS]) exact.add(tool)
   const failed = []
   for (const tool of denyList) {
@@ -136,6 +147,28 @@ export function apply(ctx, config = {}) {
   ctx.tools.guard((exec) => {
     const named = exec?.name
     if (typeof named !== 'string' || named.length === 0) return '工具名無效，已拒絕'
+    // 畫圖的參數鎖在 dc-draw-image（tools/execute）；這裡先擋一次原始參數，
+    // 外掛萬一沒載入也不會變成「讀主機任一張圖／寫任意目錄」的通道。
+    if (named === 'generate_image' && allowImageGen) {
+      // 只有 dc-draw-image 註冊的 scoped 安全版（description 有這句）才放行。
+      // 外掛沒載入或 row 被移除時，global 的 generate_image 仍有 shell，必須 fail closed。
+      let tool = null
+      try { tool = ctx.tools.get?.('generate_image', exec?.agent) } catch { /* 當作沒載入 */ }
+      if (!tool?.description?.includes('shell and file writes disabled')) {
+        return 'generate_image 的安全鎖（dc-draw-image）沒載入，已拒絕'
+      }
+      const args = exec?.arguments ?? {}
+      const ref = args.inputImage
+      if (ref !== undefined && ref !== null && ref !== '') {
+        // 只放行短代號（self、gpt、大肥魚…），路徑一定含 / \ : 或 ..；真正的角色
+        // 對照在 dc-draw-image 裡，這裡先確保外掛沒載入時也讀不到主機檔案。
+        if (typeof ref !== 'string' || ref.length > 60 || /[\\/:：／＼]/.test(ref) || ref.includes('..') || /\.[a-z0-9]{2,5}$/i.test(ref)) {
+          return 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑'
+        }
+      }
+      if (args.outputDir !== undefined && args.outputDir !== null && args.outputDir !== '') return 'generate_image 的 outputDir 由外掛固定，不要填'
+      return
+    }
     if (exact.has(named)) return
     // 抽取型 preset 明確關掉網路面：即使 MCP 工具僥倖還在 schema，也不准呼叫。
     if (!allowWebSearch && named.startsWith('mcp__web-search-safe__')) {

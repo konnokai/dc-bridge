@@ -8,6 +8,8 @@
 //
 // 縮圖重用 QQ 版的 normalizeImageForModel（ffmpeg）：它已經處理過 DSH 的
 // base64 上限、長邊、動圖抽帧拼圖，是這個 repo 唯一的圖片正規化實作。
+import fs from 'node:fs';
+import path from 'node:path';
 import { normalizeImageForModel, normalizeVideoForModel, normalizeVideoUrlForModel, sniffImage, sniffVideo } from '../media-normalize.js';
 
 /** 允許抓圖的 host（精確比對，子網域不算）。 */
@@ -119,6 +121,60 @@ export async function fetchDiscordMedia(url, { maxBytes, timeoutMs = 20_000 } = 
   const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.length > maxBytes) throw new Error(`檔案 ${mb(buffer.length)} 超過 ${mb(maxBytes)} 上限`);
   return buffer;
+}
+
+/**
+ * 把 generate_image 回傳的 path 收斂成可直接上傳的本機檔案。
+ *
+ * 只認 dir 底下的檔名：模型給完整路徑或只給檔名都行，但 `..`、絕對路徑、
+ * 其他目錄一律不接受。這樣 send_image 不會變成「送主機上任一張圖」的通道。
+ *
+ * @param dir      允許的目錄（state/discord-images）
+ * @param file     generate_image 回傳的 path 或檔名
+ * @param options  { maxBytes }
+ * @returns {{path:string, name:string, buffer:Buffer}} 已讀進記憶體的圖片
+ */
+export function resolveGeneratedImage(dir, file, { maxBytes = 10 * 1024 * 1024 } = {}) {
+  const raw = String(file ?? '').trim();
+  if (!raw) throw new Error('file 是空的：填 generate_image 回傳的 path');
+  const name = path.basename(raw);
+  if (!name || name === '.' || name === '..' || name.startsWith('.')) {
+    throw new Error('檔名無效：填 generate_image 回傳的 path');
+  }
+  const full = path.join(dir, name);
+  let link;
+  try {
+    link = fs.lstatSync(full);
+  } catch {
+    throw new Error(`找不到這張圖（${name}）：先用 generate_image 畫，檔名要跟它回傳的 path 一樣`);
+  }
+  if (link.isSymbolicLink()) throw new Error(`${name} 是符號連結，不送`);
+  if (!link.isFile()) throw new Error(`${name} 不是檔案`);
+  if (link.size > maxBytes) throw new Error(`圖片 ${mb(link.size)} 超過 ${mb(maxBytes)} 上傳上限`);
+
+  // 開檔後用 fstat 再確認一次，並把位元組留在記憶體；不讓 upload 再依路徑開一次
+  // （驗證與使用之間被換成 symlink 的 TOCTOU）。Linux 上 O_NOFOLLOW 直接擋連結，
+  // Windows 沒有這個 flag 時靠上面的 lstat。
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+  const fd = fs.openSync(full, flags);
+  let buffer;
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`${name} 不是檔案`);
+    if (stat.size > maxBytes) throw new Error(`圖片 ${mb(stat.size)} 超過 ${mb(maxBytes)} 上傳上限`);
+    buffer = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = fs.readSync(fd, buffer, offset, buffer.length - offset, offset);
+      if (read <= 0) break;
+      offset += read;
+    }
+    if (offset !== buffer.length) throw new Error(`讀取 ${name} 不完整`);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!sniffImage(buffer)) throw new Error(`${name} 不是 PNG/JPEG/WebP/GIF 圖片`);
+  return { path: full, name, buffer };
 }
 
 /**

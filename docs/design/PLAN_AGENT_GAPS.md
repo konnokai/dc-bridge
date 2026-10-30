@@ -302,9 +302,12 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 
 ### H：送固定的圖
 
-**狀態：⏭️ 略過（2026-10-28，管理員決定不做）。**
+**狀態：🔁 改成生圖版（2026-10-30）：`generate_image` 生圖、`send_image` 送出，檔案放 `state/discord-images`；
+下面原本的「固定圖片目錄 + catalog」仍不做。邀請權限已補上 AttachFiles。**
 
-**現況**：只能送伺服器貼圖（`send_sticker`，跨伺服器不行）。邀請權限刻意沒有 Attach Files。
+**舊狀態：⏭️ 略過（2026-10-28，管理員決定不做固定圖）。**
+
+**當時的現況（2026-10-30 前）**：只能送伺服器貼圖（`send_sticker`，跨伺服器不行），邀請權限刻意沒有 Attach Files。
 
 **要做**：
 1. 新設定 `discord.images`：`{ "enabled": false, "dir": "assets/discord-images" }`，

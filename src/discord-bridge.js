@@ -114,6 +114,7 @@ import {
   fetchDiscordMedia,
   prepareMediaBlock,
   prepareVideoUrlBlock,
+  resolveGeneratedImage,
   stickerImages,
   stickerLabel,
 } from './core/discord-media.mjs';
@@ -139,6 +140,8 @@ const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const EMOJI_USAGE_FILE = path.join(STATE_DIR, 'discord-emoji-usage.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
+// generate_image 的輸出目錄；dc-draw-image 會把 outputDir 固定到這裡，send_image 也只認這裡。
+const AGENT_IMAGE_DIR = path.join(STATE_DIR, 'discord-images');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
@@ -892,19 +895,20 @@ async function main() {
     return channel;
   }
 
-  /** replyTo（訊息 id）只掛在第一段，sticker 只掛在最後一段。 */
-  async function sendLong(key, text, { replyTo = null, stickerId = null } = {}) {
+  /** replyTo 和檔案只掛在第一段，sticker 只掛在最後一段。file 是 {buffer, name}。 */
+  async function sendLong(key, text, { replyTo = null, stickerId = null, file = null } = {}) {
     const channel = await resolveChannel(key);
     refreshEmojiCatalogs();
     // 模型輸出 `:名稱:`，這裡換成真正的 emoji tag；找不到就保留原文。
     const rendered = substituteEmojiNames(text, { guildId: channel.guildId ?? null, catalogs: emojiCatalogs });
     const parts = splitDiscordMessage(rendered, cfg.discord.maxMessageChars);
-    if (parts.length === 0 && stickerId) parts.push('');
+    if (parts.length === 0 && (stickerId || file)) parts.push('');
     const sent = [];
     for (const [index, part] of parts.entries()) {
       sent.push(await channel.send({
         ...(part ? { content: part } : {}),
         ...(index === 0 && replyTo ? { reply: { messageReference: replyTo, failIfNotExists: false } } : {}),
+        ...(index === 0 && file ? { files: [{ attachment: file.buffer, name: file.name }] } : {}),
         ...(index === parts.length - 1 && stickerId ? { stickers: [stickerId] } : {}),
         // parse: [] —— 模型輸出不會意外 @everyone 或 @某人；回覆也不額外 ping 對方
         allowedMentions: { parse: [], repliedUser: false },
@@ -950,7 +954,7 @@ async function main() {
     return [...guild.stickers.cache.values()].filter((sticker) => sticker.available !== false);
   }
 
-  async function deliverAgentMessage(key, { content, replyTo, sticker }) {
+  async function deliverAgentMessage(key, { content, replyTo, sticker, file }) {
     const replyMessage = replyTo ? await fetchByRef(key, replyTo) : null;
     let stickerId = null;
     if (sticker) {
@@ -960,7 +964,15 @@ async function main() {
       if (!found) throw toolError(`這個伺服器沒有貼圖「${sticker}」：先用 search_stickers 查貼圖名稱`, 404);
       stickerId = found.id;
     }
-    const sent = await sendLong(key, content, { replyTo: replyMessage?.id ?? null, stickerId });
+    // 只認 generate_image 的輸出目錄；模型給的 path 先收斂成檔名再組回去。
+    const image = file ? resolveGeneratedImage(AGENT_IMAGE_DIR, file) : null;
+    let sent;
+    try {
+      sent = await sendLong(key, content, { replyTo: replyMessage?.id ?? null, stickerId, file: image });
+    } catch (error) {
+      if (image && error?.code === 50013) throw toolError('bot 在這個頻道沒有「附加檔案」權限，圖片送不出去', 403);
+      throw error;
+    }
     return sent.map((message) => message.id);
   }
 
@@ -1203,15 +1215,17 @@ async function main() {
   const agentHandlers = {
     async send(body) {
       const content = typeof body.content === 'string' ? body.content : '';
+      const file = textArg(body.file, 500);
       const result = await agentSender.send({
         token: body.token,
         content,
         replyTo: textArg(body.reply_to),
         sticker: textArg(body.sticker),
+        file,
       });
       noteTrigger(result.key);
       recordBotMessages(result.key, result.refs?.length);
-      log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}）`);
+      log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}${file ? `，圖片 ${path.basename(file)}` : ''}）`);
       return result;
     },
     async react(body) {
@@ -2168,9 +2182,9 @@ async function main() {
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
-      if (/^mcp__discord__(send_message|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
+      if (/^mcp__discord__(send_message|send_image|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
       const state = progress.get(key);
-      if (state && /^mcp__discord__(send_message|send_sticker|create_poll)$/.test(name)) state.replied = true;
+      if (state && /^mcp__discord__(send_message|send_image|send_sticker|create_poll)$/.test(name)) state.replied = true;
       const line = state ? describeToolCall(name, event.data?.arguments) : null;
       if (line) {
         const leaks = cfg.discord.security.blockSensitive && findSensitive(line, agentSecrets());

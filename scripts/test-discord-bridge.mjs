@@ -46,6 +46,7 @@ import {
   embedImages,
   fetchDiscordMedia,
   prepareMediaBlock,
+  resolveGeneratedImage,
   stickerImages,
   stickerLabel,
 } from '../src/core/discord-media.mjs';
@@ -92,13 +93,13 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
-const VISIBLE_TOOLS = /send_message|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
+const VISIBLE_TOOLS = /send_message|send_image|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
 
 console.log('## 1. 設定收斂');
 {
@@ -146,6 +147,7 @@ console.log('## 1. 設定收斂');
       ok(describeToolCall(name, '{}') === null, `${name} 不列進度（本身就看得到）`);
     }
     ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
+    ok(call('generate_image', {}) === '🎨 畫圖', '生圖在進度訊息裡顯示畫圖');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
     const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__schedule_followup']);
     ok(others.every((name) => silent.has(name) || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
@@ -397,8 +399,11 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(plugins.some((p) => p.id === 'persona'), '有 persona 行');
   const guardRow = plugins.find((p) => p.id === 'dc-tool-restrict');
   ok(guardRow?.name === 'dc-agent-presets/dc-tool-restrict.mjs', '守衛行用 profile 可解析的裸說明符');
+  ok(guardRow?.config?.allowImageGen === true, 'dc-chat 開啟 allowImageGen');
   const tokenRow = plugins.find((p) => p.id === 'dc-session-token');
   ok(tokenRow?.name === 'dc-agent-presets/dc-session-token.mjs', '令牌外掛行用 profile 可解析的裸說明符');
+  const drawRow = plugins.find((p) => p.id === 'dc-draw-image');
+  ok(drawRow?.name === 'dc-agent-presets/dc-draw-image.mjs', '畫圖外掛行用 profile 可解析的裸說明符');
   ok(!plugins.some((p) => typeof p.name === 'string' && (p.name.startsWith('.') || path.isAbsolute(p.name))),
     '沒有任何相對／絕對路徑子行名');
 
@@ -406,6 +411,9 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(persona.length > 500, `persona 有實質內容（${persona.length} 字）`);
   ok(/Discord/.test(persona), 'persona 是 Discord 版，不是 QQ 版');
   ok(!/qq_send|mcp__snowluma/.test(persona), 'persona 不引用 QQ 工具');
+  ok(/generate_image/.test(persona) && /send_image/.test(persona), 'persona 教模型用 generate_image 畫圖、send_image 送圖');
+  ok(/inputImage` 填 `"self"/.test(persona), 'persona 教模型畫自己時帶入設定圖');
+  ok(/glm.*gpt.*qwen/.test(persona), 'persona 列出其他角色代號');
   // 「10 條最多 1 條」寫成上限後，實際 473 則訊息一個表情都沒帶；改成描述什麼時候用，不叫它邊講邊數。
   const emojiRule = persona.split('\n').find((line) => line.includes('表情是補語氣用的')) ?? '';
   ok(emojiRule && !/\d/.test(emojiRule) && !/emoji：10 條最多 1 條/.test(persona), '訊息表情寫成什麼時候用，不給數字上限');
@@ -432,6 +440,50 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(true, `白名單放行無害模型側工具、只讀搜尋、${DISCORD_TOOL_NAMES.length} 個 Discord 工具與 ${SLANG_TOOL_NAMES.length} 個黑話工具`);
   for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
+  }
+  ok(restricted.includes('generate_image'), '預設在註冊期隱藏 generate_image');
+  ok(typeof guard({ name: 'generate_image' }) === 'string', '沒有 allowImageGen 時拒絕 generate_image');
+  {
+    let imageGuard;
+    const imageRestricted = [];
+    const safeDescription = 'The tool runs with shell and file writes disabled; use it for drawings.';
+    mod.apply({
+      tools: {
+        restrict: ({ deny }) => imageRestricted.push(...deny),
+        guard: (fn) => { imageGuard = fn; },
+        get: (name, agent) => (name === 'generate_image' && agent === 'agent-a' ? { description: safeDescription } : undefined),
+      },
+    }, { allowImageGen: true });
+    const imageExec = (args = {}) => ({ name: 'generate_image', arguments: args, agent: 'agent-a' });
+    ok(!imageRestricted.includes('generate_image'), 'allowImageGen 不在註冊期 restrict generate_image（會連 scoped 安全版一起藏掉）');
+    ok(imageGuard(imageExec()) === undefined, '安全版載入時放行 generate_image');
+    ok(imageGuard(imageExec({ inputImage: 'self' })) === undefined, '畫自己時 inputImage=self 放行');
+    ok(imageGuard(imageExec({ inputImage: 'gpt' })) === undefined, '角色代號 gpt 放行');
+    ok(imageGuard(imageExec({ inputImage: 'GPT 娘' })) === undefined, '中文角色名放行');
+    ok(typeof imageGuard(imageExec({ inputImage: '/etc/passwd' })) === 'string',
+      '守衛自己就擋任意 inputImage（外掛沒載入也安全）');
+    ok(typeof imageGuard(imageExec({ inputImage: '../secret.png' })) === 'string',
+      '守衛自己就擋相對路徑');
+    ok(typeof imageGuard(imageExec({ inputImage: 'foo.png' })) === 'string',
+      '守衛自己就擋檔名（外掛沒載入也讀不到 CWD 的圖）');
+    ok(typeof imageGuard(imageExec({ inputImage: '／etc／passwd' })) === 'string',
+      '守衛也擋全形斜線路徑');
+    ok(typeof imageGuard(imageExec({ outputDir: '/tmp/x' })) === 'string',
+      '守衛自己就擋自填 outputDir');
+    ok(typeof imageGuard({ name: 'write' }) === 'string', '開畫圖不放寬其他本機工具');
+  }
+  {
+    let noLockGuard;
+    const noLockRestricted = [];
+    mod.apply({
+      tools: {
+        restrict: ({ deny }) => noLockRestricted.push(...deny),
+        guard: (fn) => { noLockGuard = fn; },
+        get: () => undefined,
+      },
+    }, { allowImageGen: true });
+    ok(!noLockRestricted.includes('generate_image'), '安全版沒載入時不用 restrict（避免連安全版一起藏）');
+    ok(typeof noLockGuard({ name: 'generate_image', agent: 'agent-a' }) === 'string', '安全版沒載入時執行期 fail closed');
   }
 
   // 黑話抽取用的 dc-learner：短 persona、沒有任何工具行。
@@ -466,6 +518,177 @@ console.log('## 7. dc-chat preset 與守衛');
   ok([...DISCORD_TOOL_NAMES, ...SLANG_TOOL_NAMES].every((name) => typeof learnerGuard({ name }) === 'string'),
     '執行期也拒絕所有 Discord 工具與黑話工具（含唯讀的）');
   ok(learnerGuard({ name: 'todo_write' }) === undefined, '無害的 todo 仍然放行');
+  ok(typeof learnerGuard({ name: 'generate_image', agent: 'agent-a' }) === 'string', '抽取器也拒絕 generate_image');
+}
+
+console.log('## 7c. 畫圖參數鎖');
+{
+  const drawPath = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-draw-image.mjs');
+  const draw = await import(pathToFileURL(drawPath).href);
+  ok(draw.name === 'dc-draw-image', '畫圖外掛導出 name');
+  let listener;
+  let registered = null;
+  draw.apply({
+    on: (event, fn) => { if (event === 'tools/execute') listener = fn; },
+    tools: { register: (definition) => { registered = definition; } },
+  });
+  ok(typeof listener === 'function', '畫圖外掛掛上 tools/execute listener');
+  ok(registered?.name === 'generate_image', '外掛註冊 scoped generate_image（蓋掉 global 的 unsafe 版本）');
+  ok(registered?.parameters?.required?.[0] === 'prompt' && typeof registered?.execute === 'function', 'scoped 工具有 prompt 與 execute');
+  ok(registered?.isConcurrencySafe?.() === false, 'scoped 工具標成不可並行（避免兩個頻道撿到對方的圖）');
+  ok(registered?.description?.includes('shell and file writes disabled'), 'scoped 工具描述帶安全標記（守衛用它判斷）');
+  {
+    const serial = draw.createSerialQueue();
+    let active = 0;
+    let max = 0;
+    const events = [];
+    const task = (id) => async () => {
+      active += 1;
+      max = Math.max(max, active);
+      events.push(`start${id}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      events.push(`end${id}`);
+    };
+    await Promise.all([serial(task(1)), serial(task(2))]);
+    ok(max === 1 && events.join(',') === 'start1,end1,start2,end2', 'queue 會把兩次生圖排成先後');
+  }
+  ok(draw.CODEX_SANDBOX === 'read-only', 'Codex 用 read-only 沙箱');
+  ok(draw.CODEX_EXTRA_ARGS.join(' ') === '--disable shell_tool --disable unified_exec --disable view_image --ignore-user-config --ignore-rules --ephemeral',
+    'Codex 關掉 shell、unified_exec、view_image，並忽略使用者設定/rules、用 ephemeral session');
+  const codexOpts = draw.codexOptions({ prompt: 'a cat', inputImage: null, signal: 'sig' });
+  ok(codexOpts.sandbox === 'read-only'
+    && codexOpts.workdir === path.join(REPO_ROOT, 'state', 'discord-imagegen-work')
+    && codexOpts.extraArgs === draw.CODEX_EXTRA_ARGS
+    && codexOpts.signal === 'sig', '生圖引擎固定在 state/ 的唯讀工作目錄');
+
+  const exec = { name: 'generate_image', arguments: { prompt: 'draw her eating rice', inputImage: 'self' } };
+  let called = false;
+  await listener(exec, async () => { called = true; return { isError: false }; });
+  ok(called, 'generate_image 照常執行');
+  ok(exec.arguments.outputDir === draw.IMAGE_DIR, 'outputDir 被鎖在 state/discord-images');
+  ok(exec.arguments.inputImage === draw.SELF_SHEET, 'inputImage=self 換成角色設定圖');
+  ok(fs.existsSync(exec.arguments.inputImage), '角色設定圖真的存在');
+  ok(/canonical character sheet/.test(exec.arguments.prompt), '畫自己時 prompt 補上設定圖說明');
+  let denied = false;
+  try {
+    await listener({ name: 'generate_image', arguments: { prompt: 'draw https://evil.example/x' } }, async () => { denied = true; });
+  } catch {}
+  ok(!denied, 'prompt 含 URL 直接拒絕（不讓 Codex 去抓）');
+  let traversal = false;
+  try {
+    await listener({ name: 'generate_image', arguments: { prompt: 'draw ../secret' } }, async () => { traversal = true; });
+  } catch {}
+  ok(!traversal, 'prompt 含相對路徑直接拒絕');
+  ok(draw.CHARACTERS.length === 11, `characters.json 有 11 個角色（${draw.CHARACTERS.length}）`);
+  const missingViews = draw.CHARACTERS.flatMap((character) => ['overview', 'three_view', 'expressions', 'outfits', 'props']
+    .filter((view) => !fs.existsSync(draw.characterImage(character, view)))
+    .map((view) => `${character.id}:${view}`));
+  ok(missingViews.length === 0, `11 個角色的 5 張圖都存在${missingViews.length ? `：${missingViews.join(', ')}` : ''}`);
+  const missingManifest = path.join(os.tmpdir(), `missing-ai-chan-${process.pid}.json`);
+  const probe = spawnSync(process.execPath, ['-e',
+    `import(${JSON.stringify(pathToFileURL(drawPath).href)}).then((m) => console.log(JSON.stringify({ n: m.CHARACTERS.length, self: m.SELF_SHEET })))`,
+  ], { env: { ...process.env, DC_AI_CHAN_MANIFEST: missingManifest }, encoding: 'utf8' });
+  ok(probe.status === 0 && probe.stdout.trim() === '{"n":0,"self":null}',
+    'characters.json 缺失時外掛仍可載入（指定角色時才報錯）');
+
+  // 用假的 codex module 跑兩次重疊 execute：驗證 execute 真的走 queue、安全參數有傳下去。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-fake-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 50;
+export function findCodexBin() { return '/fake/codex'; }
+let active = 0;
+let maxActive = 0;
+const calls = [];
+export async function runCodexGenerate(options) {
+  active += 1;
+  maxActive = Math.max(maxActive, active);
+  calls.push({ sandbox: options.sandbox, extraArgs: options.extraArgs, workdir: options.workdir });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  active -= 1;
+  return { file: null, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+export function stats() { return { maxActive, calls }; }
+`);
+    const script = `
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+const results = await Promise.allSettled([
+  tool.execute({ prompt: 'one' }, {}),
+  tool.execute({ prompt: 'two' }, {}),
+]);
+const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
+console.log(JSON.stringify({ ...fake.stats(), statuses: results.map((result) => result.status) }));
+`;
+    const run = spawnSync(process.execPath, ['-e', script], {
+      env: { ...process.env, DC_AI_CODEX_MODULE: fakeModule },
+      encoding: 'utf8',
+    });
+    let stats = null;
+    try { stats = JSON.parse(run.stdout.trim()); } catch {}
+    ok(run.status === 0 && stats?.maxActive === 1 && stats?.calls?.length === 2
+      && stats?.statuses?.join(',') === 'rejected,rejected', '兩次重疊 execute 會排隊，前一次失敗不擋下一次');
+    ok(stats?.calls?.[0]?.sandbox === 'read-only'
+      && stats?.calls?.[0]?.extraArgs?.includes('shell_tool')
+      && String(stats?.calls?.[0]?.workdir).endsWith(path.join('state', 'discord-imagegen-work')),
+      'execute 真的把唯讀、關 shell、安全 workdir 傳給 Codex');
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // wrapper 要把 -s 拿掉，改用只 deny /mnt 的 Codex permission profile。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-wrapper-'));
+    const fakeReal = path.join(fakeDir, 'fake-codex.mjs');
+    fs.writeFileSync(fakeReal, `#!${process.execPath}\nconsole.log(JSON.stringify(process.argv.slice(2)));\n`);
+    try { fs.chmodSync(fakeReal, 0o755); } catch {}
+    const wrapper = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'codex-imagegen-wrapper.mjs');
+    const run = spawnSync(process.execPath, [
+      wrapper, 'exec', '-s', 'read-only', '--dc-real-codex', fakeReal,
+      '--json', '--', 'a prompt',
+    ], { encoding: 'utf8' });
+    let argv = null;
+    try { argv = JSON.parse(run.stdout.trim().split('\n').at(-1)); } catch {}
+    ok(run.status === 0 && Array.isArray(argv) && !argv.includes('-s')
+      && argv.includes('default_permissions="dc-imagegen"')
+      && argv.includes('permissions.dc-imagegen.filesystem.":root"="read"')
+      && argv.includes('permissions.dc-imagegen.filesystem."/mnt"="deny"')
+      && !argv.some((arg) => String(arg).includes('="write"'))
+      && !argv.includes('--dc-real-codex'), 'wrapper 拿掉 -s，加上 :root=read、只擋 /mnt、沒有 write 的 profile');
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+  const gpt = draw.resolveCharacter('GPT 娘');
+  ok(gpt?.id === 'gpt', '中文名＋空白也對得到角色（GPT 娘）');
+  ok(draw.resolveCharacter('「GPT 娘」')?.id === 'gpt', '引號不影響角色比對');
+  ok(draw.resolveCharacter('大肥魚')?.id === 'deepseek', '別名大肥魚對到 deepseek');
+  ok(draw.resolveCharacter('qwen')?.id === 'qwen', '英文代號 qwen 對到通義千問娘');
+  ok(draw.resolveCharacter('nobody') === null, '不認得的角色回 null');
+
+  const gptExec = { name: 'generate_image', arguments: { prompt: 'draw gpt', inputImage: 'gpt' } };
+  await listener(gptExec, async () => {});
+  ok(gptExec.arguments.inputImage === draw.characterImage(gpt), 'inputImage=gpt 換成 GPT 娘的三視圖');
+  ok(/GPT-chan/.test(gptExec.arguments.prompt), '別的角色的 prompt 也補上設定圖說明');
+
+  const plain = { name: 'generate_image', arguments: { prompt: 'a cat' } };
+  await listener(plain, async () => {});
+  ok(plain.arguments.inputImage === undefined, '一般生圖不帶設定圖');
+  ok(plain.arguments.outputDir === draw.IMAGE_DIR, '一般生圖也鎖在同一個目錄');
+
+  let leaked = false;
+  const evil = { name: 'generate_image', arguments: { prompt: 'x', inputImage: '/etc/passwd' } };
+  try { await listener(evil, async () => { leaked = true; }); } catch {}
+  ok(!leaked, 'inputImage 不接受任意路徑（不會把主機檔案送進生圖）');
+  let unknown = false;
+  try { await listener({ name: 'generate_image', arguments: { prompt: 'x', inputImage: 'nobody' } }, async () => { unknown = true; }); } catch {}
+  ok(!unknown, '不認得的角色名直接拒絕，不會退回一般生圖');
+  ok(typeof draw.IMAGE_DIR === 'string' && path.isAbsolute(draw.IMAGE_DIR), 'IMAGE_DIR 是絕對路徑');
+
+  let otherCalled = false;
+  const other = { name: 'read', arguments: { path: '/etc/passwd' } };
+  await listener(other, async () => { otherCalled = true; });
+  ok(otherCalled && other.arguments.path === '/etc/passwd', '其他工具原樣放行（參數鎖只管 generate_image）');
 }
 
 console.log('## 7b. 邀請連結');
@@ -476,7 +699,7 @@ console.log('## 7b. 邀請連結');
   ok(params.get('client_id') === USER, '帶正確的 client_id');
   ok(params.get('scope') === 'bot applications.commands', 'scope 含 bot 與 applications.commands');
   ok(params.get('permissions') === invitePermissionsBitfield().toString(), 'permissions 與權限清單一致');
-  ok(invitePermissionsBitfield().toString() === '563224831659072', '目前功能權限總和固定（563224831659072）');
+  ok(invitePermissionsBitfield().toString() === '563224831691840', '目前功能權限總和固定（563224831691840）');
 
   for (const permission of INVITE_PERMISSIONS) {
     ok(BigInt(PermissionFlagsBits[permission.key]) === permission.bit,
@@ -486,8 +709,9 @@ console.log('## 7b. 邀請連結');
   ok(keys.includes('AddReactions') && keys.includes('UseExternalEmojis'), '包含 reactions 與外部表情');
   ok(keys.includes('SendMessagesInThreads'), '包含討論串傳送訊息');
   ok(keys.includes('SendPolls'), '包含建立投票（create_poll）');
-  ok(!keys.includes('Administrator') && !keys.includes('ManageGuild') && !keys.includes('AttachFiles'),
-    '不要求 Administrator / ManageGuild / AttachFiles');
+  ok(keys.includes('AttachFiles'), '包含附加檔案（send_image）');
+  ok(!keys.includes('Administrator') && !keys.includes('ManageGuild'),
+    '不要求 Administrator / ManageGuild');
   ok(INVITE_SCOPES.join(' ') === 'bot applications.commands', 'scope 清單固定');
   throws(() => buildInviteUrl('abc'), /數字字串/, '非法 client id 要拋錯');
 }
@@ -747,9 +971,9 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
     isAllowed: () => allowed,
     secrets: () => ['SECRET-DISCORD-TOKEN'],
     blockSensitive: () => true,
-    deliver: async (key, { content, replyTo, sticker }) => {
+    deliver: async (key, { content, replyTo, sticker, file }) => {
       if (gate) await gate;
-      delivered.push({ key, content, replyTo, sticker });
+      delivered.push({ key, content, replyTo, sticker, file });
       sentSeq += 1;
       return [`id-${sentSeq}`];
     },
@@ -810,6 +1034,11 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await rejects(sender.send({ token: tokenA, content: 'x'.repeat(AGENT_MAX_CONTENT + 1) }), /超過/, '過長內容拒絕');
   await sender.send({ token: tokenA, content: '', sticker: 'wave' });
   ok(delivered.at(-1)?.sticker === 'wave' && delivered.at(-1)?.content === '', '只送貼圖可以不帶文字');
+  sender.startTurn('ch:100');
+  await sender.send({ token: tokenA, content: '', file: 'exec-1.png' });
+  ok(delivered.at(-1)?.file === 'exec-1.png' && delivered.at(-1)?.content === '', '只送圖片可以不帶文字');
+  await sender.send({ token: tokenA, content: '畫好了', file: 'exec-1.png', replyTo: '#abcde' });
+  ok(delivered.at(-1)?.file === 'exec-1.png' && delivered.at(-1)?.content === '畫好了', '圖片可以跟一句話一起送');
   await sender.send({ token: tokenA, content: '對', replyTo: '#abcde' });
   ok(delivered.at(-1)?.replyTo === '#abcde', 'reply_to 交給 deliver 去查編號');
 
@@ -1574,6 +1803,11 @@ console.log('## 7e. Discord MCP 發送工具');
     ok(sendTool.inputSchema?.required?.includes('content')
       && !sendTool.inputSchema?.required?.includes('token')
       && !sendTool.inputSchema?.required?.includes('reply_to'), 'send_message：content 必填，token 與 reply_to 可省略');
+    const sendImageTool = tools.find((t) => t.name === 'send_image');
+    ok(sendImageTool.inputSchema?.required?.includes('file')
+      && !sendImageTool.inputSchema?.required?.includes('token')
+      && !sendImageTool.inputSchema?.required?.includes('content')
+      && !sendImageTool.inputSchema?.required?.includes('reply_to'), 'send_image：file 必填，token／content／reply_to 可省略');
     const result = await client.callTool({
       name: 'send_message',
       arguments: { token: 't', content: '嗨', reply_to: '#k7f3ab' },
@@ -1583,6 +1817,15 @@ console.log('## 7e. Discord MCP 發送工具');
       '送出回饋帶頻道名與這則的編號');
     ok(received.length === 1 && received[0].url === '/send' && received[0].token === 't' && received[0].content === '嗨'
       && received[0].reply_to === '#k7f3ab', '橋接收到 token、內容與 reply_to');
+    const imageResult = await client.callTool({
+      name: 'send_image',
+      arguments: { token: 't', file: 'exec-1.png', content: '畫好了' },
+    });
+    ok(imageResult.isError !== true
+      && received.at(-1)?.url === '/send'
+      && received.at(-1)?.file === 'exec-1.png'
+      && received.at(-1)?.content === '畫好了', 'send_image 打到 /send 並帶 file 與 content');
+    ok(String(imageResult.content?.[0]?.text).includes('#k7f3ab'), 'send_image 的結果帶送出那則的 #編號');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
@@ -1854,6 +2097,33 @@ console.log('## 8. 附件（圖片與影片）');
   const prepared = await prepareMediaBlock(small, 'red.png', limits);
   ok(prepared.block?.type === 'image' && prepared.block.mediaType === 'image/png', '小圖轉成 DSH image block');
   ok(Buffer.from(prepared.block.data, 'base64').equals(small), 'base64 可還原原始位元組（canonical）');
+
+  // send_image 的本機檔案解析：只認圖片目錄裡的檔名。
+  {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-'));
+    const genDir = path.join(parent, 'generated');
+    fs.mkdirSync(genDir);
+    fs.writeFileSync(path.join(genDir, 'exec-1.png'), makePng(8, 8));
+    fs.writeFileSync(path.join(parent, 'secret.png'), makePng(8, 8));
+    const found = resolveGeneratedImage(genDir, '/home/jun/dc-bridge/state/discord-images/exec-1.png');
+    ok(found.path === path.join(genDir, 'exec-1.png') && found.name === 'exec-1.png' && Buffer.isBuffer(found.buffer),
+      '完整 path 只取檔名，不信任模型給的目錄');
+    ok(resolveGeneratedImage(genDir, 'exec-1.png').path === path.join(genDir, 'exec-1.png'), '只給檔名也可以');
+    throws(() => resolveGeneratedImage(genDir, '../secret.png'), /找不到/, '上層目錄的圖不給送');
+    throws(() => resolveGeneratedImage(genDir, 'nope.png'), /找不到/, '找不到的檔名回清楚原因');
+    fs.writeFileSync(path.join(genDir, 'fake.png'), 'not an image');
+    throws(() => resolveGeneratedImage(genDir, 'fake.png'), /不是 PNG/, '假圖片擋下來');
+    throws(() => resolveGeneratedImage(genDir, 'exec-1.png', { maxBytes: 1 }), /上傳上限/, '超過上傳上限擋下來');
+    let linked = false;
+    try {
+      fs.symlinkSync(path.join(parent, 'secret.png'), path.join(genDir, 'link.png'), 'file');
+      linked = true;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') console.log('SKIP 無法建立 symlink，跳過符號連結檢查');
+    }
+    if (linked) throws(() => resolveGeneratedImage(genDir, 'link.png'), /符號連結/, '符號連結不送');
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
 
   const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
   if (!hasFfmpeg) {

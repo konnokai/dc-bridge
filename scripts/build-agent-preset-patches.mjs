@@ -73,6 +73,7 @@ const RELATIVE_ROW_REWRITES = new Map([
   ['./qq-tool-restrict.mjs', GUARD_SPECIFIER],
   ['./dc-tool-restrict.mjs', 'dc-agent-presets/dc-tool-restrict.mjs'],
   ['./dc-session-token.mjs', 'dc-agent-presets/dc-session-token.mjs'],
+  ['./dc-draw-image.mjs', 'dc-agent-presets/dc-draw-image.mjs'],
 ]);
 
 export const BUNDLE_DIR = bundleDirFor('qq-chat');

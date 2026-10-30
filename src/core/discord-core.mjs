@@ -18,8 +18,9 @@ export const INVITE_SCOPES = Object.freeze(['bot', 'applications.commands']);
 /**
  * 邀請連結的權限：只列目前橋接真的會用到的能力（最小權限）。
  *
- * 不含 Administrator / Manage Guild / Manage Messages / Attach Files：
- * 這些目前都用不到。bit 值與 discord.js 的 PermissionFlagsBits 一致，
+ * 不含 Administrator / Manage Guild / Manage Messages：
+ * 這些目前都用不到。AttachFiles 是畫圖用的（`send_image` 要把生圖上傳到頻道），
+ * 沒有它就會在送出時被 Discord 拒絕。bit 值與 discord.js 的 PermissionFlagsBits 一致，
  * scripts/test-discord-bridge.mjs 會對賬。
  */
 export const INVITE_PERMISSIONS = Object.freeze([
@@ -30,6 +31,7 @@ export const INVITE_PERMISSIONS = Object.freeze([
   { key: 'AddReactions', label: '新增反應', bit: 1n << 6n },
   { key: 'UseExternalEmojis', label: '使用外部表情', bit: 1n << 18n },
   { key: 'SendPolls', label: '建立投票', bit: 1n << 49n },
+  { key: 'AttachFiles', label: '附加檔案', bit: 1n << 15n },
 ]);
 
 export function invitePermissionsBitfield() {
@@ -346,7 +348,7 @@ const PROGRESS_DETAIL_MAX = 80;
 const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
-  'mcp__discord__send_message', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
+  'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   'mcp__slang__lookup_slang', 'mcp__slang__record_slang', 'mcp__slang__record_channel_tag',
@@ -367,6 +369,8 @@ const PROGRESS_LABELS = {
   'mcp__discord__note_event': ['📝 記下頻道事件'],
   'mcp__discord__search_notes': ['📝 查頻道筆記', (args) => args.query],
   'mcp__discord__forget_note': ['🗑️ 刪頻道筆記'],
+  // 生圖要一兩分鐘，進度至少讓頻道知道在畫，不是卡住。
+  'generate_image': ['🎨 畫圖'],
 };
 
 /** 一次工具呼叫在 Discord 進度訊息裡的那一行；不用列的回 null。args 是 DSH 事件裡的 JSON 字串。 */

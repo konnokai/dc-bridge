@@ -47,6 +47,16 @@
 | 动态 ACL | `resolveVoicePathForV2()` / `voicePathInsideLibrary()` | 语音只能取语音库目录内的文件；贴纸只能发收藏库内的表情；图片只能读 SnowLuma home 内的本地文件（realpath 复核防符号链接逃逸） |
 | **只探测、不部署**（L6 设计不变量） | `mcp-host-server.js` | 该 MCP server **只提供 `snowluma_status`（只读探活 `get_login_info`）**。⚠️ **v0.1.5 起删除了 `start_snowluma` / `stop_snowluma` 与 `snowluma.allowProcessControl`**：SnowLuma EULA §5.4 规定「将其并入第三方安装包或 Docker 镜像、**通过自动化脚本部署**」须事先书面授权，原生组件属**专有组件**。⇒ 本程序不安装、不复制、不打包、不程序化启停 SnowLuma；用户自行安装与启动。详见 `LICENSE` 与 `QSH-plan/QSH_PLAN.md` §6.0 |
 
+#### Discord 画图例外（2026-10-30）
+
+Discord 的 `dc-chat` 多了一个 `generate_image`，但它**不是**把 `dsh-generate-image` 的全局工具直接放给模型：
+
+- `plugins/dc-agent-presets/dc-draw-image.mjs` 注册一个同名的 **scoped** `generate_image`，盖掉 profile 里的全局版本。
+- scoped 工具调用 Codex 时用 `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（没有 write 规则；`image_gen` 的存图走 `LOCAL_FS`，不需要 profile 写入权）；同时加 `--disable shell_tool --disable unified_exec --disable view_image`。工作目录是 `state/discord-imagegen-work`，不是 DSH 的安装目录。
+- 模型只能传角色代号（`self`、`gpt`…）；`outputDir` 由外挂固定到 `state/discord-images`，`inputImage` 只换成 `assets/ai-chan-sheets` 里的三视图。
+- prompt 里出现 URL、绝对路径、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明显的指令字样时直接拒绝。
+- 残存风险：`/mnt` 由 permission profile 拒绝，`shell/exec` 与 `view_image` 已关闭；其他本机路径仍是唯读（`jun` 账号自己的资料，用户接受这个范围）。image_gen 本身仍会调用外部模型，prompt 过滤挡不住所有注入；要再收紧就在独立 OS 账号/容器里跑 Codex，只挂载参考图与空输出目录。
+
 ### 3. 出站内容（模型能说什么、能发什么）
 
 | 机制 | 位置 | 行为 |

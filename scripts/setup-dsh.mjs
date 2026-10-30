@@ -324,6 +324,23 @@ function patchProfilePackage(links) {
   log(`profile package.json ensured: ${pkgFile}`);
 }
 
+/**
+ * 畫圖要另外裝 dsh-generate-image。它不是本 repo 的 bundle，setup 不自動安裝
+ * （會連網、要 Codex 登入），但少了它 dc-chat 的 generate_image 就不存在，
+ * 所以至少要在安裝時講一聲。
+ */
+function warnMissingImagePlugin() {
+  if (!DISCORD_ONLY) return;
+  const pkgFile = path.join(DSH_HOME, 'profiles', PROFILE, 'package.json');
+  let pkg = {};
+  try { pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8')); } catch { return; }
+  const installed = Boolean(pkg.dependencies?.['dsh-generate-image'])
+    && (pkg.dsh?.profile?.bundles ?? []).includes('dsh-generate-image');
+  if (installed) return;
+  log('⚠️ 這個 profile 沒裝 dsh-generate-image：dc-chat 的 generate_image 會不存在，大肥魚畫不了圖。');
+  log(`   安裝：dsh plugin --profile ${PROFILE} add github:zemul/dsh-generate-image`);
+}
+
 function ensureLocalModeFile() {
   const stateDir = path.join(REPO_ROOT, 'state');
   const modeFile = path.join(stateDir, 'mode.json');
@@ -383,6 +400,7 @@ regeneratePresetPatches();
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);
+warnMissingImagePlugin();
 if (!DISCORD_ONLY) reportLegacyPresetDir();
 if (!DISCORD_ONLY) ensureLocalModeFile();
 autoInstallProfileBundles();

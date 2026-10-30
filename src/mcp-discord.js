@@ -111,6 +111,20 @@ tool(
 );
 
 tool(
+  'send_image',
+  '把 generate_image 畫好的圖送進目前的 Discord 會話。file 填 generate_image 回傳的 path（或那個檔名）；可以順便帶一句話。只送得出放在橋接圖片目錄裡的圖。',
+  {
+    token: sessionToken,
+    file: z.string().describe('generate_image 回傳的 path（完整路徑或檔名都可以）'),
+    content: z.string().optional().describe('跟圖片一起送的文字，可省略'),
+    reply_to: messageRef('要回覆的那則訊息').optional(),
+  },
+  '/send',
+  (result) => sentDetail(result, '送出圖片'),
+  60_000,
+);
+
+tool(
   'send_sticker',
   '送一張這個伺服器的貼圖（名稱先用 search_stickers 查）。私聊與別的伺服器的貼圖送不了。',
   {

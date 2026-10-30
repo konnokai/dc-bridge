@@ -1,0 +1,252 @@
+{
+  "version": 1,
+  "source": "https://github.com/lmy414/ai-chan-sheets",
+  "license": "CC BY-NC-SA 4.0",
+  "note": "只收 便于查看/ 的 5 張圖；完整设定图_浏览预览.jpg 沒有收，全板总览是同一張的較小版本。",
+  "generatedAt": "2026-10-30",
+  "characters": [
+    {
+      "id": "glm",
+      "name": "智谱 GLM 娘（阔耳狐娘）",
+      "promptName": "GLM-chan (fox-eared girl)",
+      "dir": "01_智谱GLM娘_阔耳狐娘",
+      "aliases": [
+        "GLM",
+        "GLM娘",
+        "智谱",
+        "智谱娘",
+        "阔耳狐娘",
+        "闊耳狐娘"
+      ],
+      "reference": "01_智谱GLM娘_阔耳狐娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "01_智谱GLM娘_阔耳狐娘/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "01_智谱GLM娘_阔耳狐娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "01_智谱GLM娘_阔耳狐娘/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "01_智谱GLM娘_阔耳狐娘/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "01_智谱GLM娘_阔耳狐娘/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "gpt",
+      "name": "GPT 娘（白龙娘）",
+      "promptName": "GPT-chan (white dragon girl)",
+      "dir": "02_GPT娘_白龙娘",
+      "aliases": [
+        "GPT",
+        "GPT娘",
+        "白龙娘",
+        "白龍娘",
+        "OpenAI",
+        "OpenAI娘"
+      ],
+      "reference": "02_GPT娘_白龙娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "02_GPT娘_白龙娘/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "02_GPT娘_白龙娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "02_GPT娘_白龙娘/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "02_GPT娘_白龙娘/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "02_GPT娘_白龙娘/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek 娘（鲸鱼娘）",
+      "promptName": "DeepSeek-chan (whale girl)",
+      "dir": "03_DeepSeek娘_鲸鱼娘",
+      "aliases": [
+        "DeepSeek",
+        "DeepSeek娘",
+        "深度求索娘",
+        "鲸鱼娘",
+        "鯨魚娘",
+        "大肥魚",
+        "大肥鱼",
+        "自己"
+      ],
+      "reference": "03_DeepSeek娘_鲸鱼娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "03_DeepSeek娘_鲸鱼娘/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "03_DeepSeek娘_鲸鱼娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "03_DeepSeek娘_鲸鱼娘/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "03_DeepSeek娘_鲸鱼娘/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "03_DeepSeek娘_鲸鱼娘/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "ernie",
+      "name": "文心一言娘（蓝发轮椅少女）",
+      "promptName": "Ernie-chan (blue-haired girl in a wheelchair)",
+      "dir": "04_文心一言娘",
+      "aliases": [
+        "文心",
+        "文心一言",
+        "文心一言娘",
+        "文心娘",
+        "百度娘",
+        "蓝发轮椅少女",
+        "藍髮輪椅少女"
+      ],
+      "reference": "04_文心一言娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "04_文心一言娘/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "04_文心一言娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "04_文心一言娘/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "04_文心一言娘/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "04_文心一言娘/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "qwen",
+      "name": "通义千问娘 Qwen",
+      "promptName": "Qwen-chan",
+      "dir": "05_通义千问娘_Qwen",
+      "aliases": [
+        "Qwen",
+        "Qwen娘",
+        "通义千问",
+        "通義千問",
+        "通义千问娘",
+        "通義千問娘",
+        "千问娘",
+        "千問娘",
+        "阿里娘"
+      ],
+      "reference": "05_通义千问娘_Qwen/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "05_通义千问娘_Qwen/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "05_通义千问娘_Qwen/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "05_通义千问娘_Qwen/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "05_通义千问娘_Qwen/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "05_通义千问娘_Qwen/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi 娘（月之暗面）",
+      "promptName": "Kimi-chan",
+      "dir": "06_Kimi娘_Moonshot",
+      "aliases": [
+        "Kimi",
+        "Kimi娘",
+        "月之暗面",
+        "月之暗面娘",
+        "Moonshot",
+        "Moonshot娘"
+      ],
+      "reference": "06_Kimi娘_Moonshot/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "06_Kimi娘_Moonshot/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "06_Kimi娘_Moonshot/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "06_Kimi娘_Moonshot/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "06_Kimi娘_Moonshot/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "06_Kimi娘_Moonshot/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "doubao",
+      "name": "豆包 Seed 娘（紫发高马尾）",
+      "promptName": "Doubao Seed-chan",
+      "dir": "07_豆包Seed娘",
+      "aliases": [
+        "豆包",
+        "豆包娘",
+        "豆包Seed娘",
+        "Seed",
+        "Seed娘",
+        "紫发高马尾",
+        "紫髮高馬尾"
+      ],
+      "reference": "07_豆包Seed娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "07_豆包Seed娘/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "07_豆包Seed娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "07_豆包Seed娘/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "07_豆包Seed娘/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "07_豆包Seed娘/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax 娘（海螺 AI）",
+      "promptName": "MiniMax-chan (conch AI reporter)",
+      "dir": "08_MiniMax娘_海螺AI",
+      "aliases": [
+        "MiniMax",
+        "MiniMax娘",
+        "海螺AI",
+        "海螺AI娘",
+        "海螺娘"
+      ],
+      "reference": "08_MiniMax娘_海螺AI/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "08_MiniMax娘_海螺AI/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "08_MiniMax娘_海螺AI/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "08_MiniMax娘_海螺AI/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "08_MiniMax娘_海螺AI/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "08_MiniMax娘_海螺AI/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "grok",
+      "name": "Grok 娘（金发吸血鬼）",
+      "promptName": "Grok-chan (blonde vampire)",
+      "dir": "09_Grok娘_xAI",
+      "aliases": [
+        "Grok",
+        "Grok娘",
+        "金发吸血鬼",
+        "金髮吸血鬼"
+      ],
+      "reference": "09_Grok娘_xAI/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "09_Grok娘_xAI/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "09_Grok娘_xAI/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "09_Grok娘_xAI/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "09_Grok娘_xAI/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "09_Grok娘_xAI/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini 娘（四角星猫耳）",
+      "promptName": "Gemini-chan (four-pointed-star cat ears)",
+      "dir": "10_Gemini娘",
+      "aliases": [
+        "Gemini",
+        "Gemini娘",
+        "四角星猫耳"
+      ],
+      "reference": "10_Gemini娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "10_Gemini娘/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "10_Gemini娘/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "10_Gemini娘/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "10_Gemini娘/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "10_Gemini娘/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    },
+    {
+      "id": "claude",
+      "name": "Claude 娘（橘发与菊花纹）",
+      "promptName": "Claude-chan (orange hair, chrysanthemum motif)",
+      "dir": "11_Claude娘_Anthropic",
+      "aliases": [
+        "Claude",
+        "Claude娘",
+        "克劳德娘",
+        "克勞德娘",
+        "橘发菊花",
+        "橘髮菊花"
+      ],
+      "reference": "11_Claude娘_Anthropic/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+      "views": {
+        "overview": "11_Claude娘_Anthropic/便于查看/横版完整设定图_全板总览_查看用.jpg",
+        "three_view": "11_Claude娘_Anthropic/便于查看/横版完整设定图_01_三视图_查看用.jpg",
+        "expressions": "11_Claude娘_Anthropic/便于查看/横版完整设定图_02_表情_查看用.jpg",
+        "outfits": "11_Claude娘_Anthropic/便于查看/横版完整设定图_03_服装_查看用.jpg",
+        "props": "11_Claude娘_Anthropic/便于查看/横版完整设定图_04_道具细节_查看用.jpg"
+      }
+    }
+  ]
+}

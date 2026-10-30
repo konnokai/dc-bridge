@@ -32,7 +32,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-memory.mjs` | 群友記憶 |
 | `core/discord-slang.mjs` | 黑話收集與注入 |
 | `core/discord-emoji.mjs` | 表情目錄與使用次數 |
-| `core/discord-media.mjs` | 圖片與連結預覽 |
+| `core/discord-media.mjs` | 圖片與連結預覽、`send_image` 的本機生圖檔案解析 |
 | `core/discord-security.mjs` | 白名單、敏感詞 |
 | `core/discord-usage.mjs` | 用量統計 |
 | `core/discord-trigger-stats.mjs` | 觸發統計 |
@@ -67,12 +67,12 @@ Discord 不 import `src/bridge.js`。
 | 路徑 | 內容 | 線 |
 | --- | --- | --- |
 | `dsh/agent-presets/` | preset 的權威源：`dc-chat`、`dc-learner`、`qq-chat`、`qq-chat-v2` | 兩條 |
-| `plugins/` | DSH 插件：`dc-agent-presets`（Discord 的 patch 與工具守衛）、`qq-agent-presets`、`qq-mode-console` | 兩條 |
+| `plugins/` | DSH 插件：`dc-agent-presets`（Discord 的 patch、工具守衛與畫圖路徑鎖）、`qq-agent-presets`、`qq-mode-console` | 兩條 |
 | `public/` | `discord-console.html`（Discord 控制台，預設 3110）、`console.html`（QQ 控制台，3100） | 兩條 |
 | `roles/` | 人格卡（QQ 控制台用） | QQ |
-| `assets/` | 圖片等資源 | — |
+| `assets/` | 圖片等資源；`ai-chan-sheets/` 是 11 個 AI 娘的三視圖與設定圖（畫圖參考，外部作品，授權見該目錄 README） | — |
 | `docs/` | 全部文件，見 [README.md](README.md) | 兩條 |
-| `state/` | 執行時資料（會話映射、筆記、帳本、鎖）。`.gitignore` 排除，**不要刪** | 兩條 |
+| `state/` | 執行時資料（會話映射、筆記、帳本、鎖、`discord-images/` 生圖輸出）。`.gitignore` 排除，**不要刪** | 兩條 |
 | `config.json` | 真實設定，不入庫；模板是 `config.example.json` | 兩條 |
 
 ## 四、`scripts/` 命名
