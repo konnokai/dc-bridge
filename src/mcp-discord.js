@@ -75,6 +75,7 @@ const messageRef = (what) => z.string().describe(`${what}：訊息前面的 #編
 
 /** 送出結果帶上 #編號：edit_message／delete_message／看反應都用這些。 */
 function sentDetail(result, verb) {
+  if (result?.notice) return String(result.notice);
   const where = result.channel === '私聊' ? '私聊' : `#${result.channel ?? 'Discord'}`;
   const refs = result.refs ?? [];
   if (refs.length === 1) return `已${verb}到 ${where}。這則的訊息編號是 #${refs[0]}（之後改、收回、看反應用這個）`;
@@ -219,6 +220,19 @@ tool(
     note: z.string().max(200).describe('要提醒自己什麼，例如「回來看比賽結果」'),
   },
   '/followup',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'ignore_user',
+  '暫時不理某個人：這段時間他的訊息不會送進來，包括 @ 你。用在有人一直騷擾、洗頻、針對你講不聽的時候；意見不合或一次吵架不要用。管理員不能設。minutes=0 解除；控制台看得到這份名單。',
+  {
+    token: sessionToken,
+    message: messageRef('那個人說過的某一則訊息'),
+    minutes: z.number().int().min(0).max(1440).describe('不理幾分鐘（1~1440，最多一天）；0 = 解除不理'),
+    reason: z.string().max(100).optional().describe('為什麼不理，寫給管理員看的，可省略'),
+  },
+  '/ignore',
   (result) => String(result.text ?? ''),
 );
 

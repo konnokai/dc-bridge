@@ -318,10 +318,11 @@ export function isDeniedUser(cfg, userId) {
 /**
  * 模型能不能讀這一則訊息。`deny.users`（管理員封鎖）一律不行；
  * `deny.self` 只有 @bot／回覆 bot 的那一則可以，因為那一則本來就照正常流程處理。
- * 私聊沒有這個例外。
+ * 模型自己的不理名單（`isIgnored`）比照 `deny.users`，沒有例外。私聊沒有 self 的例外。
  */
-export function canReadMessage(cfg, message, botUserId) {
+export function canReadMessage(cfg, message, botUserId, isIgnored = () => false) {
   const id = String(message?.author?.id ?? '');
+  if (isIgnored(id)) return false;
   if (cfg.deny.users.includes(id)) return false;
   if (!cfg.deny.self.includes(id)) return true;
   if (!message?.guildId) return false;
@@ -350,7 +351,7 @@ const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
   'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
-  'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__schedule_followup',
+  'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   'mcp__slang__lookup_slang', 'mcp__slang__record_slang', 'mcp__slang__record_channel_tag',
 ]);

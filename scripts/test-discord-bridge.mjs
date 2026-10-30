@@ -58,6 +58,20 @@ import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHi
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
+import {
+  IGNORE_MAX_MINUTES,
+  REFUSAL_WINDOW_MS,
+  createIgnoreStore,
+  createRefusalTracker,
+  formatIgnoreUntil,
+  ignoreList,
+  isIgnoring,
+  isRefusalMessage,
+  loadIgnoreFile,
+  saveIgnoreFile,
+  setIgnored,
+  unignore,
+} from '../src/core/discord-ignore.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
 import { findSensitive } from '../src/core/discord-security.mjs';
 import { bumpEmojiUsage, buildEmojiHint, countEmojiTags, formatEmojiLine, labelEmojiTags, loadEmojiUsage, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
@@ -95,7 +109,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note',
@@ -155,7 +169,7 @@ console.log('## 1. 設定收斂');
     ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
     ok(call('generate_image', {}) === '🎨 畫圖', '生圖在進度訊息裡顯示畫圖');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
-    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__schedule_followup']);
+    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup']);
     ok(others.every((name) => silent.has(name) || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
     ok(SLANG_TOOL_NAMES.every((name) => describeToolCall(name, '{}') === null), '黑話工具不列進度（背景筆記）');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
@@ -429,6 +443,8 @@ console.log('## 7. dc-chat preset 與守衛');
   ok((persona.match(/不要裝死/g) ?? []).length <= 1, '「被叫到要回」不在好幾段重複');
   ok(/管理員.{0,10}直接要求.{0,30}優先/.test(persona) && /不能壓過.{0,4}安全邊界/.test(persona), '管理員要求優先於頻道秩序規則，但不壓過安全邊界');
   ok(/不要解釋自己為什麼這樣回/.test(persona), '不解釋自己的說話方式');
+  ok(/ignore_user/.test(persona) && /管理員不能設/.test(persona), 'persona 教模型用 ignore_user，並說明管理員不能設');
+  ok(/戰績圖/.test(persona) && /不要按/.test(persona), 'persona 明確叫模型不要對戰績圖按 reaction');
   ok(!/【發送】行給的值/.test(persona) && /由系統自動帶入/.test(persona), 'persona 叫模型不要填 token');
   const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
   ok(!bridgeSource.includes('【發送】token='), '【發送】行不再把令牌寫進 prompt');
@@ -1022,6 +1038,59 @@ console.log('## 7c1. MCP /send 統計');
   ok(dirty === 4, '統計有變更才標記存檔');
   ok(sent[1].file === '/tmp/state/discord-images/a.png' && sent[1].replyTo === '' && sent[1].sticker === '',
     '/send 的參數原樣傳給 agentSender');
+}
+
+console.log('## 7c2. 不理名單與重複拒絕');
+{
+  ok(isRefusalMessage('這題我不碰，換一個'), '認得「這題我不碰，換一個」');
+  ok(isRefusalMessage('  這個不聊。'), '認得加了空白與句號的固定拒絕句');
+  ok(isRefusalMessage('這題不回'), '認得「這題不回」');
+  ok(isRefusalMessage('這個不聊 😅'), '句尾帶 emoji 也認得');
+  ok(isRefusalMessage('我只會當大肥魚 :kekw:'), '句尾帶伺服器表情也認得');
+  ok(!isRefusalMessage('這題我不碰，換一個話題聊別的'), '有額外內容就不算固定拒絕句');
+  ok(!isRefusalMessage('這個不聊了我要去吃飯'), '一般聊天不算拒絕句');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-ignore-'));
+  const file = path.join(dir, 'discord-ignore.json');
+  let store = createIgnoreStore();
+  const at = Date.UTC(2026, 9, 30, 12, 0);
+  setIgnored(store, { userId: USER, name: '小明', minutes: 30, reason: '洗頻', at });
+  ok(isIgnoring(store, USER, at + 1), '設定後生效');
+  ok(!isIgnoring(store, USER, at + 30 * 60_000 + 1), '時間到自動失效');
+  ok(ignoreList(store, { now: at + 1 }).length === 1, '控制台名單看得到還沒到期的人');
+  ok(ignoreList(store, { now: at + 30 * 60_000 + 1 }).length === 0, '過期的人不在名單裡');
+  const beforeSave = JSON.stringify(store.users);
+  saveIgnoreFile(file, store);
+  ok(JSON.stringify(store.users) === beforeSave, '存檔不會改動記憶體名單');
+  throws(() => setIgnored(store, { userId: USER, minutes: 0 }), /1~/, 'minutes 0 不能走 setIgnored');
+  throws(() => setIgnored(store, { userId: USER, minutes: IGNORE_MAX_MINUTES + 1 }), /1~/, '超過上限直接拒絕');
+  throws(() => setIgnored(store, { userId: 'abc', minutes: 10 }), /Discord ID/, '非法 user id 直接拒絕');
+  ok(/^\d{2}\/\d{2} \d{2}:\d{2}$/.test(formatIgnoreUntil(at + 90 * 60_000)), '到期時間帶月日與時分');
+  saveIgnoreFile(file, store);
+  const loaded = loadIgnoreFile(file, { now: at + 1 });
+  ok(loaded.warning === null && isIgnoring(loaded.store, USER, at + 1), '重啟後名單仍然有效');
+  ok(loadIgnoreFile(file, { now: at + 31 * 60_000 }).store.users[USER] === undefined, '讀檔時跳過已過期的條目');
+  ok(unignore(store, USER) && !isIgnoring(store, USER, at + 1), '可以提早解除');
+
+  // 模型自己的不理名單比照管理員封鎖，讀訊息時沒有 @ 的例外。
+  const cfg = baseCfg();
+  ok(canReadMessage(cfg, { guildId: GUILD, author: { id: USER } }, BOT, (id) => id === USER) === false,
+    '不理名單的人，他的訊息不給模型讀');
+
+  let clock = 1_000_000;
+  const tracker = createRefusalTracker({ now: () => clock });
+  ok(tracker.count('ch:1', USER) === 0, '還沒拒絕過是 0');
+  ok(tracker.note('ch:1', USER) === 1, '第一次拒絕只算一次');
+  ok(tracker.count('ch:1', USER) === 1 && tracker.count('ch:1', USER) === 1, 'count 只讀不累加');
+  clock += 1000;
+  ok(tracker.note('ch:1', USER) === 2, '窗口內第二次 → 改按 ❌');
+  clock += REFUSAL_WINDOW_MS + 1;
+  ok(tracker.count('ch:1', USER) === 0, '超過窗口 count 歸零');
+  ok(tracker.note('ch:1', USER) === 1, '超過窗口重新從第一次算');
+  ok(tracker.note('ch:2', USER) === 1, '不同頻道分開算');
+  ok(tracker.note('ch:2', '333333333333333333') === 1, '不同人分開算');
+  tracker.forget('ch:1');
+  ok(tracker.note('ch:1', USER) === 1, '/reset 後同一個頻道重新算');
 }
 
 console.log('## 7b. 邀請連結');
@@ -2281,6 +2350,7 @@ console.log('## 7e. Discord MCP 發送工具');
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
       set_quiet: ['/quiet', { minutes: 30 }],
+      ignore_user: ['/ignore', { message: '#k7f3ab', minutes: 60 }],
       schedule_followup: ['/followup', { minutes: 30, note: '回來看結果' }],
       search_emojis: ['/emojis', { query: '笑' }],
       search_stickers: ['/stickers', { query: '貓' }],
@@ -2651,6 +2721,7 @@ console.log('## 9. 控制台');
       memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
       notes: () => ({ enabled: true, notes: [{ id: 'n1', text: '週五打球' }] }),
       deleteNote: (id) => id === 'n1',
+      ignoreRemove: (userId) => userId === USER,
       triggers: () => ({
         todayUsers: 1,
         totalUsers: 2,
@@ -2725,6 +2796,12 @@ console.log('## 9. 控制台');
   ok(noteMissing.status === 404, '不存在的筆記回 404');
   const noteNoId = await fetch(`${base}/api/notes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({}) });
   ok(noteNoId.status === 400, '缺少筆記 id 回 400');
+  const ignoreRemove = await fetch(`${base}/api/ignore/remove`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ userId: USER }) });
+  ok(ignoreRemove.status === 200 && (await ignoreRemove.json()).ok === true, '解除不理端點會呼叫 handler');
+  const ignoreMissing = await fetch(`${base}/api/ignore/remove`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ userId: '999999999999999999' }) });
+  ok(ignoreMissing.status === 404, '不在名單裡回 404');
+  const ignoreBad = await fetch(`${base}/api/ignore/remove`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ userId: 'abc' }) });
+  ok(ignoreBad.status === 400, '非法 user id 回 400');
   ok((await fetch(`${base}/api/triggers`)).status === 401, '沒有 token 讀不到對話統計');
   const triggersResponse = await fetch(`${base}/api/triggers`, { headers: authed });
   const triggersBody = await triggersResponse.json();

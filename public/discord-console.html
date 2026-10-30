@@ -313,6 +313,17 @@
       </table>
     </div>
   </section>
+
+  <section class="card">
+    <h2>模型自己不理的人 <span id="ignored-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 ignore_user 設的暫時名單，時間到自動失效。跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開；這裡的人連 @ 都不處理。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>群友</th><th>原因</th><th>到什麼時候</th><th>記下</th><th></th></tr></thead>
+        <tbody id="ignored-rows"></tbody>
+      </table>
+    </div>
+  </section>
   </div>
 
   <div class="tab-panel" role="tabpanel" id="tab-logs" aria-labelledby="tabbtn-logs" hidden>
@@ -448,6 +459,11 @@
       ['觸發對話', s.triggers
         ? ('今天 ' + s.triggers.todayUsers + ' 人｜總計 ' + s.triggers.totalUsers + ' 人（' + s.triggers.totalTriggers + ' 次｜畫圖 ' + (s.triggers.totalDraws ?? 0) + ' 次）' + (topTriggers ? '｜最常：' + topTriggers : ''))
         : '—'],
+      ['模型不理', (() => {
+        const names = (s.ignored ?? []).map((user) => user.name || user.userId);
+        if (!names.length) return '沒有';
+        return names.length + ' 人' + (names.length <= 5 ? '：' + names.join('、') : '');
+      })()],
       ['控制台', s.console.host + ':' + s.console.port],
     ];
     $('status').replaceChildren(...items.map(([k, v]) => el('div', {},
@@ -958,6 +974,24 @@
     )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有任何會話'))]));
   }
 
+  function renderIgnored(rows) {
+    const list = rows ?? [];
+    $('ignored-count').textContent = `（${list.length} 人）`;
+    $('ignored-rows').replaceChildren(...(list.length ? list.map((user) => el('tr', {},
+      el('td', {},
+        el('strong', {}, user.name || user.userId),
+        el('div', { className: 'muted', style: 'font-size:11px' }, user.userId)),
+      el('td', { className: 'muted' }, user.reason || '—'),
+      el('td', { className: 'nowrap' }, new Date(user.until).toLocaleString('zh-TW', { hour12: false })),
+      el('td', { className: 'muted nowrap' }, fmtAgo(user.at)),
+      el('td', {}, el('button', {
+        className: 'danger',
+        dataset: { ignoreUser: user.userId, name: user.name || user.userId },
+        textContent: '解除',
+      })),
+    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, '目前沒有。'))]));
+  }
+
   function renderLogs(logs) {
     const box = $('logs');
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
@@ -1006,6 +1040,7 @@
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
+    if (results[0].status === 'fulfilled') renderIgnored(results[0].value.ignored);
     if (results[1].status === 'fulfilled') renderSessions(results[1].value.sessions);
     if (results[2].status === 'fulfilled') renderLogs(results[2].value.logs);
     if (results[3].status === 'fulfilled') renderSlang(results[3].value);
@@ -1213,6 +1248,21 @@
       alert('刪除失敗：' + error.message);
       await refresh();
     } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('ignored-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-ignore-user]');
+    if (!button) return;
+    const userId = button.dataset.ignoreUser;
+    if (!confirm('解除 ' + (button.dataset.name || userId) + ' 的不理？他的訊息會重新進來。')) return;
+    button.disabled = true;
+    try {
+      await api('/api/ignore/remove', { method: 'POST', body: JSON.stringify({ userId }) });
+      await refresh();
+    } catch (error) {
+      alert('解除失敗：' + error.message);
       button.disabled = false;
     }
   });
