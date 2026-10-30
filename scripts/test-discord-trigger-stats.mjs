@@ -7,6 +7,7 @@ import {
   TRIGGER_VERSION,
   createTriggerStore,
   loadTriggerFile,
+  recordDraws,
   recordTriggers,
   saveTriggerFile,
   triggerStats,
@@ -63,6 +64,25 @@ console.log('## 2. 累加與統計');
   ok(triggerUserList(store).map((user) => user.userId).join() === [A, B].join(), '完整名單照次數排序');
 }
 
+console.log('## 2b. 繪圖次數');
+{
+  const store = createTriggerStore();
+  recordTriggers(store, { users: [{ userId: A, name: '小明' }], key: 'ch:1', at: NOW - DAY });
+  const before = { count: store.users[A].count, lastAt: store.users[A].lastAt, lastKey: store.users[A].lastKey };
+  const updated = recordDraws(store, {
+    users: [{ userId: A, name: '小明改' }, { userId: A, name: '重複' }, { userId: B, name: '小美' }, { userId: 'bad', name: '壞 id' }],
+    at: NOW,
+  });
+  ok(updated === 2 && store.users[A].drawCount === 1 && store.users[B].drawCount === 1, '兩個有效的人各加一次繪圖');
+  ok(store.users[A].count === before.count && store.users[A].lastAt === before.lastAt && store.users[A].lastKey === before.lastKey,
+    '只加繪圖次數，不動對話次數與最後觸發');
+  ok(store.users[A].name === '小明改', '繪圖時也更新顯示名稱');
+
+  const stats = triggerStats(store, { now: NOW, top: 3 });
+  ok(stats.totalDraws === 2, '統計總繪圖次數');
+  ok(stats.top.find((user) => user.userId === A)?.drawCount === 1, '排行榜帶每個人的繪圖次數');
+}
+
 console.log('## 3. 檔案讀寫與壞檔');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-trigger-'));
@@ -70,9 +90,13 @@ console.log('## 3. 檔案讀寫與壞檔');
     const file = path.join(dir, 'discord-triggers.json');
     const store = createTriggerStore();
     recordTriggers(store, { users: [{ userId: A, name: '小明' }], key: 'ch:1', at: NOW });
+    recordDraws(store, { users: [{ userId: A, name: '小明' }], at: NOW });
+    recordDraws(store, { users: [{ userId: B, name: '小美' }], at: NOW });
     saveTriggerFile(file, store);
     const loaded = loadTriggerFile(file);
     ok(loaded.warning === null && loaded.store.users[A]?.count === 1 && loaded.store.users[A]?.name === '小明', '存檔後讀得回來');
+    ok(loaded.store.users[A]?.drawCount === 1 && loaded.store.users[B]?.drawCount === 1,
+      '繪圖次數存檔後讀得回來（只有畫圖的人也不會掉）');
 
     fs.writeFileSync(file, '{壞掉');
     const corrupt = loadTriggerFile(file);

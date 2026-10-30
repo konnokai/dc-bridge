@@ -6,9 +6,12 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import {
+  CODEX_DRAW_MIN_FIVE_HOUR_PERCENT,
+  CODEX_DRAW_MIN_WEEKLY_PERCENT,
   CODEX_PING_MODEL,
   CODEX_RESET_GRACE_MS,
   CODEX_RESET_RETRY_MS,
+  codexDrawGate,
   createCodexQuota,
   createCodexResetPinger,
   formatCodexQuota,
@@ -58,6 +61,17 @@ console.log('## 1. 額度資料');
     '預設重置緩衝 30 秒、失敗重試 15 分鐘');
 }
 
+console.log('## 1b. 生圖額度門檻');
+{
+  const gate = (five, weekly) => codexDrawGate({ ok: true, fiveHour: { remainingPercent: five }, weekly: { remainingPercent: weekly } });
+  ok(CODEX_DRAW_MIN_FIVE_HOUR_PERCENT === 15 && CODEX_DRAW_MIN_WEEKLY_PERCENT === 5, '門檻是 5 小時 15%、每週 5%');
+  ok(gate(15, 5).allowed === true, '剛好 15% 與 5% 仍可畫');
+  ok(gate(14, 50).allowed === false && /5 小時額度剩 14%/.test(gate(14, 50).reason), '5 小時低於 15% 暫停');
+  ok(gate(50, 4).allowed === false && /每週額度剩 4%/.test(gate(50, 4).reason), '每週低於 5% 暫停');
+  ok(gate(50, 50).allowed === true && gate(50, 50).reason === null, '額度足夠時放行');
+  ok(codexDrawGate({ ok: true }).allowed === true && codexDrawGate({ ok: false }).allowed === true, '沒有額度資料時不擋');
+}
+
 console.log('## 2. preset 的生圖開關');
 {
   ok(presetAllowsImageGen({ root: ROOT, presetId: 'dc-chat' }) === true, 'dc-chat 有開 allowImageGen');
@@ -98,6 +112,41 @@ console.log('## 3. 額度快取');
   clock += 101;
   await failing.get();
   ok(fails === 2, '失敗快取過期後重試');
+}
+
+console.log('## 3b. 生圖額度快照');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-codex-snapshot-'));
+  const low = normalizeCodexRateLimits({
+    rateLimits: {
+      primary: { usedPercent: 90, resetsAt: 100 },
+      secondary: { usedPercent: 50, resetsAt: 200 },
+    },
+  });
+  const file = path.join(dir, 'quota.json');
+  const quota = createCodexQuota({ read: async () => low, now: () => 5_000, snapshotFile: file });
+  await quota.get();
+  const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+  ok(snapshot.fetchedAt === 5_000 && snapshot.drawAllowed === false
+    && /低於 15%/.test(snapshot.drawBlockedReason), '低額度寫入暫停生圖的快照');
+  ok(snapshot.fiveHour.remainingPercent === 10 && snapshot.weekly.remainingPercent === 50,
+    '快照帶兩個窗口的剩餘百分比');
+
+  const okFile = path.join(dir, 'ok.json');
+  const good = createCodexQuota({ read: async () => normalizeCodexRateLimits(FIXTURE), now: () => 6_000, snapshotFile: okFile });
+  await good.get();
+  ok(JSON.parse(fs.readFileSync(okFile, 'utf8')).drawAllowed === true, '額度足夠時快照放行');
+
+  const failFile = path.join(dir, 'fail.json');
+  const failing = createCodexQuota({ read: async () => { throw new Error('nope'); }, snapshotFile: failFile });
+  await failing.get();
+  ok(!fs.existsSync(failFile), '查詢失敗不寫快照');
+
+  const blocked = path.join(dir, 'blocked');
+  fs.mkdirSync(blocked);
+  const unwritable = createCodexQuota({ read: async () => low, now: () => 7_000, snapshotFile: blocked });
+  ok((await unwritable.get()).ok, '快照寫不進去不影響額度查詢');
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 function fakeChild() {

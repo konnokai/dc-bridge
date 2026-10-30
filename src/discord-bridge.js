@@ -137,6 +137,7 @@ import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
+import { createAgentSendHandler } from './core/discord-send-handler.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -543,7 +544,7 @@ async function main() {
   // 生圖開關在 preset 的 dc-tool-restrict.config.allowImageGen；沒有開生圖就不查
   // Codex 額度，也不排 5 小時窗口的重置 ping。
   const codexImageGenEnabled = presetAllowsImageGen({ root: ROOT, presetId: cfg.discord.agentPreset });
-  const codexQuota = codexImageGenEnabled ? createCodexQuota() : null;
+  const codexQuota = codexImageGenEnabled ? createCodexQuota({ snapshotFile: path.join(STATE_DIR, 'discord-codex-quota.json') }) : null;
   async function codexQuotaInfo() {
     if (!codexQuota) return { ok: false, skipped: true };
     return codexQuota.get();
@@ -1375,21 +1376,15 @@ async function main() {
   }
 
   const agentHandlers = {
-    async send(body) {
-      const content = typeof body.content === 'string' ? body.content : '';
-      const file = textArg(body.file, 500);
-      const result = await agentSender.send({
-        token: body.token,
-        content,
-        replyTo: textArg(body.reply_to),
-        sticker: textArg(body.sticker),
-        file,
-      });
-      noteTrigger(result.key);
-      recordBotMessages(result.key, result.refs?.length);
-      log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}${file ? `，圖片 ${path.basename(file)}` : ''}）`);
-      return result;
-    },
+    send: createAgentSendHandler({
+      agentSender,
+      turnUsers,
+      turnTriggerRecorded,
+      triggerStore,
+      markTriggerDirty,
+      recordBotMessages,
+      log,
+    }),
     async react(body) {
       const result = await agentSender.react({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
       log(`MCP reaction ${result.key}（${textArg(body.message)} ${textArg(body.emoji)}）`);
@@ -1759,8 +1754,8 @@ async function main() {
         : [];
       return {
         text: [
-          `今天 ${stats.todayUsers} 人｜總計 ${stats.totalUsers} 人｜共 ${stats.totalTriggers} 次（全部伺服器）`,
-          ...top.map((user, index) => `${index + 1}. ${flat(user.name || user.userId, 40)}：${user.count} 次`),
+          `今天 ${stats.todayUsers} 人｜總計 ${stats.totalUsers} 人｜共 ${stats.totalTriggers} 次｜畫圖 ${stats.totalDraws} 次（全部伺服器）`,
+          ...top.map((user, index) => `${index + 1}. ${flat(user.name || user.userId, 40)}：${user.count} 次${user.drawCount ? `（畫圖 ${user.drawCount} 次）` : ''}`),
           ...(top.length ? ['（上面是這個伺服器的人；次數是他在全部伺服器的總和）'] : []),
         ].join('\n'),
       };

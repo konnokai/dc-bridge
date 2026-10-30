@@ -62,10 +62,12 @@ export function loadTriggerFile(file) {
   for (const [userId, entry] of Object.entries(doc.users)) {
     if (!entry || typeof entry !== 'object') continue;
     const count = Math.max(0, Math.round(Number(entry.count) || 0));
-    if (!/^\d{5,25}$/.test(userId) || count === 0) continue;
+    const drawCount = Math.max(0, Math.round(Number(entry.drawCount) || 0));
+    if (!/^\d{5,25}$/.test(userId) || (count === 0 && drawCount === 0)) continue;
     store.users[userId] = {
       name: cleanName(entry.name),
       count,
+      drawCount,
       firstAt: Number(entry.firstAt) || 0,
       lastAt: Number(entry.lastAt) || 0,
       lastKey: String(entry.lastKey ?? '').slice(0, 80),
@@ -113,6 +115,7 @@ export function recordTriggers(store, { users = [], key = '', at = Date.now() } 
     const entry = store.users[userId] ?? {
       name: '',
       count: 0,
+      drawCount: 0,
       firstAt: at,
       lastAt: at,
       lastKey: '',
@@ -120,6 +123,35 @@ export function recordTriggers(store, { users = [], key = '', at = Date.now() } 
     entry.count += 1;
     entry.lastAt = at;
     entry.lastKey = String(key ?? '').slice(0, 80);
+    const name = cleanName(user?.name);
+    if (name) entry.name = name;
+    store.users[userId] = entry;
+    updated += 1;
+  }
+  return updated;
+}
+
+/**
+ * 記一次生圖觸發。不動對話次數與最後觸發時間，只加繪圖次數。
+ * @returns {number} 這次更新了幾個人
+ */
+export function recordDraws(store, { users = [], at = Date.now() } = {}) {
+  store.users ??= {};
+  const seen = new Set();
+  let updated = 0;
+  for (const user of users) {
+    const userId = String(user?.userId ?? '').trim();
+    if (!/^\d{5,25}$/.test(userId) || seen.has(userId)) continue;
+    seen.add(userId);
+    const entry = store.users[userId] ?? {
+      name: '',
+      count: 0,
+      drawCount: 0,
+      firstAt: at,
+      lastAt: at,
+      lastKey: '',
+    };
+    entry.drawCount = (entry.drawCount ?? 0) + 1;
     const name = cleanName(user?.name);
     if (name) entry.name = name;
     store.users[userId] = entry;
@@ -142,15 +174,18 @@ export function triggerStats(store, { now = Date.now(), top = 5 } = {}) {
   const startMs = start.getTime();
   const users = triggerUserList(store);
   const totalTriggers = users.reduce((sum, entry) => sum + (entry.count || 0), 0);
+  const totalDraws = users.reduce((sum, entry) => sum + (entry.drawCount || 0), 0);
   const limit = Math.max(0, Math.min(20, Number.isFinite(Number(top)) ? Number(top) : 5));
   return {
     totalUsers: users.length,
     todayUsers: users.filter((entry) => (entry.lastAt ?? 0) >= startMs).length,
     totalTriggers,
+    totalDraws,
     top: users.slice(0, limit).map((entry) => ({
       userId: entry.userId,
       name: entry.name,
       count: entry.count,
+      drawCount: entry.drawCount,
       lastAt: entry.lastAt,
     })),
   };

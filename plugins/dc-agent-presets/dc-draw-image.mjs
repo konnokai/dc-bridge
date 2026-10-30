@@ -87,6 +87,22 @@ export const CHARACTERS = manifest.characters
 /** 產圖固定放這裡；send_image 只認這個目錄裡的檔名。 */
 export const IMAGE_DIR = path.resolve(path.dirname(MODULE_FILE), '../../state/discord-images')
 
+// 橋接每 5 分鐘把 Codex 額度快照寫進 state/；額度太低時這裡直接拒絕，不再開 Codex。
+// 快照過期或不存在（橋接沒跑）就放行，避免額度其實已重置卻一直擋著。
+const QUOTA_FILE = path.join(path.dirname(IMAGE_DIR), 'discord-codex-quota.json')
+const QUOTA_MAX_AGE_MS = 10 * 60_000
+
+/** 快照說額度太低時回原因；過期、壞掉或不存在回 null（放行）。 */
+export function drawQuotaBlock() {
+  const file = process.env.DC_CODEX_QUOTA_FILE || QUOTA_FILE
+  let snapshot
+  try { snapshot = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return null }
+  const age = Date.now() - snapshot?.fetchedAt
+  if (!Number.isFinite(age) || age < 0 || age > QUOTA_MAX_AGE_MS) return null
+  if (snapshot.drawAllowed !== false) return null
+  return snapshot.drawBlockedReason || 'Codex 額度不足，先不畫圖'
+}
+
 /** adapter 會加 `-s`；wrapper 會拿掉並換成 permission profile。這裡保留 read-only 當 wrapper 失效時的 fallback。 */
 export const CODEX_SANDBOX = 'read-only'
 export const CODEX_EXTRA_ARGS = Object.freeze([
@@ -318,6 +334,8 @@ export function apply(ctx) {
     // 引擎用共用 generated_images 快照，不能並行；queue 是跨 agent 的第二層。
     isConcurrencySafe: () => false,
     async execute(args, exec) {
+      const quotaBlock = drawQuotaBlock()
+      if (quotaBlock) throw new Error(quotaBlock)
       if (!codex) throw new Error('畫圖引擎沒載入（dsh-generate-image 沒裝或版本不相容）：回報管理員')
       if (typeof args?.prompt !== 'string' || !args.prompt.trim()) throw new Error('generate_image 需要 prompt（要畫什麼）')
       if (PROMPT_DENY.test(args.prompt)) throw new Error('畫圖 prompt 含有路徑或指令字樣，已拒絕；只描述畫面')
@@ -341,17 +359,22 @@ export function apply(ctx) {
 
       fs.mkdirSync(IMAGE_DIR, { recursive: true })
       fs.mkdirSync(WORK_DIR, { recursive: true })
-      const result = await serialize(() => codex.runCodexGenerate({
-        ...codexOptions({ prompt: args.prompt, inputImage, signal: exec?.signal }),
-        codexBin: CODEX_WRAPPER,
-        extraArgs: [
-          ...CODEX_EXTRA_ARGS,
-          ...inputImages.slice(1).flatMap((image) => ['-i', image]),
-          '--dc-real-codex', codexBin,
-        ],
-        nodeBin: process.execPath,
-        timeoutMs: codex.DEFAULT_TIMEOUT_MS,
-      }))
+      const result = await serialize(() => {
+        // 排隊期間額度可能用完；真正開 Codex 前再檢查一次。
+        const queuedQuotaBlock = drawQuotaBlock()
+        if (queuedQuotaBlock) throw new Error(queuedQuotaBlock)
+        return codex.runCodexGenerate({
+          ...codexOptions({ prompt: args.prompt, inputImage, signal: exec?.signal }),
+          codexBin: CODEX_WRAPPER,
+          extraArgs: [
+            ...CODEX_EXTRA_ARGS,
+            ...inputImages.slice(1).flatMap((image) => ['-i', image]),
+            '--dc-real-codex', codexBin,
+          ],
+          nodeBin: process.execPath,
+          timeoutMs: codex.DEFAULT_TIMEOUT_MS,
+        })
+      })
 
       if (result.code !== 0) {
         const evErr = result.events.find((event) => event?.item?.type === 'error')

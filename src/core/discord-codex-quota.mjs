@@ -13,6 +13,9 @@ import { untilText } from './discord-usage.mjs';
 
 export const CODEX_PING_MODEL = 'gpt-6-luna';
 export const CODEX_QUOTA_TTL_MS = 5 * 60_000;
+// 額度太低時先停生圖，免得畫到一半被擋或把最後一點額度用完。
+export const CODEX_DRAW_MIN_FIVE_HOUR_PERCENT = 15;
+export const CODEX_DRAW_MIN_WEEKLY_PERCENT = 5;
 const CODEX_QUOTA_FAILURE_TTL_MS = 60_000;
 const CODEX_USAGE_TIMEOUT_MS = 15_000;
 const CODEX_PING_TIMEOUT_MS = 90_000;
@@ -126,19 +129,60 @@ export function readCodexRateLimits({
   });
 }
 
+/** 生圖的低額度守門：5 小時剩不到 15% 或每週剩不到 5% 就暫停。 */
+export function codexDrawGate(result) {
+  if (!result?.ok) return { allowed: true, reason: null };
+  const five = result.fiveHour?.remainingPercent;
+  const weekly = result.weekly?.remainingPercent;
+  if (Number.isFinite(five) && five < CODEX_DRAW_MIN_FIVE_HOUR_PERCENT) {
+    return {
+      allowed: false,
+      reason: `Codex 5 小時額度剩 ${Math.round(five)}%（低於 ${CODEX_DRAW_MIN_FIVE_HOUR_PERCENT}%），先不畫圖；額度恢復後會自動再開`,
+    };
+  }
+  if (Number.isFinite(weekly) && weekly < CODEX_DRAW_MIN_WEEKLY_PERCENT) {
+    return {
+      allowed: false,
+      reason: `Codex 每週額度剩 ${Math.round(weekly)}%（低於 ${CODEX_DRAW_MIN_WEEKLY_PERCENT}%），先不畫圖；額度恢復後會自動再開`,
+    };
+  }
+  return { allowed: true, reason: null };
+}
+
+/** 給畫圖外掛讀的額度快照；生圖端只認 fetchedAt 還新鮮的檔案。 */
+function writeQuotaSnapshot(file, value) {
+  if (!file) return;
+  try {
+    const gate = codexDrawGate(value);
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, `${JSON.stringify({
+      fetchedAt: value.fetchedAt,
+      drawAllowed: gate.allowed,
+      drawBlockedReason: gate.reason,
+      fiveHour: value.fiveHour,
+      weekly: value.weekly,
+    }, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch { /* 快照寫不進去時，畫圖端會當成沒有資料而放行 */ }
+}
+
 /** 快取額度查詢；成功 5 分鐘、失敗 60 秒，控制台每 5 秒刷新也不會一直開 app-server。 */
 export function createCodexQuota({
   read = readCodexRateLimits,
   ttlMs = CODEX_QUOTA_TTL_MS,
   failureTtlMs = CODEX_QUOTA_FAILURE_TTL_MS,
   now = Date.now,
+  snapshotFile = null,
 } = {}) {
   let cached = null;
   let inflight = null;
 
   async function load() {
     try {
-      return { ok: true, ...(await read()), fetchedAt: now() };
+      const value = { ok: true, ...(await read()), fetchedAt: now() };
+      if (value.ok) writeQuotaSnapshot(snapshotFile, value);
+      return value;
     } catch (error) {
       return { ok: false, error: String(error?.message ?? error), fetchedAt: now() };
     }

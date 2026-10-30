@@ -339,7 +339,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 - **總覽**（`#overview`）
   - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批，
-    以及觸發對話人數（今天／總計／次數與最常觸發的人）
+    以及觸發對話人數（今天／總計／次數、畫圖次數與最常觸發的人）
   - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的已用百分比與重置時間（見「OpenCode Go 額度」）
   - **Codex 額度**：生圖 preset 有開 `allowImageGen` 時，顯示 5 小時 / 每週剩餘百分比、重置時間與重置券（見「Codex 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
@@ -347,7 +347,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   每頁 20 筆、可換頁；每筆可確認、拒絕、編輯、刪除。「頻道風格」多一個頻道下拉選單（預設「全部頻道」），
   選項顯示 `#頻道名（筆數）`，橋接查不到頻道名稱時退回頻道 id，有同名頻道時後面補 id；
   頻道和狀態兩個過濾一起作用，換頻道會回到第 1 頁
-- **對話**（`#triggers`）：誰觸發過對話、各自幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
+- **對話**（`#triggers`）：誰觸發過對話、各自幾次、畫圖幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
 - **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
 - **設定**（`#settings`）
@@ -423,6 +423,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **重啟與失敗**：狀態存 `state/discord-codex-reset.json`，同一個重置時間不會重送；失敗 15 分鐘後再試。
   每週額度已滿時跳過，等每週恢復後再處理。
 - **失敗時**：卡片和 `/status` 會寫原因（app-server 起不來、逾時、Codex 回錯誤），不影響聊天。
+- **額度太低時暫停生圖**：5 小時剩不到 15% 或每週剩不到 5% 時，`generate_image` 直接回錯誤，
+  不再開 Codex；額度恢復後（橋接下一次查到）自動再開。判斷結果寫在
+  `state/discord-codex-quota.json`，畫圖外掛只認 10 分鐘內的快照；快照過期或不存在就放行。
 
 控制台端點：`GET /api/codex-usage`。
 
@@ -520,6 +523,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - 畫好用 `mcp__discord__send_image` 送圖：`file` 填 `generate_image` 回傳的 `path`，`content` 可以帶一句話。
   橋接只認 `state/discord-images` 裡的檔名，會檢查是不是真的圖片、有沒有超過 10MB；不是就回錯誤，不會把主機其他檔案送出去。
 - 這個目錄只留最近 100 張，舊的會自動刪掉。bot 需要 **Attach Files** 權限（`/invite` 的連結已包含）。
+- 額度太低時暫停：5 小時剩不到 15% 或每週剩不到 5% 時，`generate_image` 會直接拒絕並說明原因；
+  額度恢復後自動再開（見「Codex 額度」）。
 
 限制：
 
@@ -684,12 +689,15 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 - 只有模型真的送出訊息（`send_message`／`send_image`／`send_sticker`／`create_poll`）才記一次；
   同一個回合送好幾則只算一次，避免模型連發把數字洗高。
+- 另外記「繪圖次數」：`send_image` 每成功送出一張就加一次，歸給這個回合叫 bot 的人；
+  不影響對話次數與最後觸發時間。
 - 這批訊息有 ★ 就只記叫 bot 的人；沒有 ★（自由參與）記整批的發言者；同一個人只算一次。
 - 存在 `state/discord-triggers.json`（`state/` 已被 gitignore）。控制台總覽顯示今天人數、總人數、
-  總次數與最常觸發的 3 人；「對話」分頁列出全部人，可搜尋名稱／user id、每頁 20 人。
-- 只記使用者 id、顯示名稱、次數與最後觸發時間，不記聊天內容；超過 5000 人丟最久沒觸發的。
+  總次數、畫圖次數與最常觸發的 3 人；「對話」分頁列出全部人（含每個人的畫圖次數），
+  可搜尋名稱／user id、每頁 20 人。
+- 只記使用者 id、顯示名稱、對話次數、畫圖次數與最後觸發時間，不記聊天內容；超過 5000 人丟最久沒觸發的。
 - 當事人用 `/forget` 會把記憶和觸發統計一起刪掉，私聊也一樣。
-- 模型可以呼叫 `mcp__discord__conversation_stats` 自己撈同一份統計（全部伺服器加總的今天／總計／總次數；前 5 名只列同一個伺服器的人，私聊只回數字）。
+- 模型可以呼叫 `mcp__discord__conversation_stats` 自己撈同一份統計（全部伺服器加總的今天／總計／總次數／畫圖次數；前 5 名只列同一個伺服器的人，私聊只回數字）。
 
 ## 誰決定要不要發訊息（MCP）
 
@@ -758,7 +766,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   經 `media` 設定的縮圖流程）。頭像抓不到時只少圖，文字照回。個人簡介、代名詞 Discord 不給 bot 讀；線上狀態要 Presence 特權 intent，沒開
 - `mcp__discord__server_info`（沒有其他參數）：查目前這個伺服器與頻道：伺服器名稱、簡介、建立日期、擁有者、成員數、
   加成等級、頻道與身分組數量、自訂表情與貼圖數量、bot 在這裡的暱稱，以及目前頻道的名稱、主題、是否 NSFW。私聊回錯誤
-- `mcp__discord__conversation_stats`（沒有其他參數）：查對話次數統計：全部伺服器加總的今天人數／總人數／總次數，
+- `mcp__discord__conversation_stats`（沒有其他參數）：查對話次數統計：全部伺服器加總的今天人數／總人數／總次數／畫圖次數，
   以及這個伺服器最常找 bot 的前 5 人（私聊只回數字，不列名字）
 - `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
 - `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條

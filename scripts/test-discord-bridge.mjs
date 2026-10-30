@@ -73,6 +73,7 @@ import {
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
 import { createBatcher, createTurnGate, formatBatch, repliedName, resolveMentions, visibleName } from '../src/core/discord-batch.mjs';
+import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
@@ -550,6 +551,31 @@ console.log('## 7c. 畫圖參數鎖');
   ok(registered?.isConcurrencySafe?.() === false, 'scoped 工具標成不可並行（避免兩個頻道撿到對方的圖）');
   ok(registered?.description?.includes('shell and file writes disabled'), 'scoped 工具描述帶安全標記（守衛用它判斷）');
   {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-quota-'));
+    const file = path.join(dir, 'quota.json');
+    const previous = process.env.DC_CODEX_QUOTA_FILE;
+    process.env.DC_CODEX_QUOTA_FILE = file;
+    try {
+      fs.writeFileSync(file, JSON.stringify({ fetchedAt: Date.now(), drawAllowed: false, drawBlockedReason: '額度不足，先不畫圖' }));
+      ok(draw.drawQuotaBlock() === '額度不足，先不畫圖', '額度快照說不夠時擋下生圖');
+      let blocked = null;
+      try { await registered.execute({ prompt: 'x' }, {}); } catch (error) { blocked = error.message; }
+      ok(blocked === '額度不足，先不畫圖', 'execute 真的會用快照擋下生圖');
+      fs.writeFileSync(file, JSON.stringify({ fetchedAt: Date.now(), drawAllowed: true }));
+      ok(draw.drawQuotaBlock() === null, '額度足夠時放行');
+      fs.writeFileSync(file, JSON.stringify({ fetchedAt: Date.now() - 11 * 60_000, drawAllowed: false, drawBlockedReason: '舊資料' }));
+      ok(draw.drawQuotaBlock() === null, '快照過期就放行');
+      fs.writeFileSync(file, JSON.stringify({ fetchedAt: Date.now() + 60 * 60_000, drawAllowed: false, drawBlockedReason: '未來資料' }));
+      ok(draw.drawQuotaBlock() === null, '未來時間的快照當無效，不會一直擋');
+      fs.writeFileSync(file, '{壞掉');
+      ok(draw.drawQuotaBlock() === null, '快照壞掉就放行');
+    } finally {
+      if (previous === undefined) delete process.env.DC_CODEX_QUOTA_FILE;
+      else process.env.DC_CODEX_QUOTA_FILE = previous;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  {
     const serial = draw.createSerialQueue();
     let active = 0;
     let max = 0;
@@ -694,6 +720,47 @@ console.log(JSON.stringify({ ...fake.stats(), multi, bad, statuses: results.map(
     fs.rmSync(fakeDir, { recursive: true, force: true });
   }
 
+  // 排隊期間額度用完：第二個 execute 不能只靠進 queue 前的檢查。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-quota-queue-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 5000;
+export function findCodexBin() { return '/fake/codex'; }
+let calls = 0;
+export async function runCodexGenerate() {
+  calls += 1;
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  return { file: null, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+export function stats() { return { calls }; }
+`);
+    const quotaFile = path.join(fakeDir, 'quota.json');
+    fs.writeFileSync(quotaFile, JSON.stringify({ fetchedAt: Date.now(), drawAllowed: true }));
+    const script = `
+import fs from 'node:fs';
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+const first = tool.execute({ prompt: 'one' }, {});
+const second = tool.execute({ prompt: 'two' }, {});
+await new Promise((resolve) => setTimeout(resolve, 20));
+fs.writeFileSync(${JSON.stringify(quotaFile)}, JSON.stringify({ fetchedAt: Date.now(), drawAllowed: false, drawBlockedReason: '額度不足' }));
+const results = await Promise.allSettled([first, second]);
+const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
+console.log(JSON.stringify({ calls: fake.stats().calls, second: results[1].reason?.message }));
+`;
+    const run = spawnSync(process.execPath, ['-e', script], {
+      env: { ...process.env, DC_AI_CODEX_MODULE: fakeModule, DC_CODEX_QUOTA_FILE: quotaFile },
+      encoding: 'utf8',
+    });
+    let stats = null;
+    try { stats = JSON.parse(run.stdout.trim()); } catch {}
+    ok(run.status === 0 && stats?.calls === 1 && stats?.second === '額度不足',
+      '排隊期間額度用完，第二個 execute 不會開 Codex');
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
   // wrapper 要把 -s 拿掉，改用只 deny /mnt 的 Codex permission profile。
   {
     const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-wrapper-'));
@@ -745,6 +812,50 @@ console.log(JSON.stringify({ ...fake.stats(), multi, bad, statuses: results.map(
   const other = { name: 'read', arguments: { path: '/etc/passwd' } };
   await listener(other, async () => { otherCalled = true; });
   ok(otherCalled && other.arguments.path === '/etc/passwd', '其他工具原樣放行（參數鎖只管 generate_image）');
+}
+
+console.log('## 7c1. MCP /send 統計');
+{
+  const store = { users: {} };
+  const userId = '111111111111111111';
+  const turnUsers = new Map([['ch:1', [{ userId, name: '小明' }]]]);
+  const turnTriggerRecorded = new Set();
+  let dirty = 0;
+  let botMessages = 0;
+  const sent = [];
+  const agentSender = {
+    async send(input) {
+      sent.push(input);
+      if (input.content === 'fail') throw new Error('boom');
+      return { key: 'ch:1', refs: ['k1'] };
+    },
+  };
+  const send = createAgentSendHandler({
+    agentSender,
+    turnUsers,
+    turnTriggerRecorded,
+    triggerStore: store,
+    markTriggerDirty: () => { dirty += 1; },
+    recordBotMessages: (_key, count) => { botMessages += count; },
+    log: () => {},
+  });
+
+  await send({ token: 't', content: '嗨' });
+  ok(store.users[userId].count === 1 && store.users[userId].drawCount === 0,
+    '純文字只加對話，不加畫圖');
+  await send({ token: 't', content: '畫好了', file: '/tmp/state/discord-images/a.png' });
+  ok(store.users[userId].count === 1 && store.users[userId].drawCount === 1,
+    '同一輪送圖只加一次對話、畫圖加一次');
+  await send({ token: 't', content: '再一張', file: 'b.png' });
+  ok(store.users[userId].count === 1 && store.users[userId].drawCount === 2,
+    '同一輪兩張圖只加一次對話、畫圖加兩次');
+  await send({ token: 't', content: 'fail' }).then(() => { throw new Error('should fail'); }, () => {});
+  ok(store.users[userId].count === 1 && store.users[userId].drawCount === 2,
+    '送出失敗不記對話也不記畫圖');
+  ok(botMessages === 3, '只有成功送出才記 bot 發言');
+  ok(dirty === 3, '統計有變更才標記存檔');
+  ok(sent[1].file === '/tmp/state/discord-images/a.png' && sent[1].replyTo === '' && sent[1].sticker === '',
+    '/send 的參數原樣傳給 agentSender');
 }
 
 console.log('## 7b. 邀請連結');
@@ -2343,7 +2454,8 @@ console.log('## 9. 控制台');
         todayUsers: 1,
         totalUsers: 2,
         totalTriggers: 3,
-        users: [{ userId: '2', name: '小明', count: 2, channelName: '#閒聊' }],
+        totalDraws: 1,
+        users: [{ userId: '2', name: '小明', count: 2, drawCount: 1, channelName: '#閒聊' }],
       }),
       resetSession: async (key) => { resetKey = key; return true; },
       reloadSystemPrompt: async (key) => {
@@ -2416,7 +2528,8 @@ console.log('## 9. 控制台');
   const triggersResponse = await fetch(`${base}/api/triggers`, { headers: authed });
   const triggersBody = await triggersResponse.json();
   ok(triggersResponse.status === 200 && triggersBody.totalTriggers === 3
-    && triggersBody.users[0].channelName === '#閒聊', '對話統計端點回 handler 的結果');
+    && triggersBody.totalDraws === 1 && triggersBody.users[0].drawCount === 1
+    && triggersBody.users[0].channelName === '#閒聊', '對話統計端點回 handler 的結果（含繪圖次數）');
 
   const sessions = await (await fetch(`${base}/api/sessions`, { headers: { 'x-console-token': 'test-token' } })).json();
   ok(sessions.sessions[0].key === 'ch:1', 'x-console-token 也通');

@@ -38,6 +38,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-usage.mjs` | 用量統計 |
 | `core/discord-codex-quota.mjs` | Codex 額度查詢與 5 小時窗口重置 ping |
 | `core/discord-trigger-stats.mjs` | 觸發統計 |
+| `core/discord-send-handler.mjs` | MCP `/send` 的送出統計（觸發與繪圖次數） |
 | `core/discord-console.mjs` | 控制台 API 的純邏輯 |
 
 ### QQ 專用
@@ -74,7 +75,7 @@ Discord 不 import `src/bridge.js`。
 | `roles/` | 人格卡（QQ 控制台用） | QQ |
 | `assets/` | 圖片等資源；`ai-chan-sheets/` 是 11 個 AI 娘的三視圖與設定圖（畫圖參考，外部作品，授權見該目錄 README） | — |
 | `docs/` | 全部文件，見 [README.md](README.md) | 兩條 |
-| `state/` | 執行時資料（會話映射、筆記、帳本、鎖、`discord-images/` 生圖輸出、`discord-codex-reset.json` 重置 ping 狀態）。`.gitignore` 排除，**不要刪** | 兩條 |
+| `state/` | 執行時資料（會話映射、筆記、帳本、鎖、`discord-images/` 生圖輸出、`discord-codex-reset.json` 重置 ping 狀態、`discord-codex-quota.json` 生圖額度快照）。`.gitignore` 排除，**不要刪** | 兩條 |
 | `config.json` | 真實設定，不入庫；模板是 `config.example.json` | 兩條 |
 
 ## 四、`scripts/` 命名
