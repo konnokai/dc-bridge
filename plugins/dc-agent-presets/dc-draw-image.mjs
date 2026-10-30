@@ -140,8 +140,46 @@ export function characterImage(character, view = 'reference') {
   return rel ? path.join(ASSETS_DIR, rel) : null
 }
 
+/** execute 只接受 manifest 裡的設定圖；guard 擋模型，這裡擋直接呼叫與被換掉的檔案。 */
+const ALLOWED_IMAGES = new Set(
+  CHARACTERS.map((character) => characterImage(character))
+    .filter(Boolean)
+    .map((file) => path.resolve(file)),
+)
+
 const PROMPT_MAX = 4000
 const KEEP_IMAGES = 100
+// 一張圖最多帶幾張設定圖；每張都是大圖，帶太多會拖慢生圖也吃 context。
+const MAX_REFERENCES = 4
+const REF_SEPARATOR = /[,，]/
+
+/** 模型用逗號把角色代號串起來（`self,claude`）；單一角色也走這裡。 */
+function splitReferences(value) {
+  if (typeof value !== 'string') return []
+  return value.split(REF_SEPARATOR).map((ref) => ref.trim()).filter(Boolean)
+}
+
+/** middleware 內部用 ASCII 逗號串絕對路徑；這裡只拆 ASCII，路徑裡的全形逗號才不會被拆壞。 */
+function splitResolvedReferences(value) {
+  // shortcut: 路徑本身含 ASCII 逗號仍會被拆開，真的遇到就把內部改成傳陣列。
+  if (typeof value !== 'string') return []
+  return value.split(',').map((ref) => ref.trim()).filter(Boolean)
+}
+
+/** 圖生圖的模型不知道附圖是什麼；用英文講清楚每一張是誰，畫出來才不會走形。 */
+function referenceNote(characters) {
+  if (characters.length === 1) {
+    return `\n\nThe attached image is the canonical character sheet for ${characters[0].promptName}. `
+      + 'Use it only as a design reference; do not reproduce the sheet layout or its multiple views. '
+      + 'Draw a single new illustration. Keep the character\'s face, hair, outfit, colors, and distinctive accessories consistent with it. '
+      + 'If the prompt describes the appearance differently, follow the sheet.'
+  }
+  const sheets = characters.map((character, index) => `image ${index + 1} = ${character.promptName}`).join('; ')
+  return `\n\nThe attached images are canonical character sheets: ${sheets}. `
+    + 'Use them only as design references; do not reproduce the sheet layout or its multiple views. '
+    + 'Draw a single new illustration. Keep each character\'s face, hair, outfit, colors, and distinctive accessories consistent with its own sheet. '
+    + 'If the prompt describes any character differently, follow that character\'s sheet.'
+}
 
 /** 只留最近幾張，避免每次畫圖都往 state/ 疊一個幾 MB 的檔。 */
 function pruneImages() {
@@ -197,33 +235,36 @@ export function apply(ctx) {
     if (PROMPT_DENY.test(prompt)) throw new Error('畫圖 prompt 含有路徑或指令字樣，已拒絕；只描述畫面')
 
     const rawRef = args.inputImage
-    const ref = typeof rawRef === 'string' ? rawRef.trim() : rawRef
-    let character = null
-    if (ref !== undefined && ref !== null && ref !== '') {
+    const refs = splitReferences(rawRef)
+    if (rawRef !== undefined && rawRef !== null && rawRef !== '' && refs.length === 0) {
+      throw new Error('generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑')
+    }
+    if (refs.length > MAX_REFERENCES) {
+      throw new Error(`generate_image 一次最多帶 ${MAX_REFERENCES} 個角色`)
+    }
+    const characters = refs.map((ref) => {
       if (manifestError) {
         throw new Error(`角色設定圖清單讀不到（${MANIFEST_FILE}）：${manifestError.message}。確認 assets/ai-chan-sheets/characters.json`)
       }
-      if (/[\\/:：／＼]/.test(String(ref)) || String(ref).includes('..')) {
+      if (/[\\/:：／＼]/.test(ref) || ref.includes('..')) {
         throw new Error('generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑')
       }
-      character = resolveCharacter(ref)
+      const character = resolveCharacter(ref)
       if (!character) {
         throw new Error(`不認得角色「${ref}」。可以用：${CHARACTERS.map((c) => c.id).join('、')}，或直接打中文名`)
       }
-    }
+      return character
+    })
 
     const nextArgs = { prompt, outputDir: IMAGE_DIR }
-    if (character) {
-      nextArgs.inputImage = characterImage(character)
-      // 圖生圖的模型不知道附圖是什麼；用一句英文講清楚，畫出來才不會走形。
-      nextArgs.prompt += `\n\nThe attached image is the canonical character sheet for ${character.promptName}. `
-        + 'Use it only as a design reference; do not reproduce the sheet layout or its multiple views. '
-        + 'Draw a single new illustration. Keep the character\'s face, hair, outfit, colors, and distinctive accessories consistent with it.'
+    if (characters.length > 0) {
+      nextArgs.inputImage = characters.map((character) => characterImage(character)).join(',')
+      nextArgs.prompt += referenceNote(characters)
     }
-    nextArgs.prompt += '\n\nUse only the attached input image when one is provided. Never pass referenced_image_paths or read any other local file.'
+    nextArgs.prompt += '\n\nUse only the attached input images when any are provided. Never pass referenced_image_paths or read any other local file.'
     exec.arguments = nextArgs
     const written = exec.arguments
-    if (written.outputDir !== IMAGE_DIR || (character && written.inputImage !== nextArgs.inputImage)) {
+    if (written.outputDir !== IMAGE_DIR || (characters.length > 0 && written.inputImage !== nextArgs.inputImage)) {
       throw new Error('鎖定 generate_image 參數失敗（DSH 改了 tools/execute 的規則）：回報管理員')
     }
 
@@ -241,7 +282,7 @@ export function apply(ctx) {
     description:
       'Generate an image from a text description, or use a reference image, with the local Codex image_gen tool. '
       + 'Use for drawings, illustrations, and character art. The tool runs with shell and file writes disabled; '
-      + 'inputImage is a character code (self, gpt, qwen, ...) or omitted.',
+      + 'inputImage is a character code (self, gpt, qwen, ...), comma-separated codes for multiple characters, or omitted.',
     parameters: {
       type: 'object',
       properties: {
@@ -255,7 +296,7 @@ export function apply(ctx) {
         },
         inputImage: {
           type: 'string',
-          description: 'Character code: self, gpt, qwen, ... or a Chinese character name. Omit for a generic image.',
+          description: 'Character code: self, gpt, qwen, ... or a Chinese character name. For multiple characters, separate codes with commas (for example "self,claude"), up to 4. Omit for a generic image.',
         },
       },
       required: ['prompt'],
@@ -283,21 +324,31 @@ export function apply(ctx) {
       const codexBin = codex.findCodexBin(process.env, {})
       if (!codexBin) throw new Error('找不到 codex CLI：先安裝並登入 Codex')
 
-      const inputImage = typeof args?.inputImage === 'string' && args.inputImage.trim()
-        ? path.resolve(args.inputImage)
-        : null
-      if (inputImage) {
-        const rel = path.relative(ASSETS_DIR, inputImage)
+      const refs = splitResolvedReferences(args?.inputImage)
+      if (refs.length > MAX_REFERENCES) throw new Error(`inputImage 一次最多 ${MAX_REFERENCES} 個角色`)
+      const assetsRoot = refs.length > 0 ? fs.realpathSync(ASSETS_DIR) : null
+      const inputImages = refs.map((ref) => {
+        const full = path.resolve(ref)
+        if (!ALLOWED_IMAGES.has(full)) throw new Error('inputImage 只能是 assets/ai-chan-sheets 裡的角色設定圖')
+        let real
+        try { real = fs.realpathSync(full) } catch { throw new Error(`inputImage 不存在：${full}`) }
+        const rel = path.relative(assetsRoot, real)
         if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('inputImage 只能是 assets/ai-chan-sheets 裡的角色設定圖')
-        if (!fs.existsSync(inputImage)) throw new Error(`inputImage 不存在：${inputImage}`)
-      }
+        if (!fs.statSync(real).isFile()) throw new Error(`inputImage 不是檔案：${full}`)
+        return real
+      })
+      const inputImage = inputImages[0] ?? null
 
       fs.mkdirSync(IMAGE_DIR, { recursive: true })
       fs.mkdirSync(WORK_DIR, { recursive: true })
       const result = await serialize(() => codex.runCodexGenerate({
         ...codexOptions({ prompt: args.prompt, inputImage, signal: exec?.signal }),
         codexBin: CODEX_WRAPPER,
-        extraArgs: [...CODEX_EXTRA_ARGS, '--dc-real-codex', codexBin],
+        extraArgs: [
+          ...CODEX_EXTRA_ARGS,
+          ...inputImages.slice(1).flatMap((image) => ['-i', image]),
+          '--dc-real-codex', codexBin,
+        ],
         nodeBin: process.execPath,
         timeoutMs: codex.DEFAULT_TIMEOUT_MS,
       }))

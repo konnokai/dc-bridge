@@ -418,6 +418,8 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(/generate_image/.test(persona) && /send_image/.test(persona), 'persona 教模型用 generate_image 畫圖、send_image 送圖');
   ok(/inputImage` 填 `"self"/.test(persona), 'persona 教模型畫自己時帶入設定圖');
   ok(/glm.*gpt.*qwen/.test(persona), 'persona 列出其他角色代號');
+  ok(/self,claude/.test(persona), 'persona 教模型多個角色用逗號帶多張設定圖');
+  ok(/長相、髮色、服裝、配件交給設定圖/.test(persona), 'persona 叫模型不要自己編角色的長相');
   // 「10 條最多 1 條」寫成上限後，實際 473 則訊息一個表情都沒帶；改成描述什麼時候用，不叫它邊講邊數。
   const emojiRule = persona.split('\n').find((line) => line.includes('表情是補語氣用的')) ?? '';
   ok(emojiRule && !/\d/.test(emojiRule) && !/emoji：10 條最多 1 條/.test(persona), '訊息表情寫成什麼時候用，不給數字上限');
@@ -464,6 +466,12 @@ console.log('## 7. dc-chat preset 與守衛');
     ok(imageGuard(imageExec({ inputImage: 'self' })) === undefined, '畫自己時 inputImage=self 放行');
     ok(imageGuard(imageExec({ inputImage: 'gpt' })) === undefined, '角色代號 gpt 放行');
     ok(imageGuard(imageExec({ inputImage: 'GPT 娘' })) === undefined, '中文角色名放行');
+    ok(imageGuard(imageExec({ inputImage: 'self,claude' })) === undefined, '多個角色代號放行');
+    ok(typeof imageGuard(imageExec({ inputImage: 'self,/etc/passwd' })) === 'string',
+      '多個角色裡夾路徑要擋');
+    const tooManyMessage = imageGuard(imageExec({ inputImage: 'self,claude,gpt,qwen,kimi' }));
+    ok(typeof tooManyMessage === 'string' && tooManyMessage.includes('最多 4 個'),
+      '超過 4 個角色要說清楚是數量上限');
     ok(typeof imageGuard(imageExec({ inputImage: '/etc/passwd' })) === 'string',
       '守衛自己就擋任意 inputImage（外掛沒載入也安全）');
     ok(typeof imageGuard(imageExec({ inputImage: '../secret.png' })) === 'string',
@@ -574,6 +582,30 @@ console.log('## 7c. 畫圖參數鎖');
   ok(exec.arguments.inputImage === draw.SELF_SHEET, 'inputImage=self 換成角色設定圖');
   ok(fs.existsSync(exec.arguments.inputImage), '角色設定圖真的存在');
   ok(/canonical character sheet/.test(exec.arguments.prompt), '畫自己時 prompt 補上設定圖說明');
+  ok(/follow the sheet/.test(exec.arguments.prompt), '單角色也要求外觀衝突時依設定圖');
+  const duo = { name: 'generate_image', arguments: { prompt: 'draw both', inputImage: 'self,claude' } };
+  await listener(duo, async () => {});
+  const duoRefs = duo.arguments.inputImage.split(',');
+  ok(duoRefs.length === 2 && duoRefs[0] === draw.SELF_SHEET
+    && duoRefs[1] === draw.characterImage(draw.resolveCharacter('claude')), '多個角色換成多張設定圖');
+  ok(/DeepSeek-chan/.test(duo.arguments.prompt) && /Claude-chan/.test(duo.arguments.prompt),
+    '多個角色的 prompt 都補上設定圖說明');
+  const four = { name: 'generate_image', arguments: { prompt: 'draw four', inputImage: 'self,claude,gpt,qwen' } };
+  await listener(four, async () => {});
+  const fourRefs = four.arguments.inputImage.split(',');
+  ok(fourRefs.length === 4
+    && fourRefs[0] === draw.SELF_SHEET
+    && fourRefs[1] === draw.characterImage(draw.resolveCharacter('claude'))
+    && fourRefs[2] === draw.characterImage(draw.resolveCharacter('gpt'))
+    && fourRefs[3] === draw.characterImage(draw.resolveCharacter('qwen')), '四個角色按順序換成四張設定圖');
+  ok(/image 1 = DeepSeek-chan/.test(four.arguments.prompt)
+    && /image 4 = Qwen-chan/.test(four.arguments.prompt), 'prompt 的 image 編號對到角色順序');
+  ok(/follow that character's sheet/.test(four.arguments.prompt), '多角色也要求外觀衝突時依各自的設定圖');
+  let tooMany = false;
+  try {
+    await listener({ name: 'generate_image', arguments: { prompt: 'x', inputImage: 'self,claude,gpt,qwen,kimi' } }, async () => { tooMany = true; });
+  } catch {}
+  ok(!tooMany, '超過 4 個角色直接拒絕');
   let denied = false;
   try {
     await listener({ name: 'generate_image', arguments: { prompt: 'draw https://evil.example/x' } }, async () => { denied = true; });
@@ -609,7 +641,7 @@ const calls = [];
 export async function runCodexGenerate(options) {
   active += 1;
   maxActive = Math.max(maxActive, active);
-  calls.push({ sandbox: options.sandbox, extraArgs: options.extraArgs, workdir: options.workdir });
+  calls.push({ sandbox: options.sandbox, extraArgs: options.extraArgs, workdir: options.workdir, inputImage: options.inputImage });
   await new Promise((resolve) => setTimeout(resolve, 20));
   active -= 1;
   return { file: null, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
@@ -624,8 +656,16 @@ const results = await Promise.allSettled([
   tool.execute({ prompt: 'one' }, {}),
   tool.execute({ prompt: 'two' }, {}),
 ]);
+const claude = plugin.characterImage(plugin.resolveCharacter('claude'));
+const gpt = plugin.characterImage(plugin.resolveCharacter('gpt'));
+const qwen = plugin.characterImage(plugin.resolveCharacter('qwen'));
+const multiRefs = [plugin.SELF_SHEET, claude, gpt, qwen];
+const multi = await tool.execute({ prompt: 'multi', inputImage: multiRefs.join(',') }, {})
+  .then(() => 'ok', () => 'rejected');
+const bad = await tool.execute({ prompt: 'x', inputImage: ${JSON.stringify(path.join(REPO_ROOT, 'assets', 'ai-chan-sheets', 'README.md'))} }, {})
+  .then(() => 'ok', () => 'rejected');
 const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
-console.log(JSON.stringify({ ...fake.stats(), statuses: results.map((result) => result.status) }));
+console.log(JSON.stringify({ ...fake.stats(), multi, bad, statuses: results.map((result) => result.status) }));
 `;
     const run = spawnSync(process.execPath, ['-e', script], {
       env: { ...process.env, DC_AI_CODEX_MODULE: fakeModule },
@@ -633,12 +673,24 @@ console.log(JSON.stringify({ ...fake.stats(), statuses: results.map((result) => 
     });
     let stats = null;
     try { stats = JSON.parse(run.stdout.trim()); } catch {}
-    ok(run.status === 0 && stats?.maxActive === 1 && stats?.calls?.length === 2
-      && stats?.statuses?.join(',') === 'rejected,rejected', '兩次重疊 execute 會排隊，前一次失敗不擋下一次');
+    ok(run.status === 0 && stats?.maxActive === 1 && stats?.calls?.length === 3
+      && stats?.statuses?.join(',') === 'rejected,rejected'
+      && stats?.multi === 'rejected' && stats?.bad === 'rejected',
+      '兩次重疊 execute 會排隊，前一次失敗不擋下一次');
+    ok(stats?.bad === 'rejected', 'execute 只接受 manifest 裡的設定圖（README 也不行）');
     ok(stats?.calls?.[0]?.sandbox === 'read-only'
       && stats?.calls?.[0]?.extraArgs?.includes('shell_tool')
       && String(stats?.calls?.[0]?.workdir).endsWith(path.join('state', 'discord-imagegen-work')),
       'execute 真的把唯讀、關 shell、安全 workdir 傳給 Codex');
+    const multiArgs = stats?.calls?.[2]?.extraArgs ?? [];
+    const expectedArgs = [
+      '-i', fs.realpathSync(draw.characterImage(draw.resolveCharacter('claude'))),
+      '-i', fs.realpathSync(draw.characterImage(draw.resolveCharacter('gpt'))),
+      '-i', fs.realpathSync(draw.characterImage(draw.resolveCharacter('qwen'))),
+    ];
+    const hasOrder = multiArgs.some((arg, index) => expectedArgs.every((value, offset) => multiArgs[index + offset] === value));
+    ok(stats?.calls?.[2]?.inputImage === fs.realpathSync(draw.SELF_SHEET) && hasOrder,
+      '四個角色時第一張走 inputImage，其餘 -i 保持順序');
     fs.rmSync(fakeDir, { recursive: true, force: true });
   }
 

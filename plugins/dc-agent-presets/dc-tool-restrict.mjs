@@ -160,10 +160,19 @@ export function apply(ctx, config = {}) {
       const args = exec?.arguments ?? {}
       const ref = args.inputImage
       if (ref !== undefined && ref !== null && ref !== '') {
-        // 只放行短代號（self、gpt、大肥魚…），路徑一定含 / \ : 或 ..；真正的角色
-        // 對照在 dc-draw-image 裡，這裡先確保外掛沒載入時也讀不到主機檔案。
-        if (typeof ref !== 'string' || ref.length > 60 || /[\\/:：／＼]/.test(ref) || ref.includes('..') || /\.[a-z0-9]{2,5}$/i.test(ref)) {
+        // 只放行短代號（self、gpt、大肥魚…），多個角色用逗號串起來；路徑一定含 / \ : 或 ..
+        // 上限跟 dc-draw-image 的 MAX_REFERENCES 一致，外掛沒載入時也要擋。
+        const refs = typeof ref === 'string' ? ref.split(/[,，]/).map((part) => part.trim()).filter(Boolean) : []
+        if (refs.length === 0) {
           return 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑'
+        }
+        if (refs.length > 4) {
+          return 'generate_image 的 inputImage 一次最多 4 個角色'
+        }
+        for (const item of refs) {
+          if (item.length > 60 || /[\\/:：／＼]/.test(item) || item.includes('..') || /\.[a-z0-9]{2,5}$/i.test(item)) {
+            return 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑'
+          }
         }
       }
       if (args.outputDir !== undefined && args.outputDir !== null && args.outputDir !== '') return 'generate_image 的 outputDir 由外掛固定，不要填'

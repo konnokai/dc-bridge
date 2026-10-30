@@ -487,10 +487,10 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 - 有人說「畫一張…」「幫我畫…」，persona 叫模型呼叫 `generate_image`。畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
   畫別的 AI 娘時填角色代號（`glm`、`gpt`、`ernie`、`qwen`、`kimi`、`doubao`、`minimax`、`grok`、`gemini`、`claude`），
-  打中文名也可以。畫一般插畫時不要填。
-- `plugins/dc-agent-presets/dc-draw-image.mjs` 在執行前改寫參數：角色代號換成
-  `assets/ai-chan-sheets/<角色>/便于查看/横版完整设定图_01_三视图_查看用.jpg`，`outputDir` 固定 `state/discord-images`。
-  模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持設定圖的臉、髮色、服裝與配件。
+  打中文名也可以。一張圖有多個角色時用逗號串起來（`self,claude`），最多 4 個。畫一般插畫時不要填。
+- `plugins/dc-agent-presets/dc-draw-image.mjs` 在執行前改寫參數：角色代號換成對應的
+  `assets/ai-chan-sheets/<角色>/便于查看/横版完整设定图_01_三视图_查看用.jpg`（多個角色就換成多張），`outputDir` 固定 `state/discord-images`。
+  模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持每張設定圖的臉、髮色、服裝與配件。
   11 個角色的代號、中文名與資料夾對照在 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
 - 生圖用的 Codex 是受限版本：關掉 `shell_tool`、`unified_exec` 與 `view_image`，工作目錄在 `state/discord-imagegen-work`。
   `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（沒有 write 規則）；
@@ -758,7 +758,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
 - `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖或拿設定圖改圖。
   `prompt` 必填；畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
-  不指定角色就不要填。參數由 `dc-draw-image` 鎖死（見「畫圖」）
+  多個角色用逗號串起來（`self,claude`，最多 4 個）；不指定角色就不要填。參數由 `dc-draw-image` 鎖死（見「畫圖」）
 - `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 
