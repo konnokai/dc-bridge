@@ -22,13 +22,14 @@ Discord 不 import `src/bridge.js`。
 | `mcp-slang.js` | 黑話工具 |
 | `core/discord-core.mjs` | 設定正規化、長文切段、會話映射 |
 | `core/discord-agent.mjs` | token 解析、每輪額度、`send` 守衛 |
-| `core/discord-batch.mjs` | 批次 prompt 組裝 |
+| `core/discord-batch.mjs` | 批次器、回合佇列（含指令排隊與 hold/rebase）與 batch prompt 組裝 |
 | `core/discord-context.mjs` | 頻道上下文 |
 | `core/discord-activity.mjs` | 發言頻率 |
 | `core/discord-quiet.mjs` | 安靜模式 |
 | `core/discord-feedback.mjs` | 自己訊息收到的 reaction |
 | `core/discord-followup.mjs` | 回訪排程 |
 | `core/discord-notes.mjs` | 頻道筆記與每日摘要 |
+| `core/discord-reload.mjs` | `/reload-system-prompt` 的交接摘要（暫存與 prompt 區塊） |
 | `core/discord-memory.mjs` | 群友記憶 |
 | `core/discord-slang.mjs` | 黑話收集與注入 |
 | `core/discord-emoji.mjs` | 表情目錄與使用次數 |

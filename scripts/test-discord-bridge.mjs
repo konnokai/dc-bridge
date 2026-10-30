@@ -129,8 +129,12 @@ console.log('## 1. 設定收斂');
   {
     const perms = (...flags) => new PermissionsBitField(flags);
     ok(canResetConversation({ isOwner: true, guildId: null, permissions: null }), '/reset：bot 擁有者在私聊也能用');
-    ok(canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.ManageGuild) }), '/reset：有「管理伺服器」權限的人能用');
-    ok(canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.Administrator) }), '/reset：Administrator 也算');
+    ok(!canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.ManageGuild) }),
+      '/reset：只有「管理伺服器」權限不算');
+    ok(canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.Administrator) }),
+      '/reset：Administrator 能用');
+    ok(!canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageMessages) }),
+      '/reset：ManageGuild 加其他管理權限也不算');
     ok(!canResetConversation({ isOwner: false, guildId: GUILD, permissions: perms(PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels) }),
       '/reset：只有管理訊息、管理頻道不算');
     ok(!canResetConversation({ isOwner: false, guildId: GUILD, permissions: null }), '/reset：拿不到權限就不給');
@@ -1514,6 +1518,10 @@ console.log('## 7d3. 批次');
   advance(20_000);
   ok(!flushed.some((f) => f.key === 'ch:3'), 'drop（/reset）後那批不送');
 
+  batcher.add('ch:4', { id: 98 });
+  batcher.flush('ch:4');
+  ok(flushed.some((f) => f.key === 'ch:4' && f.items.join() === '98'), 'flush 立刻送出（指令要排在前面）');
+
   // 回合閘門：同一會話一次只送一批進 DSH，回合沒結束前新到的批次合成一筆。
   const delivered = [];
   const stuck = [];
@@ -1598,6 +1606,91 @@ console.log('## 7d3. 批次');
   gate.release('g:6', askTicket);
   ok(ids(delivered.at(-1).job) === '60', 'ask 用自己的 ticket 放行下一批');
 
+  const beforeQueuedAsk = delivered.length;
+  const busyTicket = gate.submit('g:7', job([70]));
+  const queuedAsk = gate.submit('g:7', { ask: { question: 'q' } }, { noStuckRelease: true });
+  ok(queuedAsk === null, 'ask 在忙碌時排隊，不是直接丟錯');
+  gate.submit('g:7', job([71]));
+  ok(delivered.length === beforeQueuedAsk + 1 && ids(delivered.at(-1).job) === '70', 'ask 不會插隊');
+  gate.release('g:7', busyTicket);
+  ok(delivered.at(-1).job.ask?.question === 'q', '目前回合結束後先跑排隊的 ask');
+  gate.release('g:7');
+  ok(ids(delivered.at(-1).job) === '71', 'ask 結束後才送後續批次');
+
+  gate.submit('g:8', job([80]));
+  gate.submit('g:8', { ask: { question: 'reload', holdAfterAnswer: true } }, { noStuckRelease: true });
+  gate.submit('g:8', job([81]));
+  gate.release('g:8');
+  ok(delivered.at(-1).job.ask?.question === 'reload', '重載提示排到後才跑');
+  gate.hold('g:8');
+  gate.release('g:8');
+  ok(delivered.at(-1).job.ask?.question === 'reload', 'hold 期間不放行後續批次');
+  ok(gate.isBusy('g:8'), 'hold 期間閘門仍算忙碌');
+  const beforeHeldSubmit = delivered.length;
+  gate.submit('g:8', job([82]));
+  ok(delivered.length === beforeHeldSubmit, 'hold 期間新批次進佇列，不插隊');
+  gate.rebase('g:8', 1);
+  gate.resume('g:8', { force: true });
+  ok(ids(delivered.at(-1).job) === '81,82' && delivered.at(-1).job.epoch === 1,
+    'resume 後用新代次放行排隊批次');
+
+  gate.submit('g:10', job([100]));
+  gate.submit('g:10', job([101]));
+  gate.submit('g:10', { ask: { question: 'cmd' } }, { noStuckRelease: true });
+  gate.submit('g:10', job([102]));
+  gate.release('g:10');
+  ok(ids(delivered.at(-1).job) === '101', '指令前的批次先跑');
+  gate.release('g:10');
+  ok(delivered.at(-1).job.ask?.question === 'cmd', '再跑指令');
+  gate.release('g:10');
+  ok(ids(delivered.at(-1).job) === '102', '指令後的訊息不會併回指令前的批次');
+
+  let cancelledAsk = null;
+  gate.submit('g:11', {
+    ask: { question: 'a', cancel: (error) => { cancelledAsk = error; }, reject: () => {} },
+  }, { noStuckRelease: true });
+  gate.submit('g:11', { ask: { question: 'b' } }, { noStuckRelease: true });
+  gate.releaseAll();
+  ok(cancelledAsk?.message.includes('中斷'), '斷線取消等待中的 ask');
+  ok(delivered.at(-1).job.ask?.question === 'b', '斷線後只開始下一個 ask');
+
+  const normalReleaseAsk = gate.submit('g:12', { ask: { question: 'x' } }, { noStuckRelease: true });
+  gate.releaseNormal('g:12');
+  ok(gate.isBusy('g:12') && delivered.at(-1).job.ask?.question === 'x', '公開回合的 turn/end 不會放掉指令回合');
+  gate.release('g:12', normalReleaseAsk);
+
+  gate.submit('g:13', job([130]));
+  gate.submit('g:13', { ask: { question: 'held', holdAfterAnswer: true } }, { noStuckRelease: true });
+  gate.submit('g:13', job([131]));
+  gate.release('g:13');
+  gate.hold('g:13');
+  gate.release('g:13');
+  gate.releaseAll();
+  const beforeHeldSubmit13 = delivered.length;
+  gate.submit('g:13', job([132]));
+  ok(gate.isBusy('g:13') && delivered.length === beforeHeldSubmit13,
+    '斷線不刪除 hold 閘門，新批次進佇列');
+  gate.resume('g:13', { force: true });
+  ok(ids(delivered.at(-1).job) === '131,132', 'resume 後才放行 hold 期間排隊的批次');
+
+  const ticket14 = gate.submit('g:14', { ask: { question: 'ticket' } }, { noStuckRelease: true });
+  gate.hold('g:14', ticket14);
+  gate.release('g:14', ticket14);
+  gate.submit('g:14', job([140]));
+  gate.resume('g:14', { force: true, ticket: {} });
+  ok(gate.isBusy('g:14') && delivered.at(-1).job.ask?.question === 'ticket',
+    '舊 reload 的 ticket 不會放掉新工作');
+  gate.resume('g:14', { force: true, ticket: ticket14 });
+  ok(ids(delivered.at(-1).job) === '140', '自己的 ticket 才放行');
+
+  let cancelled = null;
+  const beforeDrop = delivered.length;
+  gate.submit('g:9', job([90]));
+  gate.submit('g:9', { ask: { question: 'x', reject: (error) => { cancelled = error; } } }, { noStuckRelease: true });
+  gate.drop('g:9');
+  ok(cancelled?.message.includes('重置'), 'drop 取消排隊中的 ask');
+  ok(delivered.length === beforeDrop + 1, '被取消的 ask 不會被送出');
+
   // 群友的暱稱可能只有看不見的字元（實際遇到 U+17B5），prompt 裡變成「：內容」，模型叫不出名字。
   ok(visibleName('឵', 'ㅤ', 'real_user') === 'real_user', '只有看不見字元的名字跳過，改用下一個');
   ok(visibleName('⠀ ', null, undefined, 'x') === 'x', '點字空白和空白也算看不見');
@@ -1613,6 +1706,8 @@ console.log('## 7d3. 批次');
   ], { guild: true });
   ok(guild.startsWith('【新訊息】'), '頻道批次有標頭');
   ok(guild.includes('\n阿華：今天好熱'), '沒叫 bot 的訊息沒有 ★');
+  ok(formatBatch([{ author: 'Sora', text: '[沒有文字，只有叫你]', direct: true }], { guild: true })
+    .includes('★Sora：[沒有文字，只有叫你]'), '只有 @／回覆的訊息有佔位文字');
   ok(guild.includes('\n★【管理員】小明：你覺得呢 [引用 阿華：今天好熱]'), '叫 bot 的訊息有 ★，管理員前綴與引用接在後面');
   ok(guild.includes('\n小美：[圖1]'), '圖片編號標在那一行');
   ok(guild.endsWith('\n小美：[圖片]'), '沒送進模型的圖寫 [圖片]');
@@ -2159,6 +2254,7 @@ console.log('## 9. 控制台');
   const htmlPath = path.join(dir, 'console.html');
   fs.writeFileSync(htmlPath, '<!doctype html><title>ok</title>');
   let resetKey = null;
+  let reloadKey = null;
   let usageWasReset = false;
   const handle = await startConsole({
     host: '127.0.0.1',
@@ -2197,6 +2293,10 @@ console.log('## 9. 控制台');
         users: [{ userId: '2', name: '小明', count: 2, channelName: '#閒聊' }],
       }),
       resetSession: async (key) => { resetKey = key; return true; },
+      reloadSystemPrompt: async (key) => {
+        reloadKey = key;
+        return { summarized: true, chars: 12, cleared: true };
+      },
       config: () => ({ allow: { guilds: [], channels: [], users: [] }, deny: { guilds: [], channels: [], users: [] }, ownerIds: [], media: {} }),
       updateConfig: async (patch) => {
         if (patch.bad) throw new Error('bad config');
@@ -2270,6 +2370,12 @@ console.log('## 9. 控制台');
   const goodReset = await fetch(`${base}/api/sessions/reset`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ key: 'ch:1' }) });
   const goodBody = await goodReset.json();
   ok(goodReset.status === 200 && goodBody.reset === true && resetKey === 'ch:1', '重置會呼叫 handler');
+
+  const badReload = await fetch(`${base}/api/sessions/reload-system-prompt`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ key: 'nope' }) });
+  ok(badReload.status === 400, '重載提示的非法會話 key 回 400');
+  const goodReload = await fetch(`${base}/api/sessions/reload-system-prompt`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ key: 'ch:1' }) });
+  const reloadBody = await goodReload.json();
+  ok(goodReload.status === 200 && reloadBody.reload?.summarized === true && reloadKey === 'ch:1', '重載提示會呼叫 handler');
 
   const usageReset = await fetch(`${base}/api/usage/reset`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({}) });
   ok(usageReset.status === 200 && usageWasReset === true, '清空帳本端點會呼叫 handler');

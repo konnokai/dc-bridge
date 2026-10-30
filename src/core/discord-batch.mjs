@@ -118,7 +118,7 @@ export function createBatcher({
     batches.delete(key);
   }
 
-  return { add, drop };
+  return { add, drop, flush };
 }
 
 /** 兩批合成一批。超過上限先丟最舊的閒聊；★（有人叫 bot）那幾則一定留著。 */
@@ -141,7 +141,8 @@ function mergeJobs(held, job, maxEntries) {
  *
  * 為什麼要有：DSH 的 queue 模式每個回合只接一則排隊訊息。群組聊得比模型回得快時
  * （回合 12~35 秒、每 10 秒一批），DSH 的佇列只會越排越長，模型永遠在回很久以前的話。
- * 改成回合還沒結束就先壓在這裡、合成一筆，回合結束再送，DSH 那邊最多排一則。
+ * 改成回合還沒結束就先壓在這裡：普通批次合成一筆，指令（/ask、重載提示）照順序排隊，
+ * 回合結束再送，DSH 那邊最多排一則。
  *
  * @param options.deliver    (key, job) => void，真的送進 DSH
  * @param options.maxEntries 壓住的那批最多幾則
@@ -156,27 +157,61 @@ export function createTurnGate({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 }) {
-  const busy = new Map(); // key -> { ticket, timer }
-  const held = new Map(); // key -> 回合進行中先壓住的那批
+  const busy = new Map(); // key -> { ticket, timer, job, hold }
+  const pending = new Map(); // key -> [{ job, noStuckRelease }]
 
-  function submit(key, job, { noStuckRelease = false } = {}) {
-    if (busy.has(key)) {
-      // ask job 一定要獨佔一輪，不能跟頻道批次合併（它沒有 entries）。
-      if (job?.ask) throw new Error('ask job 不能排隊');
-      held.set(key, mergeJobs(held.get(key), job, maxEntries));
-      return null;
-    }
+  function start(key, job, noStuckRelease = false) {
     const ticket = {};
     // /ask 自己用 tracker 的 hardClose 保底；不吃 5 分鐘保險絲，否則會提早放掉它的閘門。
     const timer = noStuckRelease ? null : setTimer(() => { onStuck(key); release(key); }, releaseMs);
     timer?.unref?.();
-    busy.set(key, { ticket, timer });
+    busy.set(key, { ticket, timer, job, hold: false, released: false });
     deliver(key, job, ticket);
     return ticket;
   }
 
+  function next(key) {
+    const queue = pending.get(key);
+    if (!queue?.length) {
+      pending.delete(key);
+      return;
+    }
+    const item = queue.shift();
+    if (!queue.length) pending.delete(key);
+    start(key, item.job, item.noStuckRelease);
+  }
+
+  function enqueue(key, job, noStuckRelease) {
+    const queue = pending.get(key) ?? [];
+    if (job?.ask) {
+      // 指令（/ask、重載提示）獨佔一輪，不能跟頻道批次合併；照到達順序排。
+      queue.push({ job, noStuckRelease });
+    } else {
+      // 只跟「佇列最後一筆」普通批次合併；最後一筆是指令就新增一筆，後續訊息才不會
+      // 被併到指令前面的舊批次、提早進舊會話。
+      const last = queue.at(-1);
+      if (last && !last.job?.ask) {
+        queue[queue.length - 1] = {
+          job: mergeJobs(last.job, job, maxEntries),
+          noStuckRelease: last.noStuckRelease,
+        };
+      } else {
+        queue.push({ job, noStuckRelease });
+      }
+    }
+    pending.set(key, queue);
+  }
+
+  function submit(key, job, { noStuckRelease = false } = {}) {
+    if (busy.has(key)) {
+      enqueue(key, job, noStuckRelease);
+      return null;
+    }
+    return start(key, job, noStuckRelease);
+  }
+
   /**
-   * 回合結束（或確定不會有回合）：放行壓住的那批。
+   * 回合結束（或確定不會有回合）：放行排隊的下一筆。
    * 帶 ticket 時只放行自己持有的那一輪：/reset、重連的 releaseAll 之後，
    * 舊的收尾不能把下一批的 busy 放掉。
    */
@@ -185,26 +220,104 @@ export function createTurnGate({
     if (!entry) return;
     if (ticket !== undefined && entry.ticket !== ticket) return;
     clearTimer(entry.timer);
+    // 重載提示要等舊會話收乾淨、排隊的批次換成新代次後才放行。
+    // hold 期間保留 busy：否則新訊息會看到「閘門閒著」直接插隊，繞過排隊中的批次。
+    if (entry.hold) {
+      entry.released = true;
+      return;
+    }
     busy.delete(key);
-    const next = held.get(key);
-    if (!next) return;
-    held.delete(key);
-    submit(key, next);
+    next(key);
   }
 
-  /** /reset：壓住的批次屬於舊對話，連同忙碌狀態一起清掉。 */
+  /** 重載摘要拿到答案後先鎖住佇列，避免 turn/end 太早把下一批送進舊會話。 */
+  function hold(key, ticket) {
+    const entry = busy.get(key);
+    if (!entry) return false;
+    if (ticket !== undefined && entry.ticket !== ticket) return false;
+    entry.hold = true;
+    return true;
+  }
+
+  /** 解除 hold；force 用於舊會話已經退役，直接放行下一筆。ticket 用來確認是自己持有的那一輪。 */
+  function resume(key, { force = false, ticket } = {}) {
+    const entry = busy.get(key);
+    if (!entry) {
+      // 帶 ticket 表示這是某一輪自己的收尾；閘門已經不是它持有的，就不要碰別人的佇列。
+      if (ticket === undefined) next(key);
+      return;
+    }
+    if (ticket !== undefined && entry.ticket !== ticket) return;
+    // 只處理被 hold 住的舊工作；不能把重新開始的下一筆誤放掉。
+    if (!entry.hold && !entry.released) return;
+    if (!entry.released && !force) {
+      entry.hold = false;
+      return;
+    }
+    clearTimer(entry.timer);
+    busy.delete(key);
+    next(key);
+  }
+
+  /** /reset 換代次後，排隊中的批次要跟著新會話走；不換的話 deliverPrompt 會把它們當舊對話丟掉。 */
+  function rebase(key, epoch) {
+    for (const item of pending.get(key) ?? []) item.job.epoch = epoch;
+  }
+
+  function cancel(job, error) {
+    if (!job?.ask) return;
+    try { job.ask.cancel?.(error); } catch { /* 已經收尾 */ }
+    try { job.ask.reject?.(error); } catch { /* 已經收尾 */ }
+  }
+
+  /** /reset：壓住的批次屬於舊對話，連同忙碌狀態一起清掉；排隊中的命令也要結束等待。 */
   function drop(key) {
-    clearTimer(busy.get(key));
-    busy.delete(key);
-    held.delete(key);
+    const entry = busy.get(key);
+    if (entry) {
+      clearTimer(entry.timer);
+      cancel(entry.job, new Error('會話已重置'));
+      busy.delete(key);
+    }
+    const queue = pending.get(key);
+    if (queue) {
+      for (const item of queue) cancel(item.job, new Error('會話已重置'));
+      pending.delete(key);
+    }
   }
 
-  const releaseAll = () => { for (const key of [...busy.keys()]) release(key); };
+  /** 公開回合的 turn/end 只能放行普通批次，不能放掉剛開始的指令回合。 */
+  function releaseNormal(key) {
+    const entry = busy.get(key);
+    if (!entry || entry.job?.ask) return;
+    release(key, entry.ticket);
+  }
+
+  const releaseAll = () => {
+    for (const key of [...busy.keys()]) {
+      const entry = busy.get(key);
+      // 斷線時等待中的 ask 還沒有 tracker，不能只放掉閘門讓下一個 ask 跑起來，
+      // 否則兩個 runner 會同時搶同一個會話；先取消它，再放行下一筆。
+      if (entry?.job?.ask) {
+        clearTimer(entry.timer);
+        cancel(entry.job, new Error('DSH 事件流中斷'));
+        // hold 中的重載還在退役：保留 busy，等它的 resume 用原 ticket 放行。
+        // 直接刪掉會讓下一個訊息看到「閘門閒著」而插隊。
+        if (entry.hold) continue;
+        busy.delete(key);
+        next(key);
+      } else {
+        release(key);
+      }
+    }
+  };
 
   /** 這個會話有沒有回合正在跑（回訪到點時用來決定要不要延後一分鐘）。 */
   const isBusy = (key) => busy.has(key);
 
-  return { submit, release, drop, releaseAll, isBusy };
+  /** 有沒有回合在跑或排隊；重載提示沒有現成會話時用來判斷要不要排。 */
+  const hasPending = (key) => busy.has(key) || (pending.get(key)?.length ?? 0) > 0;
+
+  return { submit, release, releaseNormal, hold, resume, rebase, drop, releaseAll, isBusy, hasPending };
 }
 
 /**

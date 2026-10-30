@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, memory, notes, deleteNote, triggers, sessions, resetSession, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, memory, notes, deleteNote, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -182,6 +182,17 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         }
         const reset = await handlers.resetSession(key);
         sendJson(res, 200, { ok: true, reset });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/sessions/reload-system-prompt') {
+        const body = await readJson(req);
+        const key = typeof body.key === 'string' ? body.key.trim() : '';
+        if (!/^(dm|ch):\d+$/.test(key)) {
+          sendJson(res, 400, { error: 'key 必須是 dm:<id> 或 ch:<id>' });
+          return;
+        }
+        const reload = await handlers.reloadSystemPrompt(key);
+        sendJson(res, 200, { ok: true, reload });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/config') {

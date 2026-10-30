@@ -178,6 +178,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   所以先把 bot 邀進你自己的伺服器。
 - **頻道**：預設要 @bot 或回覆 bot 的訊息。`requireMentionInGuild: false` 是「自由參與」，見下一節。
   執行中可用 `/mention` 或控制台切換，不用重啟。
+- 只 @bot 或只回覆 bot、沒有其他文字或附件也會送進批次（prompt 會標成「[沒有文字，只有叫你]」），不會被當成空訊息丟掉。
 - **討論串**：視為獨立會話（用自己的 channel id），不會跟母頻道共用上下文。白名單看討論串自己的 id；
   黑名單也看母頻道，母頻道在 `deny.channels` 裡時，底下的討論串一律擋掉。
 
@@ -187,13 +188,16 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 期間的新訊息併進同一批；從第一則算起最多等 `batch.maxWaitMs`，滿 `batch.maxMessages` 則立刻送出。
 一批只開一個 DSH 回合。
 
-同一個會話**一次只有一批在 DSH 裡**：模型的回合還沒結束，新送出的批次先壓在橋接，合成一筆，
+同一個會話**一次只有一批在 DSH 裡**：模型的回合還沒結束，新送出的批次先壓在橋接，
 回合結束（`turn/end`）再送。原因是 DSH 的 queue 模式一個回合只接一則排隊訊息；頻道聊得比模型回得快時
 （回合常要 10~35 秒），不壓住的話 DSH 的佇列只會越排越長。
 
+普通批次會合成一筆；`/ask`、`/reload-system-prompt` 這種指令獨佔一輪，照到達順序排在普通批次之間，
+不會被合併，也不會因為前面還有回合就直接拒絕。
+
 - 壓住的訊息最多 50 則，超過時丟最舊的閒聊；★ 的訊息一定留著。丟過訊息時，prompt 會多一行
   「略過了較早的 N 則」，日誌的 `已投遞` 也會寫 `略過 N 則`。模型可以用 `read_history` 自己去翻。
-- 等了 5 分鐘還沒收到 `turn/end`（事件漏了、回合卡住）就直接放行；DSH 事件流斷線、`/reset` 也會放行。
+- 等了 5 分鐘還沒收到 `turn/end`（事件漏了、回合卡住）就直接放行；DSH 事件流斷線也會放行，`/reset` 則直接清掉。
 
 批次在 prompt 裡長這樣（頻道）：
 
@@ -232,35 +236,53 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 | 指令 | 誰能用 | 作用 |
 | --- | --- | --- |
-| `/reset` | 管理員，或該伺服器有「管理伺服器」權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理者只能重置自己伺服器裡、在白名單上的頻道；私聊只有管理員能用 |
+| `/reset` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理員只能重置自己伺服器裡、在白名單上的頻道；私聊只有擁有者能用 |
+| `/reload-system-prompt` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 排進這個頻道的同一條會話佇列，等目前回合結束後用那個 DSH 會話產生一段對話總結，存進 `state/discord-reload-summaries.json`，再重置會話。排隊期間的新訊息會留在 bridge，重載完成後進新會話；總結會放在新會話第一則 prompt 的開頭。**不會重啟 DSH**，新的 preset 要先由 DSH 重新載入 |
 | `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
 | `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。沒開 Message Content 意圖時不能切換（一定得 @bot） |
-| `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。等待期間這個頻道的一般訊息會排到問完才送；模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
+| `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。前面還有回合時會排進同一條會話佇列，不會直接拒絕；等待期間這個頻道的一般訊息排到問完才送。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
 | `/forget` | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶與觸發統計，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
 | `/blacklist` | 所有人 | 切換自己的 `deny.self`：每次執行都會切換（不在名單 → 加入，已在名單 → 移出），立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不再處理你的訊息：沒在叫 bot 的不回、不進批次、不學黑話，也不進頻道上下文與每日摘要，讀歷史、搜尋也看不到；別人引用你的訊息時，引用內文照常附上。唯一例外是 @bot 或回覆 bot 的那一則（那一則照正常流程處理，`view_message`、`user_info`、讀歷史與搜尋都看得到，跟一般訊息一樣；伺服器頻道的搜尋 API 認不出回覆對象，那邊只有 @bot 的一則認得）。在 `deny.users`（管理員封鎖）裡的人不能自己解除，會回一句請找管理員。私聊仍然全擋。只能改自己，回覆只有自己看得到。別人把你的訊息轉發出去時，轉發的內容不受這份名單影響 |
 | 其他 `/` 開頭 | 管理員 | 文字原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
-`/reset`、`/status`、`/invite`、`/console`、`/mention`、`/ask`、`/memory`、`/forget`、`/blacklist`
+`/reset`、`/reload-system-prompt`、`/status`、`/invite`、`/console`、`/mention`、`/ask`、`/memory`、`/forget`、`/blacklist`
 都是**已註冊的 Discord slash command**（回覆只有自己看得到）。
 只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
 橋接**沒有訊息指令**：`!reset`、`!forget` 這類文字一律當一般聊天送進模型。
 
-- **誰看得到選單**：`/reset` 是 `default_member_permissions: ManageGuild`（有「管理伺服器」權限的人看得到）；
-  `/status`、`/invite`、`/console`、`/mention`、`/ask` 是 `Administrator`。
+- **誰看得到選單**：管理指令（`/reset`、`/reload-system-prompt`、`/status`、`/invite`、`/console`、`/mention`、`/ask`）
+  都是 `default_member_permissions: Administrator`（有 Administrator 權限的人看得到）。
   Discord 沒辦法把指令選單只開給某一個人，所以用權限縮小範圍。
-  這個欄位**只在伺服器裡生效**；私聊的選單每個人看得到 `/reset`、`/status`、`/forget`，能不能執行還是看下一條。
-- **誰能執行**：`/reset` 認 `ownerIds`，或那個伺服器裡有「管理伺服器」權限（含 Administrator）的人。
-  bot 開放給別人管的伺服器時，那邊的管理員可以自己清掉 bot 在自己頻道的上下文，不用找 bot 擁有者。
+  這個欄位**只在伺服器裡生效**；私聊的選單每個人看得到 `/reset`、`/reload-system-prompt`、`/status`、`/forget`，能不能執行還是看下一條。
+- **誰能執行**：`/reset`、`/reload-system-prompt` 認 `ownerIds`，或那個伺服器裡有 Administrator 權限的人。
+  bot 開放給別人管的伺服器時，那邊的 Administrator 可以自己清掉 bot 在自己頻道的上下文，不用找 bot 擁有者。
   其他管理指令執行時只認 `ownerIds`：它們會動到所有伺服器共用的設定（`/mention`）、
   露出擁有者的後台與 token（`/console`）或額度（`/status`），伺服器管理員看得到選單也會被拒絕。
 
-> 私聊只有 `/reset`、`/status`、`/forget` 會出現；`/reset`、`/status` 只認 `ownerIds`，其他指令只在伺服器頻道。
+> 私聊只有 `/reset`、`/reload-system-prompt`、`/status`、`/forget` 會出現；`/reset`、`/reload-system-prompt`、`/status` 只認 `ownerIds`，其他指令只在伺服器頻道。
 > DSH 的斜線命令（`/model` 等）沒有 slash command 版本，只能由管理員當文字打給 bot。
 
 非管理員對 bot 打 `/` 開頭會被拒絕，不會送進模型。
+
+### 重載 system prompt
+
+改過 `dsh/agent-presets/dc-chat/agent.cordis.yml` 的 persona（或任何會影響 system prompt 的 preset 內容）之後，
+新的 preset 要等 DSH 重新載入 profile 或重啟才會生效。`/reload-system-prompt` **不會**自己重啟 DSH；
+它會排進這個頻道的同一條會話佇列，不會因為前面還有回合就直接拒絕：
+
+1. 等前面的回合結束，用目前的 DSH 會話產生一段對話總結（這是後台回合，不會貼到頻道，也不會公開）。
+2. 把總結存進 `state/discord-reload-summaries.json`。
+3. 停掉並歸檔舊會話（跟 `/reset` 一樣）。
+4. 排隊中的頻道訊息會留在 bridge，重載完成後送進新會話；新會話的第一則一般 prompt 開頭會帶上總結，當成「最近對話的記憶」；同一份只用一次。
+
+排隊期間送來的訊息不會被丟掉。摘要會先寫進檔案，成功後才退役；摘要失敗（模型沒回話、等不到空閒的會話、
+事件流斷線、摘要檔寫入失敗）時不會清掉舊會話，排隊的訊息照舊會話處理，可以等一會兒再試。
+`/reset` 是立即重置，排隊中的訊息、待用的交接摘要與排隊中的指令會直接丟棄。
+清摘要時如果檔案寫入失敗，`/reset` 會回報失敗並保留會話，避免重啟後舊摘要又復活。
+控制台「會話」分頁每一列的「重載提示詞」按鈕等於這個指令。
 
 ### 忽略某一則訊息
 
@@ -325,7 +347,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   頻道和狀態兩個過濾一起作用，換頻道會回到第 1 頁
 - **對話**（`#triggers`）：誰觸發過對話、各自幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
-- **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間、一鍵重置（等於 `/reset`）
+- **會話**（`#sessions`）：`dm:` / `ch:` 列表、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）直接編輯，
     存檔後**立即生效**並寫回 `config.json`。沒開 `messageContentIntent` 時勾選框鎖住（一律要 @bot）
@@ -527,7 +549,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 - `/forget`（slash command，結果只有自己看得到；私聊也能用）
 
-只刪群友記憶；目前這個頻道的 DSH 會話上下文不受影響，要一起清用 `/reset`（管理員）。
+只刪群友記憶；目前這個頻道的 DSH 會話上下文不受影響。要保留話題換 prompt 用 `/reload-system-prompt`；
+要全部清掉用 `/reset`（管理員）。
 
 > 記憶檔在 `state/discord-memory.json`，`state/` 已被 `.gitignore` 排除。檔案壞掉時會改名為
 > `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。格式是第 3 版（`users` 以 user id 為鍵）；

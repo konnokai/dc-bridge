@@ -907,9 +907,14 @@
       el('td', {}, fmtAgo(s.lastActive)),
       el('td', { className: 'muted' }, s.quietUntil ? new Date(s.quietUntil).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'),
       el('td', {}, s.pending ? (s.pending === 'question' ? '提問' : '審批') : '—'),
-      el('td', {}, el('button', {
-        className: 'danger', dataset: { key: s.key }, textContent: '重置',
-      })),
+      el('td', {}, el('div', { className: 'row', style: 'flex-wrap:nowrap' },
+        el('button', {
+          className: 'ghost', dataset: { key: s.key, action: 'reload' }, textContent: '重載提示詞',
+        }),
+        el('button', {
+          className: 'danger', dataset: { key: s.key, action: 'reset' }, textContent: '重置',
+        }),
+      )),
     )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有任何會話'))]));
   }
 
@@ -1139,13 +1144,17 @@
     const button = event.target.closest('button[data-key]');
     if (!button) return;
     const key = button.dataset.key;
-    if (!confirm('重置 ' + key + '？下一則訊息會開新上下文。')) return;
+    const reload = button.dataset.action === 'reload';
+    if (reload) {
+      if (!confirm('重載 ' + key + ' 的提示詞？\n會排進這個會話的佇列；前面的回合結束後產生總結，再清除會話。\n下一則訊息會用新的 system prompt，並帶上總結。')) return;
+    } else if (!confirm('重置 ' + key + '？下一則訊息會開新上下文。')) return;
     button.disabled = true;
     try {
-      await api('/api/sessions/reset', { method: 'POST', body: JSON.stringify({ key }) });
+      if (reload) await api('/api/sessions/reload-system-prompt', { method: 'POST', body: JSON.stringify({ key }) });
+      else await api('/api/sessions/reset', { method: 'POST', body: JSON.stringify({ key }) });
       await refresh();
     } catch (error) {
-      alert('重置失敗：' + error.message);
+      alert((reload ? '重載失敗：' : '重置失敗：') + error.message);
     } finally {
       button.disabled = false;
     }

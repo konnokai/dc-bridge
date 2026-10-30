@@ -297,15 +297,16 @@ export function shouldAutoCompact({ tokens, threshold, lastAt, now, cooldownMs }
   return threshold > 0 && Number.isFinite(tokens) && tokens > threshold && now - lastAt >= cooldownMs;
 }
 
-const MANAGE_GUILD = 1n << 5n;
+const ADMINISTRATOR = 1n << 3n;
 
 /**
- * `/reset` 誰能用：bot 擁有者，或那個伺服器裡有「管理伺服器」權限的人（discord.js 的 has() 會把 Administrator 算進去）。
- * bot 開放給別人管的伺服器時，那邊的管理員要能自己清掉 bot 的上下文。私聊沒有伺服器權限可看，只給擁有者。
+ * `/reset`、`/reload-system-prompt` 誰能用：bot 擁有者，或那個伺服器裡有 Administrator 權限的人。
+ * 只有 ManageGuild（管理伺服器）不算；這兩個指令會清掉整個會話，權限要跟其他管理指令一致。
+ * 私聊沒有伺服器權限可看，只給擁有者。
  */
 export function canResetConversation({ isOwner, guildId, permissions }) {
   if (isOwner) return true;
-  return Boolean(guildId) && Boolean(permissions?.has?.(MANAGE_GUILD));
+  return Boolean(guildId) && Boolean(permissions?.has?.(ADMINISTRATOR));
 }
 
 /** 這個人的訊息要不要當成「沒看到」：管理員封鎖（deny.users）或自己退出（deny.self）。 */

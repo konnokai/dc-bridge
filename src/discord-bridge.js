@@ -71,6 +71,17 @@ import {
   recordNote,
   saveNotesFile,
 } from './core/discord-notes.mjs';
+import {
+  buildReloadSummaryPrompt,
+  clearReloadSummaryOrThrow,
+  forgetReloadSummaryIfCurrent,
+  formatReloadSummary,
+  loadReloadFile,
+  peekReloadSummary,
+  persistReloadSummary,
+  saveReloadFile,
+  takeReloadSummary,
+} from './core/discord-reload.mjs';
 import { findSensitive } from './core/discord-security.mjs';
 import { bumpEmojiUsage, buildEmojiHint, formatEmojiLine, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
@@ -137,6 +148,7 @@ const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
 const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
+const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
 const EMOJI_USAGE_FILE = path.join(STATE_DIR, 'discord-emoji-usage.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
@@ -146,10 +158,13 @@ const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
 const ASK_TIMEOUT_MS = 120_000; // /ask 等模型回答的上限：一般回合 12~35 秒，兩分鐘足夠
+const PRIVATE_TURN_READY_TIMEOUT_MS = 60_000; // 指令排到最前面時，等 DSH 自己的回合／事件流同步的上限
+const PRIVATE_TURN_READY_POLL_MS = 2_000;
 const ASK_CANCEL_FAILED_GRACE_MS = 10 * 60_000; // 取消失敗：繼續擋到這一輪真的結束，最多十分鐘
 const ASK_ABANDONED_TTL_MS = 30 * 60_000; // 連 hardClose 都等不到 turn/end：記錄下來再擋三十分鐘
 // 後台提問的開頭：模型要知道這不是頻道對話、這一輪的工具真的被擋住，而且事後不要在頻道提起。
 const PRIVATE_ASK_HEADER = '【後台提問｜只有管理員看得到，不會公開】直接輸出文字回答，不要呼叫任何工具；這一輪所有 Discord 工具都已封鎖，呼叫只會失敗。這段問答之後不要在公開對話提起。';
+const PRIVATE_RELOAD_HEADER = '【後台整理｜不會公開】直接輸出文字，不要呼叫任何工具；這一輪所有 Discord 工具都已封鎖，呼叫只會失敗。這段整理之後不要在公開對話提起。';
 const TYPING_MAX_MS = 10 * 60 * 1000; // 回合卡住時不要讓「正在輸入」亮一輩子
 const TURN_RELEASE_MS = 5 * 60 * 1000; // 等不到 turn/end 時，最久把下一批壓這麼久
 const HELD_MAX = 50; // 回合進行中壓住的訊息最多幾則（★ 那幾則不算在內，一定留著）
@@ -174,14 +189,19 @@ const SLANG_STATUS_TEXT = {
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
  * 伺服器管理員可以改；真正的邊界是執行時的權限檢查（見 handleSlashCommand）。
  * dmPermission: false —— invite/console/mention/ask/memory/blacklist 只在伺服器頻道有意義。
- * reset/status/forget 開放私聊：沒有訊息指令之後，私聊只剩 slash 這一條路。
+ * reset/reload-system-prompt/status/forget 開放私聊：沒有訊息指令之後，私聊只剩 slash 這一條路。
  * forget、memory、blacklist 不設管理員權限：任何人都能看、刪自己的記憶，或把自己加入／移出黑名單。
  */
 const slashCommandData = [
   new SlashCommandBuilder()
     .setName('reset')
     .setDescription('重置這個頻道的會話上下文（伺服器管理者）')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDMPermission(true),
+  new SlashCommandBuilder()
+    .setName('reload-system-prompt')
+    .setDescription('先用目前會話產生總結，再重置；下一則訊息套用新的 system prompt（伺服器管理者）')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .setDMPermission(true),
   new SlashCommandBuilder()
     .setName('status')
@@ -383,6 +403,21 @@ async function main() {
       notesDirty = false;
     } catch (error) {
       log(`頻道筆記存檔失敗：${error?.message ?? error}`);
+    }
+  }
+
+  // system prompt 重載的交接摘要：舊會話產生、新會話的第一則 prompt 用一次，用量很小所以直接同步存檔。
+  const reloadLoaded = loadReloadFile(RELOAD_FILE);
+  const reloadStore = reloadLoaded.store;
+  if (reloadLoaded.warning) log(`⚠️ 交接摘要：${reloadLoaded.warning}`);
+
+  function saveReloadStore() {
+    try {
+      saveReloadFile(RELOAD_FILE, reloadStore);
+      return true;
+    } catch (error) {
+      log(`交接摘要存檔失敗：${error?.message ?? error}`);
+      return false;
     }
   }
 
@@ -792,7 +827,7 @@ async function main() {
     }
   }
 
-  async function retireSession(key) {
+  async function retireSession(key, { preservePending = false, onRetired = null } = {}) {
     stopTyping(key);
     finishProgress(key);
     hideCompactNotice(key);
@@ -801,11 +836,17 @@ async function main() {
     ttftTimeouts.delete(key);
     ttftAbandonedTurns.delete(key);
     epochs.set(key, epochOf(key) + 1);
+    // 重載提示：後續訊息要跟著新會話走。換代次後立刻改排隊批次的 epoch，
+    // deliverPrompt 才不會把它們當成舊對話丟掉。
+    if (preservePending) turnGate.rebase(key, epochOf(key));
     // 回訪屬於舊對話，/reset 之後不要再送。
     followups.forget(key);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
-    batcher.drop(key);
-    turnGate.drop(key);
+    // 重載提示是例外：排隊中的訊息要留著，等新會話開好再送。
+    if (!preservePending) {
+      batcher.drop(key);
+      turnGate.drop(key);
+    }
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
     primedKeys.delete(key);
@@ -843,6 +884,8 @@ async function main() {
     api.events.forget(sessionId);
     delete sessions[key];
     reverse.delete(sessionId);
+    // 映射已經移除：之後就算存檔或歸檔失敗，也算「退役已發生」，交接摘要不能跟著刪。
+    onRetired?.();
     agentSender.forget(sessionId);
     collectors.delete(sessionId);
     modelApplied.delete(sessionId);
@@ -861,6 +904,110 @@ async function main() {
     }
     log(`已重置會話 ${key}（舊 ${sessionId}）`);
     return true;
+  }
+
+  /** /reset：連同還沒用掉的交接摘要一起清掉；下一則訊息完全重來。 */
+  async function resetConversation(key) {
+    try {
+      // 摘要清不掉就不要重置；否則重啟後磁碟上的舊摘要會復活。
+      clearReloadSummaryOrThrow(reloadStore, key, () => saveReloadFile(RELOAD_FILE, reloadStore));
+    } catch (error) {
+      log(`清除交接摘要失敗 ${key}：${error?.message ?? error}`);
+      throw error;
+    }
+    return retireSession(key);
+  }
+
+  /**
+   * /reload-system-prompt：排進同一條會話佇列，等目前回合結束後在舊會話產生交接摘要，再清掉會話。
+   * 摘要失敗就不清，避免把還接得上的對話弄丟；排隊期間的新訊息留在 bridge，重載後進新會話。
+   */
+  async function reloadSystemPrompt(key) {
+    // 先把還沒送出的頻道訊息排進佇列，摘要才會包含它們。
+    batcher.flush(key);
+    if (!sessions[key] && !turnGate.hasPending(key)) {
+      return {
+        summarized: false,
+        cleared: false,
+        chars: 0,
+        message: '目前沒有會話可總結；下一則訊息會用 DSH 目前載入的 system prompt 開新會話。',
+      };
+    }
+    const channelName = key.startsWith('ch:')
+      ? client.channels.cache.get(key.slice(3))?.name
+      : '';
+    const prompt = buildReloadSummaryPrompt({
+      channelName,
+      isDm: key.startsWith('dm:'),
+    });
+    const ask = {
+      question: prompt,
+      header: PRIVATE_RELOAD_HEADER,
+      holdAfterAnswer: true,
+    };
+    let summary;
+    try {
+      summary = await new Promise((resolve, reject) => {
+        ask.resolve = resolve;
+        ask.reject = reject;
+        turnGate.submit(key, { ask }, { noStuckRelease: true });
+      });
+    } catch (error) {
+      throw new Error(`產生交接摘要失敗（${error?.message ?? error}）`);
+    }
+    if (cfg.discord.security.blockSensitive && findSensitive(summary, agentSecrets())) {
+      log(`重載摘要 ${key}：命中敏感資訊閘門，不保存`);
+      summary = '';
+    }
+    let cleared = false;
+    let retired = false;
+    let superseded = false;
+    let entry = null;
+    const dropOwnSummary = () => {
+      // 只刪自己那一筆；中間被新的 reload 覆蓋就不能動別人的摘要。
+      if (entry && forgetReloadSummaryIfCurrent(reloadStore, key, entry)) saveReloadStore();
+      entry = null;
+    };
+    try {
+      // 先落盤再退役：寫檔失敗就保留舊會話，不能回報成功卻在重啟後找不到摘要。
+      entry = persistReloadSummary(reloadStore, { key, text: summary, file: RELOAD_FILE });
+      const epochBeforeRetire = epochOf(key);
+      cleared = await retireSession(key, {
+        preservePending: true,
+        onRetired: () => { retired = true; },
+      });
+      if (!cleared || epochOf(key) !== epochBeforeRetire + 1) {
+        // 會話沒退成，或退役期間被另一個 /reset／重載插隊：不要把自己的摘要留給下一段對話。
+        superseded = epochOf(key) !== epochBeforeRetire + 1;
+        dropOwnSummary();
+      } else if (entry && reloadStore.summaries[key] !== entry) {
+        // 另一個 reload 已經接走這個頻道；它的摘要留著，這次不要回報成功。
+        superseded = true;
+        entry = null;
+      } else {
+        log(`重載 system prompt ${key}：摘要 ${entry?.text.length ?? 0} 字`);
+      }
+    } catch (error) {
+      // 映射已移除（retired）就保留摘要；只刪「根本沒退成」的那一份。
+      if (!retired) dropOwnSummary();
+      throw error;
+    } finally {
+      // 舊會話已經退役（或不需要退役）：放行排隊的訊息，它們會用新的代次進新會話。
+      // ticket 確保舊 reload 不會放到新 reload 的閘門。
+      turnGate.resume(key, { force: cleared || retired, ticket: ask.ticket });
+    }
+    return {
+      summarized: Boolean(entry),
+      cleared,
+      chars: entry?.text.length ?? 0,
+      message: superseded
+        ? '期間有另一個重置／重載接手，這次的摘要沒有套用。'
+        : entry
+          ? `已記下 ${entry.text.length} 字的對話摘要，會話已重置；排隊中的訊息會在新會話接續。`
+          : cleared
+            ? '這一輪沒有可交接的重點，會話已重置；排隊中的訊息會在新會話接續。'
+            : '找不到可以重置的會話；排隊中的訊息會照常處理。',
+    };
   }
 
   // ── Discord 送出 ─────────────────────────────────────────────────────────
@@ -2004,7 +2151,7 @@ async function main() {
       log(`自動壓縮失敗 ${key}：${error?.message ?? error}`);
     } finally {
       contextTokens.delete(sessionId);
-      turnGate.release(key);
+      turnGate.releaseNormal(key);
     }
   }
 
@@ -2066,7 +2213,7 @@ async function main() {
         collectors.delete(sessionId);
         stopTyping(key);
         finishProgress(key);
-        turnGate.release(key);
+        turnGate.releaseNormal(key);
         if (turnDirect.get(key) ?? defaultDirect(key)) {
           void sendLong(key, `⚠️ 模型這次想太久（超過 ${Math.round(timeoutMs / 1000)} 秒），先取消這一輪；可以再問一次。`).catch(() => {});
         }
@@ -2176,7 +2323,7 @@ async function main() {
         });
         if (compact) void autoCompact(key, frame.sessionId);
         // /ask 拿著閘門時，公開路徑收到的 turn/end 一定是別的回合；不能因此放掉提問的閘門。
-        else if (!askTurns.has(frame.sessionId)) turnGate.release(key);
+        else if (!askTurns.has(frame.sessionId)) turnGate.releaseNormal(key);
       }
     }
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
@@ -2350,7 +2497,7 @@ async function main() {
         }
         // 斷線後舊的 collector 不可信：重連快照會補歷史 turn/end，拿它當新回覆會重複發送。
         collectors.clear();
-        // 重連要等新的開場快照才能再問；在那之前 /ask 一律拒絕。
+        // 重連要等新的開場快照才能再問；在那之前 /ask 會排隊等快照。
         snapshotReady.clear();
         openTurns.clear();
         agentSender.clearTurns();
@@ -2431,7 +2578,13 @@ async function main() {
     releaseMs: TURN_RELEASE_MS,
     onStuck: (key) => log(`等不到回合結束，先放行下一批 (${key})`),
     deliver: (key, job, ticket) => {
-      if (job.ask) { runAskJob(key, job, ticket); return; }
+      if (job.ask) {
+        void runAskJob(key, job, ticket).catch((error) => {
+          log(`後台回合失敗 (${key})：${error?.message ?? error}`);
+          turnGate.release(key, ticket);
+        });
+        return;
+      }
       const previous = promptChains.get(key) ?? Promise.resolve();
       const next = previous
         .then(() => deliverPrompt(key, job))
@@ -2695,7 +2848,9 @@ async function main() {
     // 令牌由 DSH 外掛自動帶入，不再寫進 prompt：模型看不到，被注入也抄不走。
     // 每輪還是要提醒一次「文字不會自動送出」，壓縮過上下文之後也不能忘。
     const sendHint = '【發送】要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。token 由系統自動帶入，不要自己填。不呼叫就是這次不說話；直接輸出文字不會送出。';
-    const text = `${prompt.text}\n${sendHint}`;
+    // 換 system prompt 後的第一次發言：先把上一段對話的記憶放在最前面。
+    const reload = peekReloadSummary(reloadStore, key);
+    const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}\n${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
     queued.push(job.direct);
@@ -2735,6 +2890,11 @@ async function main() {
       stopTyping(key);
       if (command.text) await sendLong(key, command.text);
       return false;
+    }
+    // prompt 真的進 DSH 了才用掉交接摘要；送失敗時下一則還會再帶一次。
+    if (reload && takeReloadSummary(reloadStore, key)) {
+      saveReloadStore();
+      log(`帶入交接摘要 ${key}（${reload.text.length} 字）`);
     }
     // prompt 真的進 DSH 了，反應區塊才算送達；失敗重試時還會再帶一次。
     reactionInbox.clear(key, prompt.feedbackEntries);
@@ -2893,15 +3053,65 @@ async function main() {
   }
 
   /**
-   * /ask 進閘門後才開始跑：問答獨佔一輪，頻道訊息壓到問完才送。
+   * 指令回合的等待：排到閘門最前面時，DSH 可能還在跑別的回合、事件流還沒同步，
+   * 或佇列裡有 DSH 後台送進來的訊息。等它乾淨再問，不要叫使用者「再試一次」。
+   */
+  async function waitForPrivateTurn(key, sessionId, epoch, cancelled) {
+    const deadline = Date.now() + PRIVATE_TURN_READY_TIMEOUT_MS;
+    let lastError = null;
+    while (true) {
+      const stopped = cancelled?.();
+      if (stopped) throw stopped;
+      if (sessions[key] !== sessionId || epochOf(key) !== epoch) throw new Error('會話已重置');
+      let queued = 0;
+      let error = null;
+      if (snapshotReady.has(sessionId)) {
+        try {
+          queued = await api.pendingPrompts(sessionId, AbortSignal.timeout(8000));
+        } catch (caught) {
+          error = caught;
+        }
+      }
+      if (!error) {
+        const blocked = askBlockReason({
+          snapshotReady: snapshotReady.has(sessionId),
+          queued,
+          gateBusy: false, // 這一輪已經拿到閘門；等的是 DSH 自己跑的其他回合
+          collectorActive: collectors.has(sessionId),
+          openTurns: openTurns.get(sessionId)?.size ?? 0,
+          askActive: askTurns.has(sessionId),
+        });
+        if (!blocked) return;
+      }
+      lastError = error ?? lastError;
+      if (Date.now() >= deadline) {
+        throw new Error(lastError
+          ? `等不到空閒的會話（${lastError?.message ?? lastError}）`
+          : '等不到空閒的會話（還有回合在跑）');
+      }
+      await sleep(PRIVATE_TURN_READY_POLL_MS);
+    }
+  }
+
+  /**
+   * /ask 與重載提示進閘門後才開始跑：問答獨佔一輪，頻道訊息壓到問完才送。
    *
    * 回合歸屬、逾時收尾都在 core/discord-ask.mjs；這裡只接 DSH 與 Discord 兩邊。
    * 進閘門後先 mute 再送 prompt：事件流的 turn/start 可能漏掉，不能等看到才擋工具。
    */
-  function runAskJob(key, job, ticket) {
-    const { question, sessionId, epoch, resolve, reject } = job.ask;
+  async function runAskJob(key, job, ticket) {
+    const {
+      question,
+      resolve,
+      reject,
+      header = PRIVATE_ASK_HEADER,
+      holdAfterAnswer = false,
+    } = job.ask;
+    job.ask.ticket = ticket;
     const muteToken = {};
     let settled = false;
+    let cancelled = null;
+    job.ask.cancel = (error) => { cancelled = error ?? new Error('已取消'); };
     const settle = (fn, value) => {
       if (settled) return;
       settled = true;
@@ -2912,9 +3122,29 @@ async function main() {
       agentSender.clearMuted(key, muteToken);
       turnGate.release(key, ticket);
     };
+    const stopped = () => cancelled;
 
-    if (sessions[key] !== sessionId || epochOf(key) !== epoch) {
-      fail(new Error('會話已重置'));
+    // 排隊期間可能已經 /reset 或重載過；用真正跑起來當下的會話，不要用送單時的。
+    let sessionId;
+    try {
+      sessionId = await ensureSession(key);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (cancelled) {
+      fail(cancelled);
+      return;
+    }
+    const epoch = epochOf(key);
+    try {
+      await waitForPrivateTurn(key, sessionId, epoch, stopped);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (cancelled) {
+      fail(cancelled);
       return;
     }
 
@@ -2932,9 +3162,12 @@ async function main() {
         if (late) void stopAskSession(sessionId, tracker);
       },
       onSettle: (result) => {
-        if (result.kind === 'answer') {
-          if (result.text) settle(resolve, result.text);
-          else settle(reject, new Error('模型沒有輸出文字'));
+        if (result.kind === 'answer' && result.text) {
+          // 重載提示：拿到摘要後先鎖住佇列，等 retireSession 換完代次再放行後續訊息。
+          if (holdAfterAnswer) turnGate.hold(key, ticket);
+          settle(resolve, result.text);
+        } else if (result.kind === 'answer') {
+          settle(reject, new Error('模型沒有輸出文字'));
         } else if (result.kind === 'timeout') {
           settle(reject, new Error(`等不到回答（${ASK_TIMEOUT_MS / 1000} 秒）`));
         } else if (result.kind === 'ended') {
@@ -2971,7 +3204,7 @@ async function main() {
         const accepted = await api.sessions.prompt({
           sessionId,
           mode: 'queue',
-          content: [{ type: 'text', text: `${PRIVATE_ASK_HEADER}\n${question}` }],
+          content: [{ type: 'text', text: `${header}\n${question}` }],
         });
         if (!accepted.result?.ok) {
           const error = accepted.result?.error;
@@ -3334,12 +3567,15 @@ async function main() {
     const media = cfg.discord.media.enabled
       ? collectMediaAttachments([...(message.attachments?.values() ?? []), ...stickerImages(message.stickers)], cfg.discord.media)
       : { accepted: [], skipped: [] };
+    // 只有 @bot／回覆 bot、沒有其他內容：不能當空訊息丟掉，模型要知道有人在叫它。
+    const emptyDirect = direct && !text && !stickers && media.accepted.length === 0;
     if (!text && !stickers && media.accepted.length === 0) {
       if (direct && message.attachments?.size) {
         const reason = media.skipped[0]?.reason ?? '附件沒有送進模型';
         await sendLong(key, `附件沒有送進模型：${reason}`);
+        return;
       }
-      return;
+      if (!direct) return;
     }
 
     const isOwner = ownerIds.has(message.author.id);
@@ -3348,7 +3584,8 @@ async function main() {
 
     if (direct) {
       const hanging = pending.get(key);
-      if (hanging) {
+      // 只有 @／回覆、沒有文字的空訊息不是提問或審批的答案，留給一般對話。
+      if (hanging && !emptyDirect) {
         if (hanging.kind === 'question') {
           await answerPending(hanging, text, key, isOwner);
           return;
@@ -3374,9 +3611,9 @@ async function main() {
       guildId,
       userId: message.author.id,
       author,
-      text: [labelEmojiTags(text, emojiCatalogs), stickers].filter(Boolean).join(' '),
+      text: [labelEmojiTags(text, emojiCatalogs), stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       // 黑話比對用原文：表情描述是目錄產生的字，不該被當成群友講的話。
-      rawText: [text, stickers].filter(Boolean).join(' '),
+      rawText: [text, stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       direct,
       isOwner,
       media,
@@ -3387,8 +3624,8 @@ async function main() {
   }
 
   async function handleSlashCommand(interaction) {
-    // 私聊只開放 forget/reset/status（其餘指令在 DM 沒有意義）。reset/status 執行時仍只認 ownerIds。
-    if (!interaction.inGuild() && !['forget', 'reset', 'status'].includes(interaction.commandName)) {
+    // 私聊只開放 forget/reset/reload-system-prompt/status（其餘指令在 DM 沒有意義）。
+    if (!interaction.inGuild() && !['forget', 'reset', 'reload-system-prompt', 'status'].includes(interaction.commandName)) {
       await interaction.reply({ content: '這個指令只能在伺服器頻道使用。', flags: MessageFlags.Ephemeral });
       return;
     }
@@ -3443,11 +3680,12 @@ async function main() {
       userId: interaction.user.id,
     });
     // 選單的 default_member_permissions 只是讓一般成員看不到（Discord 沒辦法只開給某一個人），
-    // 執行時再判斷一次：/reset 開給這個伺服器的管理者（只限白名單裡的頻道，其他頻道本來就沒有 bot 的會話），
-    // 其他管理指令只認 ownerIds。
+    // 執行時再判斷一次：/reset 與 /reload-system-prompt 開給這個伺服器的管理者
+    // （只限白名單裡的頻道，其他頻道本來就沒有 bot 的會話），其他管理指令只認 ownerIds。
     if (!ownerIds.has(interaction.user.id)) {
-      const isReset = interaction.commandName === 'reset';
-      const allowed = isReset
+      const canControlConversation = interaction.commandName === 'reset'
+        || interaction.commandName === 'reload-system-prompt';
+      const allowed = canControlConversation
         && canResetConversation({ isOwner: false, guildId: interaction.guildId, permissions: interaction.memberPermissions })
         && isConversationAllowed(cfg.discord, {
           guildId: interaction.guildId,
@@ -3458,10 +3696,10 @@ async function main() {
         });
       if (!allowed) {
         await interaction.reply({
-          content: isReset
+          content: canControlConversation
             ? (interaction.guildId
-              ? '重置只有 bot 擁有者或這個伺服器的管理者（管理伺服器權限）能用，而且頻道要有開放 bot。'
-              : '重置只有 bot 擁有者能用。')
+              ? '重置／重載提示只有 bot 擁有者或這個伺服器裡有 Administrator 權限的人能用，而且頻道要有開放 bot。'
+              : '重置／重載提示只有 bot 擁有者能用。')
             : '這個指令只有 bot 擁有者能用。',
           flags: MessageFlags.Ephemeral,
         });
@@ -3489,52 +3727,13 @@ async function main() {
         await interaction.editReply('這個頻道沒有開放 bot，沒有可以問的會話。');
         return;
       }
-      let sessionId;
-      try {
-        sessionId = await ensureSession(key);
-      } catch (error) {
-        await interaction.editReply(`建立會話失敗：${error?.message ?? error}`);
-        return;
-      }
-      // 事件流還沒同步完（剛重啟／剛斷線）：這時候 lastTurns 不可信，先不接受提問。
-      if (!snapshotReady.has(sessionId)) {
-        await interaction.editReply('事件流還在同步這個會話，等幾秒再問。');
-        return;
-      }
-      // 發問前先把「這輪一定是我們的」確認清楚：DSH 佇列非空、頻道回合還在收集、
-      // 或這個會話已經有一個 /ask，都不要插隊。
-      let queued;
-      try {
-        queued = await api.pendingPrompts(sessionId, AbortSignal.timeout(8000));
-      } catch (error) {
-        await interaction.editReply(`無法確認會話佇列（${error?.message ?? error}），稍後再問。`);
-        return;
-      }
-      const blocked = askBlockReason({
-        snapshotReady: snapshotReady.has(sessionId),
-        queued,
-        gateBusy: turnGate.isBusy(key),
-        collectorActive: collectors.has(sessionId),
-        openTurns: openTurns.get(sessionId)?.size ?? 0,
-        askActive: askTurns.has(sessionId),
-      });
-      if (blocked === 'syncing') {
-        await interaction.editReply('事件流還在同步這個會話，等幾秒再問。');
-        return;
-      }
-      if (blocked === 'queued') {
-        await interaction.editReply('會話裡還有排隊的訊息（可能剛從 DSH 後台送出），等它跑完再問。');
-        return;
-      }
-      if (blocked) {
-        await interaction.editReply('這個頻道還在處理上一輪，等它回完再問。');
-        return;
-      }
+      // 排進同一條會話佇列：前面有回合就等它跑完，不直接拒絕；之前的訊息也先排進去。
+      batcher.flush(key);
       try {
         const answer = await new Promise((resolve, reject) => {
           turnGate.submit(
             key,
-            { ask: { question, sessionId, epoch: epochOf(key), resolve, reject } },
+            { ask: { question, resolve, reject } },
             { noStuckRelease: true },
           );
         });
@@ -3573,10 +3772,23 @@ async function main() {
       return;
     }
     if (interaction.commandName === 'reset') {
-      const done = await retireSession(key);
-      await interaction.editReply(done
-        ? '已重置會話，下一則訊息會開新上下文。'
-        : '目前沒有可重置的會話（下一則訊息會開新的）。');
+      try {
+        const done = await resetConversation(key);
+        await interaction.editReply(done
+          ? '已重置會話，下一則訊息會開新上下文。'
+          : '目前沒有可重置的會話（下一則訊息會開新的）。');
+      } catch (error) {
+        await interaction.editReply(`重置失敗：${error?.message ?? error}`);
+      }
+      return;
+    }
+    if (interaction.commandName === 'reload-system-prompt') {
+      try {
+        const result = await reloadSystemPrompt(key);
+        await interaction.editReply(result.message);
+      } catch (error) {
+        await interaction.editReply(`重載提示失敗：${error?.message ?? error}`);
+      }
       return;
     }
     if (interaction.commandName === 'status') {
@@ -3846,7 +4058,8 @@ async function main() {
           }),
           sessions: sessionsInfo,
           // 沒有會話也要走 retireSession：還在等的第一批要一起丟掉。
-          resetSession: (key) => retireSession(key),
+          resetSession: (key) => resetConversation(key),
+          reloadSystemPrompt: (key) => reloadSystemPrompt(key),
           config: editableConfig,
           updateConfig,
           invite: inviteInfo,
