@@ -26,6 +26,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-context.mjs` | 頻道上下文 |
 | `core/discord-activity.mjs` | 發言頻率 |
 | `core/discord-quiet.mjs` | 安靜模式 |
+| `core/discord-ignore.mjs` | 模型自己的不理名單（帶到期時間）與重複拒絕偵測 |
 | `core/discord-feedback.mjs` | 自己訊息收到的 reaction |
 | `core/discord-followup.mjs` | 回訪排程 |
 | `core/discord-notes.mjs` | 頻道筆記與每日摘要 |

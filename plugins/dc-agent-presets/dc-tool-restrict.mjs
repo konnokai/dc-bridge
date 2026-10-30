@@ -63,6 +63,7 @@ const DISCORD_TOOLS = [
   'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction',
   'mcp__discord__set_quiet',
+  'mcp__discord__ignore_user',
   'mcp__discord__schedule_followup',
   'mcp__discord__edit_message',
   'mcp__discord__delete_message',

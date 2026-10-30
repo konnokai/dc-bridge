@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, notes, deleteNote, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, notes, deleteNote, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -153,6 +153,17 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         }
         const removed = handlers.deleteNote(id);
         sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這條筆記' });
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/ignore/remove') {
+        const body = await readJson(req);
+        const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
+        if (!/^\d{5,25}$/.test(userId)) {
+          sendJson(res, 400, { error: 'userId 必須是 Discord ID' });
+          return;
+        }
+        const removed = handlers.ignoreRemove(userId);
+        sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '不在不理名單裡' });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/triggers') {

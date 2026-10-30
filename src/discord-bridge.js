@@ -45,6 +45,7 @@ import {
 } from './core/discord-core.mjs';
 import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
+import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
@@ -149,6 +150,7 @@ const CONFIG_FILE = path.join(ROOT, 'config.json');
 const SESSIONS_FILE = path.join(STATE_DIR, 'discord-sessions.json');
 const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
 const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
+const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
@@ -453,6 +455,24 @@ async function main() {
     }
   }
 
+  // 模型自己的不理名單：帶到期時間、重啟後仍然有效；跟管理員封鎖（deny.users）分開。
+  const ignoreLoaded = loadIgnoreFile(IGNORE_FILE);
+  const ignoreStore = ignoreLoaded.store;
+  if (ignoreLoaded.warning) log(`⚠️ 不理名單：${ignoreLoaded.warning}`);
+
+  function saveIgnores() {
+    try {
+      saveIgnoreFile(IGNORE_FILE, ignoreStore);
+      return true;
+    } catch (error) {
+      log(`不理名單存檔失敗：${error?.message ?? error}`);
+      return false;
+    }
+  }
+
+  // 同一個人在同一個頻道 10 分鐘內被拒絕第 2 次就改按 ❌，不再送同一句。
+  const refusals = createRefusalTracker();
+
   const memoryShown = new Map(); // key -> Map<userId, { updatedAt, at }>：這個會話帶過誰的記憶
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
   const notesShown = new Map(); // key -> Map<noteId, { at, shownAt }>：這個會話帶過哪些頻道筆記
@@ -597,6 +617,11 @@ async function main() {
   }
 
   const ownerIds = new Set(cfg.discord.ownerIds);
+  // 管理員永遠不算被不理：就算檔案被手改，也不讓模型或設定把 ownerIds 擋掉。
+  const ignoredUser = (userId) => {
+    const id = String(userId ?? '');
+    return !ownerIds.has(id) && isIgnoring(ignoreStore, id);
+  };
   const collectors = new Map(); // sessionId -> turn collector
   const modelApplied = new Set(); // 本程序內已 selectModel 過的會話
   const sessionPromises = new Map(); // key -> 建立中的會話（防併發重複建立）
@@ -633,6 +658,9 @@ async function main() {
   // 用來決定這個回合要不要亮輸入提示、出錯時要不要在頻道說（沒人叫 bot 的那批不說）。
   const pendingDirect = new Map(); // key -> boolean[]（已投遞、回合還沒開始）
   const turnDirect = new Map(); // key -> 目前這個回合的那批有沒有人叫 bot
+  // 模型要對哪一則訊息按 ❌ 用：跟著批次排隊，回合開始時取出，避免拿到別批的訊息。
+  const pendingDirectMessages = new Map(); // key -> {{userId,id}[]}[]（已投遞、回合還沒開始）
+  const turnDirectMessages = new Map(); // key -> 目前這個回合直接叫 bot 的訊息
   const emojiDir = cfg.discord.emoji.dir ? path.resolve(ROOT, cfg.discord.emoji.dir) : path.join(STATE_DIR, 'discord-emoji');
   let emojiCatalogs = loadCatalogs(emojiDir);
   let emojiLoadedAt = Date.now();
@@ -867,6 +895,7 @@ async function main() {
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
     primedKeys.delete(key);
+    refusals.forget(key);
     agentSender.forgetKey(key);
     quietState.forget(key);
     reactionInbox.clear(key);
@@ -882,6 +911,8 @@ async function main() {
     turnTriggerRecorded.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
+    pendingDirectMessages.delete(key);
+    turnDirectMessages.delete(key);
     const entry = pending.get(key);
     if (entry) {
       clearTimeout(entry.timer);
@@ -1346,7 +1377,7 @@ async function main() {
           channelId: channel.id, query, authorId, afterId, limit: SEARCH_PAGE_MAX, oldestFirst, offset, includeNsfw: channel.nsfw,
         }),
       }),
-      visible: (message) => canReadMessage(cfg.discord, { guildId: channel.guildId, author: message.author, mentions: message.mentions }, client.user.id)
+      visible: (message) => canReadMessage(cfg.discord, { guildId: channel.guildId, author: message.author, mentions: message.mentions }, client.user.id, ignoredUser)
         && (message.author?.bot || !isSkippedMessage(message.content ?? '', client.user.id)),
     });
     // Message 的 channel 由 client 的頻道快取解析，不用另外傳。
@@ -1376,16 +1407,70 @@ async function main() {
     return { key, target, shown };
   }
 
+  /**
+   * 模型送出固定拒絕句時，決定這次要不要改成 ❌。
+   * 回傳 { replaced } 代表已按 ❌；{ note } 代表照常送出，成功後才記一次。
+   */
+  async function prepareRefusal(body) {
+    const content = typeof body.content === 'string' ? body.content : '';
+    const attached = (typeof body.file === 'string' && body.file.trim())
+      || (typeof body.sticker === 'string' && body.sticker.trim());
+    if (attached || !isRefusalMessage(content)) return null;
+    const { key } = await agentSender.resolve(body.token);
+
+    // 回應對象只認這一輪的觸發訊息；reply_to 指到哪一則就用那一則的作者。
+    const directMessages = turnDirectMessages.get(key) ?? [];
+    const replyTo = textArg(body.reply_to);
+    let userId = '';
+    let target = replyTo;
+    if (replyTo) {
+      const targetId = messageRefs.lookup(key, replyTo);
+      userId = directMessages.find((entry) => entry.id === targetId)?.userId ?? '';
+      if (!userId && targetId) {
+        const message = await fetchByRef(key, replyTo).catch(() => null);
+        userId = message?.author?.id ?? '';
+      }
+    } else {
+      const latest = directMessages.at(-1);
+      if (!latest) return null;
+      userId = latest.userId;
+      target = messageRefs.register(key, latest.id);
+    }
+    if (!userId || userId === client.user.id) return null;
+
+    const count = refusals.count(key, userId);
+    if (count < 1) return { note: { key, userId } };
+    try {
+      // 走 sender 的額度與 session 存活檢查；不是直接呼叫反應。
+      await agentSender.react({ token: body.token, message: target, emoji: '❌' });
+    } catch (error) {
+      log(`重複拒絕改按 ❌ 失敗（${key}）：${error?.message ?? error}；照原樣送出`);
+      return { note: { key, userId } };
+    }
+    refusals.note(key, userId);
+    log(`重複拒絕 ${key} user=${userId}（第 ${count + 1} 次）：改按 ❌，不送「${flat(content, 60)}」`);
+    return { replaced: { key, refs: [], notice: '已用 ❌ 反應代替這一則重複的拒絕回覆（同一個人短時間內重複踩線）。' } };
+  }
+
+  const sendMessage = createAgentSendHandler({
+    agentSender,
+    turnUsers,
+    turnTriggerRecorded,
+    triggerStore,
+    markTriggerDirty,
+    recordBotMessages,
+    log,
+  });
+
   const agentHandlers = {
-    send: createAgentSendHandler({
-      agentSender,
-      turnUsers,
-      turnTriggerRecorded,
-      triggerStore,
-      markTriggerDirty,
-      recordBotMessages,
-      log,
-    }),
+    async send(body) {
+      const refusal = await prepareRefusal(body);
+      if (refusal?.replaced) return refusal.replaced;
+      const result = await sendMessage(body);
+      // 真的送出成功才累加：第一則失敗時，下一次仍然是第一次拒絕。
+      if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
+      return result;
+    },
     async react(body) {
       const result = await agentSender.react({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
       log(`MCP reaction ${result.key}（${textArg(body.message)} ${textArg(body.emoji)}）`);
@@ -1415,6 +1500,45 @@ async function main() {
       primedKeys.delete(key);
       log(`MCP 結束安靜 ${key}`);
       return { key, text: '已結束安靜，下一批會重新帶頻道上下文。' };
+    },
+    // 模型自己設的黑名單：跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開。
+    async ignore(body) {
+      const { key } = await agentSender.resolve(body.token);
+      const target = await fetchByRef(key, textArg(body.message));
+      const author = target.author;
+      if (!author?.id) throw toolError('找不到那則訊息的發言者', 400);
+      if (author.bot) throw toolError('不理的是人，不是 bot', 400);
+      if (ownerIds.has(author.id)) throw toolError('管理員不能被不理；要封鎖請管理員處理', 403);
+      const minutes = Math.round(Number(body.minutes));
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > IGNORE_MAX_MINUTES) {
+        throw toolError(`minutes 要在 0~${IGNORE_MAX_MINUTES} 之間（0 = 解除不理）`, 400);
+      }
+      const name = authorName(target);
+      const previous = ignoreStore.users?.[author.id] ?? null;
+      if (minutes === 0) {
+        if (!unignore(ignoreStore, author.id)) return { key, text: `「${flat(name, 40)}」不在不理名單裡。` };
+        if (!saveIgnores()) {
+          if (previous) ignoreStore.users[author.id] = previous;
+          throw toolError('解除不理失敗：名單存檔失敗，維持原狀', 500);
+        }
+        log(`MCP 解除不理 ${key} user=${author.id}`);
+        return { key, text: `已解除不理「${flat(name, 40)}」，他的訊息又會進來了。` };
+      }
+      const already = Boolean(previous && Number(previous.until) > Date.now());
+      if (!already && ignoreList(ignoreStore).length >= IGNORE_MAX_USERS) {
+        throw toolError(`不理名單已滿（${IGNORE_MAX_USERS} 人），先解除一些人`, 429);
+      }
+      const entry = setIgnored(ignoreStore, { userId: author.id, name, minutes, reason: flat(body.reason, 100) });
+      if (!saveIgnores()) {
+        if (previous) ignoreStore.users[author.id] = previous;
+        else delete ignoreStore.users[author.id];
+        throw toolError('不理失敗：名單存檔失敗，沒有生效', 500);
+      }
+      log(`MCP 不理 ${key} user=${author.id} ${minutes} 分鐘${entry.reason ? `（${entry.reason}）` : ''}`);
+      return {
+        key,
+        text: `已不理「${flat(name, 40)}」到 ${formatIgnoreUntil(entry.until)}（${minutes} 分鐘）。這段時間他的訊息不會進來，包括 @你；提早解除用 minutes=0。目前名單 ${ignoreList(ignoreStore).length} 人。`,
+      };
     },
     // 回訪：時間到了 bridge 送一個提示，模型自己決定要不要說話。
     async followup(body) {
@@ -1500,7 +1624,7 @@ async function main() {
         // date 從指定時間往後讀；before 從最新往回裝，超過字數上限就停。
         for (const message of date ? messages : messages.reverse()) {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) continue;
-          if (!canReadMessage(cfg.discord, message, client.user.id)) continue;
+          if (!canReadMessage(cfg.discord, message, client.user.id, ignoredUser)) continue;
           const line = historyLine(key, message);
           if (used + line.length > HISTORY_MAX_CHARS) break;
           lines.push(line);
@@ -1549,7 +1673,7 @@ async function main() {
         }),
         matches: (message) => {
           if (!message.author?.bot && isSkippedMessage(message.content, client.user.id)) return false;
-          if (!canReadMessage(cfg.discord, message, client.user.id)) return false;
+          if (!canReadMessage(cfg.discord, message, client.user.id, ignoredUser)) return false;
           if (authorId && message.author?.id !== authorId) return false;
           if (terms.length && !matchesTerms(searchableText(message), terms)) return false;
           return true;
@@ -1564,7 +1688,7 @@ async function main() {
       const viewStart = Date.now();
       const { key, channel } = await agentSender.resolve(body.token);
       const target = await fetchByRef(key, textArg(body.message));
-      if (!canReadMessage(cfg.discord, target, client.user.id)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
+      if (!canReadMessage(cfg.discord, target, client.user.id, ignoredUser)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
       const self = target.author?.id === client.user.id ? '（你）' : '';
       const lines = [
         `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
@@ -1573,8 +1697,10 @@ async function main() {
       let repliedMessage = null;
       try {
         // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它就看不懂在回什麼。
+        // 模型自己不理的人例外：他的話與圖都不帶。
         const replied = await referencedMessage(target);
-        if (replied && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) {
+        if (replied && !ignoredUser(replied.author?.id)
+          && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) {
           repliedMessage = replied;
           lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
           // 被回覆的那則本身可能是 embed（例如其他 bot 的圖文），只寫「沒有文字」會讓模型看不到內容。
@@ -1698,7 +1824,7 @@ async function main() {
         member?.premiumSince ? `從 ${date(member.premiumSince)} 開始加成這個伺服器` : '',
         mutedUntil && mutedUntil > new Date() ? `禁言中，到 ${shortTime(mutedUntil)}` : '',
       ];
-      const facts = cfg.discord.memory.enabled && canReadMessage(cfg.discord, target, client.user.id)
+      const facts = cfg.discord.memory.enabled && canReadMessage(cfg.discord, target, client.user.id, ignoredUser)
         ? userFacts(memoryStore, { userId: target.author?.id, now: Date.now() })
         : [];
       if (facts.length) lines.push(`你記得的事（編號給 forget_user_fact 用）：${numberFacts(facts)}`);
@@ -2368,6 +2494,8 @@ async function main() {
       turnDirect.set(key, hadQueued ? queued.shift() : defaultDirect(key));
       const queuedUsers = pendingUsers.get(key);
       turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
+      const queuedMessages = pendingDirectMessages.get(key);
+      turnDirectMessages.set(key, queuedMessages?.length ? queuedMessages.shift() : []);
       turnTriggerRecorded.delete(key);
       // 只有橋接自己排進去的批次才等第一個 token；自動壓縮的 /compact 不算。
       if (event.type === 'turn/start' && hadQueued) armTtftTimer(key, frame.sessionId, turn);
@@ -2395,6 +2523,7 @@ async function main() {
     const direct = turnDirect.get(key) ?? defaultDirect(key);
     turnDirect.delete(key);
     turnUsers.delete(key);
+    turnDirectMessages.delete(key);
     turnTriggerRecorded.delete(key);
 
     const reason = ended.reason ?? {};
@@ -2520,6 +2649,8 @@ async function main() {
         turnDirect.clear();
         pendingUsers.clear();
         turnUsers.clear();
+        pendingDirectMessages.clear();
+        turnDirectMessages.clear();
         turnTriggerRecorded.clear();
         clearAllTtftTimers();
         // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
@@ -2683,7 +2814,9 @@ async function main() {
       try {
         const referenced = await referencedMessage(entry.message);
         // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它模型看不懂在回什麼。
-        if (referenced && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
+        // 模型自己不理的人例外：他的話不進來，只留回覆對象的名字。
+        if (referenced && !ignoredUser(referenced.author?.id)
+          && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
             ref: messageRefs.register(key, referenced.id),
             author: authorName(referenced),
@@ -2727,6 +2860,7 @@ async function main() {
         // deny 的人一律不進上下文、不收樣本；他 @bot 的那一則已經隨自己的批次送過模型了。
         const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id)
           && !isDeniedUser(cfg.discord, entry.author?.id)
+          && !ignoredUser(entry.author?.id)
           && (entry.author?.bot || !isSkippedMessage(entry.content, client.user.id)));
         // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）。
         for (const entry of history) {
@@ -2874,11 +3008,19 @@ async function main() {
     const queuedUsers = pendingUsers.get(key) ?? [];
     queuedUsers.push(users);
     pendingUsers.set(key, queuedUsers);
+    const directMessages = job.entries
+      .filter((entry) => entry.direct)
+      .map((entry) => ({ userId: entry.userId, id: entry.id }));
+    const queuedMessages = pendingDirectMessages.get(key) ?? [];
+    queuedMessages.push(directMessages);
+    pendingDirectMessages.set(key, queuedMessages);
     const unqueue = () => {
       const index = queued.lastIndexOf(job.direct);
       if (index >= 0) queued.splice(index, 1);
       const userIndex = queuedUsers.lastIndexOf(users);
       if (userIndex >= 0) queuedUsers.splice(userIndex, 1);
+      const messageIndex = queuedMessages.lastIndexOf(directMessages);
+      if (messageIndex >= 0) queuedMessages.splice(messageIndex, 1);
     };
     let accepted;
     try {
@@ -2926,6 +3068,12 @@ async function main() {
     const conf = cfg.discord.reactions;
     if (!conf.enabled || !message.guildId) return false;
     if (/^[!/]/.test(text)) return false;
+    // 有圖片（附件或連結預覽）的訊息不自動按：戰績圖、截圖、梗圖先交給模型判斷，避免只憑文字亂按。
+    const hasImageAttachment = [...(message.attachments?.values() ?? [])].some((attachment) => {
+      const type = String(attachment?.contentType ?? '');
+      return type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(String(attachment?.name ?? ''));
+    });
+    if (hasImageAttachment || (message.embeds ?? []).some((embed) => embed.image || embed.thumbnail)) return false;
 
     const now = Date.now();
     if ((reactionLastAt.get(key) ?? 0) + conf.cooldownMs > now) return false;
@@ -3410,6 +3558,7 @@ async function main() {
           const messages = [...fetched.values()]
             .filter((message) => message.createdTimestamp >= since)
             .filter((message) => !isDeniedUser(cfg.discord, message.author?.id))
+            .filter((message) => !ignoredUser(message.author?.id))
             .filter((message) => message.author?.bot || !isSkippedMessage(message.content, client.user.id))
             .map((message) => ({
               at: message.createdTimestamp,
@@ -3517,6 +3666,8 @@ async function main() {
   /** 自己的訊息收到 reaction：只記下來，下一批 prompt 再講；不觸發回合。 */
   async function handleReaction(reaction, user) {
     if (!reaction || !user || user.bot) return;
+    // 模型自己不理的人，他的 reaction 也不收：整個人的輸入都不進來。
+    if (ignoredUser(user.id)) return;
     // 先查這則是不是模型自己送的，才決定要不要打 API 抓訊息：白名單外的 reaction 直接丟掉。
     const key = agentSender.ownedKey(reaction.message?.id);
     if (!key) return;
@@ -3535,6 +3686,8 @@ async function main() {
 
   async function handleMessage(message) {
     if (!message || message.author?.bot || message.webhookId) return;
+    // 模型自己的不理名單：@ 也不處理，沒有例外。管理員永遠不受這份名單影響。
+    if (ignoredUser(message.author.id)) return;
     const guildId = message.guildId ?? null;
     const ids = {
       guildId,
@@ -4075,6 +4228,7 @@ async function main() {
               maxPerDay: cfg.discord.slang.maxPerDay,
             },
             triggers: triggerStats(triggerStore, { now: Date.now(), top: 3 }),
+            ignored: ignoreList(ignoreStore),
             console: { host, port },
           }),
           sessions: sessionsInfo,
@@ -4102,6 +4256,18 @@ async function main() {
             const removed = deleteNoteById(notesStore, id);
             if (removed) markNotesDirty();
             return removed;
+          },
+          // 控制台的逃生門：模型設錯或設太久時，管理員可以直接解除。
+          ignoreRemove: (userId) => {
+            const id = String(userId ?? '');
+            const previous = ignoreStore.users?.[id] ?? null;
+            if (!previous || !unignore(ignoreStore, id)) return false;
+            if (!saveIgnores()) {
+              ignoreStore.users[id] = previous;
+              throw new Error('不理名單存檔失敗');
+            }
+            log(`控制台解除不理 user=${id}`);
+            return true;
           },
           triggers: () => {
             const users = triggerUserList(triggerStore).map((entry) => {

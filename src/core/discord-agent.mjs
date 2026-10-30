@@ -313,8 +313,12 @@ export function createAgentSender({
   }
 
   async function react({ token, message, emoji }) {
-    const { key } = await resolve(token);
-    await withQuota(key, 'react', '按 reaction', () => deliverReaction(key, { message, emoji }));
+    const { sessionId, key } = await resolve(token);
+    await withQuota(key, 'react', '按 reaction', async () => {
+      // 排隊期間可能被 /reset：反應也不能送到舊會話。
+      if (!alive(key, sessionId)) throw statusError('這個會話已經結束，不送出', 403);
+      return deliverReaction(key, { message, emoji });
+    });
     return { key };
   }
 
