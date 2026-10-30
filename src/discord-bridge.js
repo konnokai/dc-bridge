@@ -43,7 +43,7 @@ import {
   stripBotMention,
   isSkippedMessage,
 } from './core/discord-core.mjs';
-import { formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
+import { OPENING_HINT, formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
@@ -3024,7 +3024,9 @@ async function main() {
     const sendHint = '【發送】要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。token 由系統自動帶入，不要自己填。不呼叫就是這次不說話；直接輸出文字不會送出。';
     // 換 system prompt 後的第一次發言：先把上一段對話的記憶放在最前面。
     const reload = peekReloadSummary(reloadStore, key);
-    const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}\n${sendHint}`;
+    // 新會話的第一批：模型剛重置、還沒有自己的發言紀錄，容易只按 reaction 不說話。
+    const opening = primedKeys.has(key) ? '' : `\n${OPENING_HINT}`;
+    const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
     queued.push(job.direct);

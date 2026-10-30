@@ -14,6 +14,10 @@ const clean = (value) => String(value ?? '')
 
 const cut = (value, max) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
+// 新會話第一批：模型剛重置、還沒有自己的發言紀錄，常常只按 reaction 不說話。
+// 呼叫端只在會話的第一批加這一行，之後不再重複。
+export const OPENING_HINT = '【開場】這是這個會話的第一批訊息。先照上面的上下文用文字接一句（send_message），短的一句也可以；不要只按 reaction 就當回過了。真的完全沒話說才跳過。';
+
 /**
  * 引用訊息的一行摘要；沒有內容也沒有圖片就回空字串。
  * ref 是被引用那則的 #編號：原文只留 300 字，模型要用 view_message 看全文或看附件時靠它。
