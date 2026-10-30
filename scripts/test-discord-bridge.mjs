@@ -2335,6 +2335,7 @@ console.log('## 9. 控制台');
       usageTurns: (key) => (key === 'ch:1' ? { ok: true, key, turns: [] } : null),
       usageReset: () => { usageWasReset = true; },
       quota: async () => ({ ok: true, windows: [{ key: 'rolling', percent: 3 }] }),
+      codexQuota: async () => ({ ok: true, fiveHour: { remainingPercent: 94 }, weekly: { remainingPercent: 85 } }),
       memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
       notes: () => ({ enabled: true, notes: [{ id: 'n1', text: '週五打球' }] }),
       deleteNote: (id) => id === 'n1',
@@ -2394,6 +2395,10 @@ console.log('## 9. 控制台');
   ok((await fetch(`${base}/api/quota`)).status === 401, '沒有 token 讀不到額度');
   const quotaResponse = await fetch(`${base}/api/quota`, { headers: authed });
   ok(quotaResponse.status === 200 && (await quotaResponse.json()).windows[0].percent === 3, '額度端點回 handler 的結果');
+  ok((await fetch(`${base}/api/codex-usage`)).status === 401, '沒有 token 讀不到 Codex 額度');
+  const codexQuotaResponse = await fetch(`${base}/api/codex-usage`, { headers: authed });
+  ok(codexQuotaResponse.status === 200
+    && (await codexQuotaResponse.json()).fiveHour.remainingPercent === 94, 'Codex 額度端點回 handler 的結果');
   ok((await fetch(`${base}/api/memory`)).status === 401, '沒有 token 讀不到群友記憶');
   const memoryResponse = await fetch(`${base}/api/memory`, { headers: authed });
   ok(memoryResponse.status === 200 && (await memoryResponse.json()).users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');

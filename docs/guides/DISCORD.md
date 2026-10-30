@@ -238,7 +238,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | --- | --- | --- |
 | `/reset` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理員只能重置自己伺服器裡、在白名單上的頻道；私聊只有擁有者能用 |
 | `/reload-system-prompt` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 排進這個頻道的同一條會話佇列，等目前回合結束後用那個 DSH 會話產生一段對話總結，存進 `state/discord-reload-summaries.json`，再重置會話。排隊期間的新訊息會留在 bridge，重載完成後進新會話；總結會放在新會話第一則 prompt 的開頭。**不會重啟 DSH**，新的 preset 要先由 DSH 重新載入 |
-| `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度 |
+| `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度；生圖 preset 開著時再加一行 Codex 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
 | `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**。沒開 Message Content 意圖時不能切換（一定得 @bot） |
@@ -340,6 +340,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批，
     以及觸發對話人數（今天／總計／次數與最常觸發的人）
   - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的已用百分比與重置時間（見「OpenCode Go 額度」）
+  - **Codex 額度**：生圖 preset 有開 `allowImageGen` 時，顯示 5 小時 / 每週剩餘百分比、重置時間與重置券（見「Codex 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
 - **黑話**（`#slang`）：「黑話詞庫」和「頻道風格」兩張卡片分開列。各自可以按狀態（全部／待確認／已確認／已拒絕）過濾，
   每頁 20 筆、可換頁；每筆可確認、拒絕、編輯、刪除。「頻道風格」多一個頻道下拉選單（預設「全部頻道」），
@@ -405,6 +406,24 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - **失敗時**：卡片和 `/status` 會寫原因（沒有 key、HTTP 狀態碼、逾時），不影響聊天。
 
 控制台端點：`GET /api/quota`。
+
+## Codex 額度
+
+生圖的 preset（`dc-chat`）有開 `generate_image`（`dc-tool-restrict.config.allowImageGen: true`）時，
+控制台的「Codex 額度」卡片和 `/status` 會顯示 5 小時與每週剩餘百分比、重置時間、重置券張數。
+沒有開生圖的 preset 不查額度，也不排重置 ping；沒有另外的 `config.json` 開關。
+
+- **資料來源**：`codex app-server` 的 `account/rateLimits/read`。app-server 會自己刷新 Codex 的登入 token，
+  橋接不讀 `~/.codex/auth.json`，也不跟 Codex CLI 搶刷新。
+- **快取 5 分鐘**：控制台每 5 秒刷新，但 5 分鐘內只會真的開一次 app-server；查詢失敗快取 60 秒。
+- **5 小時窗口**：OpenAI 的規則是「前一窗口結束後的第一則訊息」才開始新窗口。橋接在
+  `primary.resetsAt + 30 秒` 送一則 `codex exec` 的 `test`（模型 `gpt-6-luna`、low reasoning、
+  ephemeral、關掉 shell／檔案工具）把新窗口打開。只寫 log，不發 Discord。
+- **重啟與失敗**：狀態存 `state/discord-codex-reset.json`，同一個重置時間不會重送；失敗 15 分鐘後再試。
+  每週額度已滿時跳過，等每週恢復後再處理。
+- **失敗時**：卡片和 `/status` 會寫原因（app-server 起不來、逾時、Codex 回錯誤），不影響聊天。
+
+控制台端點：`GET /api/codex-usage`。
 
 ## 表情目錄
 

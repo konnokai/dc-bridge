@@ -135,6 +135,7 @@ import { createAgentSender, createMessageRefs, startAgentApi } from './core/disc
 import { createBatcher, createTurnGate, defang, formatBatch, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
+import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
@@ -149,6 +150,7 @@ const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
+const CODEX_RESET_FILE = path.join(STATE_DIR, 'discord-codex-reset.json');
 const EMOJI_USAGE_FILE = path.join(STATE_DIR, 'discord-emoji-usage.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
@@ -537,6 +539,19 @@ async function main() {
     if (cfg.dsh.provider !== 'opencode-go') return { ok: false, skipped: true, error: `provider 是 ${cfg.dsh.provider}，不是 opencode-go` };
     return goQuota.get();
   }
+
+  // 生圖開關在 preset 的 dc-tool-restrict.config.allowImageGen；沒有開生圖就不查
+  // Codex 額度，也不排 5 小時窗口的重置 ping。
+  const codexImageGenEnabled = presetAllowsImageGen({ root: ROOT, presetId: cfg.discord.agentPreset });
+  const codexQuota = codexImageGenEnabled ? createCodexQuota() : null;
+  async function codexQuotaInfo() {
+    if (!codexQuota) return { ok: false, skipped: true };
+    return codexQuota.get();
+  }
+  const codexResetPinger = codexQuota
+    ? createCodexResetPinger({ quota: codexQuota, stateFile: CODEX_RESET_FILE, log })
+    : null;
+  if (!codexImageGenEnabled) log('Codex 額度：preset 沒有開 generate_image，跳過');
 
   function saveSlangNow() {
     try {
@@ -3799,8 +3814,13 @@ async function main() {
       return;
     }
     if (interaction.commandName === 'status') {
-      const quota = formatGoQuota(await quotaInfo());
-      await interaction.editReply(`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${interaction.guildId ? '頻道' : '私聊'}${quota ? `\n${quota}` : ''}`);
+      const [goUsage, codexUsage] = await Promise.all([quotaInfo(), codexQuotaInfo()]);
+      const lines = [`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${interaction.guildId ? '頻道' : '私聊'}`];
+      const goLine = formatGoQuota(goUsage);
+      if (goLine) lines.push(goLine);
+      const codexLine = formatCodexQuota(codexUsage);
+      if (codexLine) lines.push(codexLine);
+      await interaction.editReply(lines.join('\n'));
       return;
     }
     if (interaction.commandName === 'mention') {
@@ -3903,6 +3923,7 @@ async function main() {
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
   scheduleSummaryCheck();
   scheduleFollowupCheck();
+  codexResetPinger?.start();
 
   // ── 控制台 ───────────────────────────────────────────────────────────────
   /** 邀請連結：slash `/invite` 與控制台共用同一份權限清單。 */
@@ -4072,6 +4093,7 @@ async function main() {
           invite: inviteInfo,
           usage: usageInfo,
           quota: quotaInfo,
+          codexQuota: codexQuotaInfo,
           memory: () => ({
             enabled: cfg.discord.memory.enabled,
             users: memoryOverview(memoryStore),
@@ -4167,6 +4189,7 @@ async function main() {
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
+    codexResetPinger?.stop();
     clearAllTtftTimers();
     if (summaryTimer) clearTimeout(summaryTimer);
     try { await agentApiHandle?.close(); } catch { /* 已經關了 */ }

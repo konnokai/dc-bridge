@@ -163,7 +163,7 @@ export function createGoQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeo
   };
 }
 
-function untilText(ms) {
+export function untilText(ms) {
   const minutes = Math.max(0, Math.round(ms / 60_000));
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);

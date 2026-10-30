@@ -134,6 +134,11 @@
     <h2>OpenCode Go 額度 <span id="quota-note" class="muted"></span></h2>
     <div id="quota"></div>
   </section>
+
+  <section class="card" id="codex-quota-card">
+    <h2>Codex 額度 <span id="codex-quota-note" class="muted"></span></h2>
+    <div id="codex-quota"></div>
+  </section>
   </div>
 
   <div class="tab-panel" role="tabpanel" id="tab-usage" aria-labelledby="tabbtn-usage" hidden>
@@ -695,6 +700,39 @@
     }));
   }
 
+  // ── Codex 額度 ───────────────────────────────────────────────────────────
+  // 生圖的 preset 有開 allowImageGen 時才會出現；資料來自 Codex app-server。
+  function codexQuotaRow(label, window) {
+    const percent = Math.max(0, Math.min(100, Math.round(window.remainingPercent)));
+    const level = percent <= 10 ? ' bad' : percent <= 30 ? ' warn' : '';
+    const remaining = window.resetsAt ? window.resetsAt - Date.now() : null;
+    const reset = remaining === null ? '' : remaining > 0 ? untilText(remaining) + '後重置' : '已重置';
+    return el('div', { className: 'quota-row' },
+      el('span', { className: 'muted' }, label),
+      el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(percent), ariaLabel: label + '剩餘額度' },
+        el('div', { className: 'bar-fill' + level, style: 'width:' + percent + '%' })),
+      el('span', { className: 'num' }, percent + '%' + (reset ? '｜' + reset : '')),
+    );
+  }
+
+  function renderCodexQuota(q) {
+    $('codex-quota-card').hidden = !!q?.skipped;
+    if (q?.skipped) return;
+    if (!q?.ok) {
+      $('codex-quota-note').textContent = '';
+      $('codex-quota').replaceChildren(el('div', { className: 'msg err' }, '查不到：' + (q?.error ?? '未知原因')));
+      return;
+    }
+    const notes = ['5 分鐘更新一次'];
+    if (q.resetCredits?.availableCount > 0) notes.push('重置券 ' + q.resetCredits.availableCount + ' 張');
+    if (q.credits?.hasCredits && Number(q.credits.balance) > 0) notes.push('credits ' + q.credits.balance);
+    $('codex-quota-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，' + notes.join('，') + '）';
+    const rows = [];
+    if (q.fiveHour) rows.push(codexQuotaRow('5 小時', q.fiveHour));
+    if (q.weekly) rows.push(codexQuotaRow('每週', q.weekly));
+    $('codex-quota').replaceChildren(...rows);
+  }
+
   async function refreshUsage() {
     try {
       renderUsage(await api('/api/usage?range=' + encodeURIComponent(usageRange)));
@@ -962,7 +1000,7 @@
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
-      api('/api/notes'),
+      api('/api/notes'), api('/api/codex-usage'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -975,6 +1013,7 @@
     if (results[7].status === 'fulfilled') renderMemory(results[7].value);
     if (results[8].status === 'fulfilled' && results[8].value) renderTriggers(results[8].value);
     if (results[9].status === 'fulfilled') renderNotes(results[9].value);
+    if (results[10].status === 'fulfilled') renderCodexQuota(results[10].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {

@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, memory, notes, deleteNote, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, notes, deleteNote, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -161,6 +161,10 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
       }
       if (req.method === 'GET' && url.pathname === '/api/quota') {
         sendJson(res, 200, await handlers.quota());
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/codex-usage') {
+        sendJson(res, 200, await handlers.codexQuota());
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/usage/reset') {
