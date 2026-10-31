@@ -2,7 +2,7 @@
 //
 // 兩層，跟 QQ 版一致：
 //   1. 共用正則（src/sensitive.js）：抓「長得像本機路徑 / 憑證賦值」的文本；
-//   2. 已知令牌精確比對：Discord token、DSH launch token、控制台 token。
+//   2. 已知令牌精確比對：Discord token、DSH launch token、控制台 token、GIPHY API key。
 // 這裡只負責判斷，不負責改寫；呼叫端決定要整條攔掉還是打碼。
 import { SENSITIVE_RE } from '../sensitive.js';
 

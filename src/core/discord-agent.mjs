@@ -32,6 +32,9 @@ export const DELETE_PER_TURN_LIMIT = 2;
 /** read_history + search_history 一輪合計最多 3 次：每次都可能掃幾百則，連翻會卡住同一個頻道。 */
 export const HISTORY_PER_TURN_LIMIT = 3;
 
+/** GIPHY 免費 key 每小時只有 100 次：一輪最多查 3 次，模型亂試也不會把額度燒光。 */
+export const GIF_PER_TURN_LIMIT = 3;
+
 /** 每個頻道記住最近幾則「模型自己用工具送出的」訊息；改和收回只認這些。 */
 const OWNED_PER_KEY = 200;
 
@@ -138,10 +141,10 @@ export function createAgentSender({
   const muted = new Map(); // key -> 後台提問的 token：只有持有者能解除，避免舊收尾解掉新提問
   const chains = new Map(); // key -> 串行化（同一輪的多個 tool call 不搶順序）
   const sentCounts = new Map(); // key -> 這一輪已經送出幾則
-  const usedCounts = new Map(); // key -> { react, unreact, remove, history }：這一輪各用了幾次
+  const usedCounts = new Map(); // key -> { react, unreact, remove, history, gif }：這一輪各用了幾次
   const attempted = new Set(); // key -> 這一輪有沒有試過呼叫發送工具
   const owned = new Map(); // key -> Set(訊息 id)：模型自己用工具送出的，插入順序就是新舊順序
-  const usedLimits = { react: reactLimit, unreact: unreactLimit, remove: DELETE_PER_TURN_LIMIT, history: HISTORY_PER_TURN_LIMIT };
+  const usedLimits = { react: reactLimit, unreact: unreactLimit, remove: DELETE_PER_TURN_LIMIT, history: HISTORY_PER_TURN_LIMIT, gif: GIF_PER_TURN_LIMIT };
 
   function tokenFor(sessionId) {
     let value = tokens.get(sessionId);
@@ -246,16 +249,16 @@ export function createAgentSender({
     return null;
   }
 
-  /** 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗就退回名額。 */
-  async function withQuota(key, kind, label, action) {
-    const counts = usedCounts.get(key) ?? { react: 0, unreact: 0, remove: 0, history: 0 };
+  /** 先佔名額再 await：並行呼叫才不會一起鑽過上限。失敗預設退回名額（參數錯、Discord 出錯）。 */
+  async function withQuota(key, kind, label, action, { refund = true } = {}) {
+    const counts = usedCounts.get(key) ?? { react: 0, unreact: 0, remove: 0, history: 0, gif: 0 };
     usedCounts.set(key, counts);
     if (counts[kind] >= usedLimits[kind]) throw statusError(`這一輪已經${label} ${usedLimits[kind]} 次，不能再${label}`, 429);
     counts[kind] += 1;
     try {
       return await action();
     } catch (error) {
-      counts[kind] -= 1;
+      if (refund) counts[kind] -= 1;
       throw error;
     }
   }
@@ -334,6 +337,17 @@ export function createAgentSender({
     return withQuota(resolved.key, 'history', '翻歷史紀錄', () => scan(resolved));
   }
 
+  /**
+   * search_gifs 的門：同一輪最多 3 次。
+   * 上游失敗（429、逾時、GIPHY 故障）不退名額：那正是要模型停下來的時候，
+   * 退還只會讓它一直重打 GIPHY。參數錯在 bridge 就先擋掉了，不會走到這裡。
+   */
+  async function gif(token, search) {
+    const { key } = await resolve(token);
+    const gifs = await withQuota(key, 'gif', '找 GIF', search, { refund: false });
+    return { key, gifs };
+  }
+
   const clearKey = (key) => { sentCounts.delete(key); usedCounts.delete(key); attempted.delete(key); };
 
   return {
@@ -352,6 +366,7 @@ export function createAgentSender({
     react,
     unreact,
     history,
+    gif,
     ownedKey,
     /** /reset：令牌作廢。排隊中的發送由 alive() 擋掉。 */
     forget: (sessionId) => { tokens.delete(sessionId); },

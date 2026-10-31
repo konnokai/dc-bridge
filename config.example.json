@@ -372,6 +372,10 @@
       "normalizeTimeoutMs": 25000
     }
   },
+  "giphy": {
+    "apiKey": "",
+    "rating": "pg"
+  },
   "webSearch": {
     "provider": "auto",
     "apiKey": "",

@@ -261,6 +261,17 @@ tool(
 );
 
 tool(
+  'search_gifs',
+  '用關鍵字查 GIF（GIPHY），回幾個候選（標題＋媒體網址）。想用 GIF 接話、貼反應圖時用：挑一個最貼的，再用 send_message 把那一則的網址原樣送出（可以順便帶一句話）。一次只送一個，不要連清單一起貼、不要改網址；一輪最多查 3 次。',
+  {
+    token: sessionToken,
+    query: z.string().max(50).describe('想找的內容或情緒，短一點，英文通常比較準，例如「shocked cat」「笑死」'),
+  },
+  '/gif',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
   'read_history',
   '讀這個頻道的訊息：預設從最新往前讀；知道是哪一天就給 date，從那個時間往後讀。只能讀目前這個頻道；date 和 before 只能給一個。和 search_history 合計一輪最多 3 次。',
   {

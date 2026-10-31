@@ -26,6 +26,7 @@ export const INVITE_SCOPES = Object.freeze(['bot', 'applications.commands']);
 export const INVITE_PERMISSIONS = Object.freeze([
   { key: 'ViewChannel', label: '查看頻道', bit: 1n << 10n },
   { key: 'SendMessages', label: '傳送訊息', bit: 1n << 11n },
+  { key: 'EmbedLinks', label: '嵌入連結', bit: 1n << 14n },
   { key: 'SendMessagesInThreads', label: '在討論串傳送訊息', bit: 1n << 38n },
   { key: 'ReadMessageHistory', label: '讀取訊息歷史', bit: 1n << 16n },
   { key: 'AddReactions', label: '新增反應', bit: 1n << 6n },
@@ -426,6 +427,7 @@ const PROGRESS_LABELS = {
   'mcp__discord__conversation_stats': ['📊 查對話次數'],
   'mcp__discord__search_emojis': ['😀 找表情'],
   'mcp__discord__search_stickers': ['🖼️ 找貼圖'],
+  'mcp__discord__search_gifs': ['🎞️ 找 GIF', (args) => args.query],
   'mcp__discord__remember_user': ['📝 記下群友的事'],
   'mcp__discord__forget_user_fact': ['🗑️ 刪掉一條記憶'],
   'mcp__discord__note_event': ['📝 記下頻道事件'],

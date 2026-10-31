@@ -70,6 +70,7 @@ const DISCORD_TOOLS = [
   'mcp__discord__create_poll',
   'mcp__discord__search_emojis',
   'mcp__discord__search_stickers',
+  'mcp__discord__search_gifs',
   'mcp__discord__read_history',
   'mcp__discord__search_history',
   'mcp__discord__view_message',

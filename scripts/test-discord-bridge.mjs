@@ -56,6 +56,7 @@ import {
   stickerLabel,
   viewMediaItems,
 } from '../src/core/discord-media.mjs';
+import { searchGifs } from '../src/core/discord-gif.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { fetchStreamUrl, parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
@@ -87,6 +88,7 @@ import {
   SEND_PER_TURN_LIMIT,
   DELETE_PER_TURN_LIMIT,
   HISTORY_PER_TURN_LIMIT,
+  GIF_PER_TURN_LIMIT,
   createAgentSender,
   createMessageRefs,
   messageRefOf,
@@ -115,7 +117,7 @@ const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
   'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
-  'search_emojis', 'search_stickers', 'read_history', 'search_history', 'view_message',
+  'search_emojis', 'search_stickers', 'search_gifs', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note',
 ].map((name) => `mcp__discord__${name}`);
@@ -190,6 +192,7 @@ console.log('## 1. 設定收斂');
       ok(describeToolCall(name, '{}') === null, `${name} 不列進度（本身就看得到）`);
     }
     ok(call('mcp__discord__search_history', { query: '期末考' }) === '🔎 搜尋聊天紀錄：期末考', '搜尋聊天紀錄顯示關鍵字');
+    ok(call('mcp__discord__search_gifs', { query: 'shocked cat' }) === '🎞️ 找 GIF：shocked cat', '找 GIF 顯示關鍵字');
     ok(call('generate_image', {}) === '🎨 畫圖', '生圖在進度訊息裡顯示畫圖');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
     const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup']);
@@ -480,6 +483,7 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(/Discord/.test(persona), 'persona 是 Discord 版，不是 QQ 版');
   ok(!/qq_send|mcp__snowluma/.test(persona), 'persona 不引用 QQ 工具');
   ok(/generate_image/.test(persona) && /send_image/.test(persona), 'persona 教模型用 generate_image 畫圖、send_image 送圖');
+  ok(/search_gifs/.test(persona) && /網址原樣送出/.test(persona), 'persona 教模型用 search_gifs 找 GIF，挑一個再送');
   ok(/inputImage` 填 `"self"/.test(persona), 'persona 教模型畫自己時帶入設定圖');
   ok(/glm.*gpt.*qwen/.test(persona), 'persona 列出其他角色代號');
   ok(/self,claude/.test(persona), 'persona 教模型多個角色用逗號帶多張設定圖');
@@ -1375,7 +1379,7 @@ console.log('## 7b. 邀請連結');
   ok(params.get('client_id') === USER, '帶正確的 client_id');
   ok(params.get('scope') === 'bot applications.commands', 'scope 含 bot 與 applications.commands');
   ok(params.get('permissions') === invitePermissionsBitfield().toString(), 'permissions 與權限清單一致');
-  ok(invitePermissionsBitfield().toString() === '563224831691840', '目前功能權限總和固定（563224831691840）');
+  ok(invitePermissionsBitfield().toString() === '563224831708224', '目前功能權限總和固定（563224831708224）');
 
   for (const permission of INVITE_PERMISSIONS) {
     ok(BigInt(PermissionFlagsBits[permission.key]) === permission.bit,
@@ -1386,6 +1390,7 @@ console.log('## 7b. 邀請連結');
   ok(keys.includes('SendMessagesInThreads'), '包含討論串傳送訊息');
   ok(keys.includes('SendPolls'), '包含建立投票（create_poll）');
   ok(keys.includes('AttachFiles'), '包含附加檔案（send_image）');
+  ok(keys.includes('EmbedLinks'), '包含嵌入連結（search_gifs 貼的 GIF 網址才會有圖）');
   ok(!keys.includes('Administrator') && !keys.includes('ManageGuild'),
     '不要求 Administrator / ManageGuild');
   ok(INVITE_SCOPES.join(' ') === 'bot applications.commands', 'scope 清單固定');
@@ -2003,6 +2008,28 @@ console.log('## 7d2a. 改、收回、投票、搜尋（只動自己送的）');
   ok(searches.find((r) => r.status === 'fulfilled')?.value === 'ch:100', '搜尋拿到令牌自己的頻道');
   sender.startTurn('ch:100');
   ok(await sender.history(tokenA, scanKey) === 'ch:100', '新的一輪歷史查詢次數歸零');
+
+  sender.startTurn('ch:100');
+  const gifCalls = await Promise.allSettled(
+    Array.from({ length: GIF_PER_TURN_LIMIT + 1 }, () => sender.gif(tokenA, async () => ['gif'])),
+  );
+  ok(gifCalls.filter((r) => r.status === 'fulfilled').length === GIF_PER_TURN_LIMIT,
+    `一輪最多找 GIF ${GIF_PER_TURN_LIMIT} 次`);
+  ok(gifCalls.find((r) => r.status === 'fulfilled')?.value?.key === 'ch:100', 'GIF 搜尋拿到令牌自己的頻道');
+  await rejects(sender.gif('bad', async () => ['gif']), /令牌/, '沒有有效令牌不能找 GIF');
+  sender.startTurn('ch:100');
+  ok((await sender.gif(tokenA, async () => ['gif'])).gifs[0] === 'gif', '新的一輪 GIF 次數歸零');
+
+  sender.startTurn('ch:100');
+  let gifAttempts = 0;
+  const gifFailures = await Promise.allSettled(
+    Array.from({ length: GIF_PER_TURN_LIMIT + 1 }, () => sender.gif(tokenA, async () => {
+      gifAttempts += 1;
+      throw Object.assign(new Error('GIPHY 429'), { statusCode: 429, giphyRateLimited: true });
+    })),
+  );
+  ok(gifAttempts === GIF_PER_TURN_LIMIT && /找 GIF/.test(String(gifFailures.at(-1)?.reason?.message ?? '')),
+    'GIPHY 失敗不退還名額：第 4 次直接擋掉，不再打 GIPHY');
 }
 
 console.log('## 7d2b. 訊息編號（#ref）');
@@ -2628,6 +2655,7 @@ console.log('## 7e. Discord MCP 發送工具');
       schedule_followup: ['/followup', { minutes: 30, note: '回來看結果' }],
       search_emojis: ['/emojis', { query: '笑' }],
       search_stickers: ['/stickers', { query: '貓' }],
+      search_gifs: ['/gif', { query: 'shocked cat' }],
       read_history: ['/history', { limit: 5 }],
       user_info: ['/user', { message: '#k7f3ab' }],
       server_info: ['/server', {}],
@@ -2756,6 +2784,57 @@ console.log('## 7f. 黑話 MCP');
     server.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+console.log('## 7g. GIPHY 搜尋');
+{
+  const payload = (data, meta = { status: 200, response_id: 'rid' }) => ({ ok: true, status: 200, json: async () => ({ data, meta }) });
+  const gifs = await searchGifs({
+    apiKey: 'k',
+    query: 'shocked cat',
+    fetchImpl: async (url) => {
+      const params = new URL(url).searchParams;
+      ok(String(url).startsWith('https://api.giphy.com/v1/gifs/search?')
+        && params.get('api_key') === 'k' && params.get('q') === 'shocked cat'
+        && params.get('rating') === 'pg' && params.get('limit') === '5',
+        '打 GIPHY 搜尋端點，帶 api_key／query／rating／limit');
+      return payload([
+        { title: 'shocked cat', images: { downsized: { url: 'https://media.giphy.com/media/a/giphy-downsized.gif' }, original: { url: 'https://media.giphy.com/media/a/giphy.gif' } } },
+        { title: 'fallback', images: { original: { url: 'https://media1.giphy.com/media/b/giphy.gif' } } },
+        { title: 'evil', images: { downsized: { url: 'https://evil.example.com/c.gif' } } },
+        { title: 'http', images: { downsized: { url: 'http://media.giphy.com/media/d/giphy.gif' } } },
+        { title: '', alt_text: 'alt text', images: { downsized: { url: 'https://media2.giphy.com/media/e/giphy-downsized.gif' } } },
+        { title: 'fixed height only', images: { fixed_height: { url: 'https://media3.giphy.com/media/f/200.gif' } } },
+      ]);
+    },
+  });
+  ok(gifs.length === 4, `只留 giphy.com 的 https 網址（${gifs.length}/6）`);
+  ok(gifs[0].title === 'shocked cat' && gifs[0].gif.endsWith('giphy-downsized.gif'), '優先 downsized，標題照 API 回傳');
+  ok(gifs[1].gif.includes('media1.giphy.com'), '沒有 downsized 才用 original');
+  ok(gifs[2].title === 'alt text', 'title 空的改用 alt_text');
+  ok(gifs[3].gif.endsWith('/200.gif'), '只剩 fixed_height 也能用');
+
+  const noKey = await searchGifs({ query: 'cat', fetchImpl: async () => { throw new Error('不該打 GIPHY'); } })
+    .then(() => null, (error) => error);
+  ok(noKey?.statusCode === 503 && /giphy\.apiKey/.test(noKey.message), '沒有 API key 就明確報錯，不打 GIPHY');
+
+  const limited = await searchGifs({
+    apiKey: 'k',
+    query: 'cat',
+    fetchImpl: async () => ({ ok: false, status: 429, json: async () => ({ message: 'API rate limit exceeded' }) }),
+  }).then(() => null, (error) => error);
+  ok(limited?.statusCode === 429 && limited.giphyRateLimited === true && /100/.test(limited.message),
+    'GIPHY 429 轉成看得懂的額度訊息，並標記給 bridge 冷卻');
+
+  const broken = await searchGifs({
+    apiKey: 'k',
+    query: 'cat',
+    fetchImpl: async () => payload([], { status: 200, response_id: '' }),
+  }).then(() => null, (error) => error);
+  ok(/故障/.test(broken?.message ?? ''), '合成回應（200 但 response_id 空）當成故障');
+
+  const empty = await searchGifs({ apiKey: 'k', query: 'cat', fetchImpl: async () => payload([]) });
+  ok(empty.length === 0, '真的沒有結果回空陣列');
 }
 
 console.log('## 8. 附件（圖片與影片）');

@@ -175,6 +175,21 @@ pm2 logs dc-bridge
 
 SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，否則只會回 HTML（工具會明確報錯）。
 
+GIF 走 GIPHY，設定在 `config.json` 最外層的 `giphy` 段：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `giphy.apiKey` | GIPHY API key。留空時讀環境變數 `GIPHY_API_KEY`；兩邊都沒有時 `search_gifs` 直接回錯誤 |
+| `giphy.rating` | 內容分級：`g` / `pg` / `pg-13` / `r`，預設 `pg` |
+
+GIPHY 免費（beta）key 每小時 100 次 API 呼叫、`q` 最長 50 字、`limit` 最多 50；
+`search_gifs` 一輪最多查 3 次，超過回 429。真的被 GIPHY 限流時也回 429，而且接下來 15 分鐘
+直接擋掉、不再打 GIPHY（失敗不退回這一輪的名額，避免模型一直重試）。
+GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API 回應或媒體、
+不改寫 API 回傳的網址、不代理媒體下載（讓 Discord 直接載 GIPHY 的網址）、
+不和別家 GIF 來源混在一起；API 回傳的順序不改，只丟掉網址不是 `giphy.com` https 的項目。
+目前只在 bot 簡介放 `Powered by GIPHY` 文字，logo 還沒放（公開或申請 production key 前要補）。
+
 ## 用法
 
 - **私聊**：直接把 bot 加好友，訊息全部處理（使用者要在 `allow.users` 裡，或白名單全空且
@@ -353,11 +368,12 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | 使用外部表情 | 送其他伺服器的自訂表情 |
 | 建立投票 | `create_poll` |
 | 附加檔案 | `send_image` 把生圖上傳到頻道 |
+| 嵌入連結 | `search_gifs` 的 GIF 網址要展開才有圖 |
 
 - scope 是 `bot applications.commands`。**`applications.commands` 不能省**，少了它 slash command 不會註冊。
-- bitfield 是 `563224831691840`；不含 Administrator、Manage Guild、Manage Messages。
-- 2026-10-27 加了「建立投票」，2026-10-30 加了「附加檔案」。之前邀請的 bot 沒有重開連結也通常能發投票（@everyone 預設有這個權限），
-  但「附加檔案」不一定有；舊 bot 要重開一次 `/invite` 連結，或由管理員手動給權限。
+- bitfield 是 `563224831708224`；不含 Administrator、Manage Guild、Manage Messages。
+- 2026-10-27 加了「建立投票」，2026-10-30 加了「附加檔案」，2026-10-31 加了「嵌入連結」。之前邀請的 bot 沒有重開連結也通常能發投票（@everyone 預設有這個權限），
+  但「附加檔案」不一定有；舊 bot 要重開一次 `/invite` 連結，或由管理員手動給權限。沒有「嵌入連結」時 GIF 只會是一串網址。
 - 已經在伺服器裡的 bot 再開一次連結，Discord 會用新權限更新它的身分組，不會重複邀請。
 - 頻道層級的權限覆蓋仍可能擋掉；邀請連結只給伺服器層級。
 
@@ -511,7 +527,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
 就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
-用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `563224831691840`）。
+用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `563224831708224`）。
 貼圖（guild sticker）才是綁伺服器的：`send_sticker` 只送當前伺服器的貼圖，私聊與別服的送不了。
 
 ### 表情反應（reaction）
@@ -752,7 +768,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
 
-模型能用的工具就是下面這些（2026-10-30 以 `src/mcp-discord.js` 與 preset 現況為準）。
+模型能用的工具就是下面這些（2026-10-31 以 `src/mcp-discord.js` 與 preset 現況為準）。
 `dc-chat` 的 `dc-tool-restrict` 會藏掉 DSH 其他內建工具（讀寫檔、shell 等）。
 `mcp__discord__*` 與 `mcp__slang__*` 的 `token` 由 DSH 外掛 `dc-session-token` 自動帶入
 （模型看不到令牌，也不用填）；下面只列其他參數：
@@ -814,6 +830,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   bridge 重啟就清掉
 - `mcp__discord__search_emojis`（`query` 可省略）：查可用的自訂表情（見「表情目錄」）
 - `mcp__discord__search_stickers`（`query` 可省略）：查當前伺服器的貼圖（`send_sticker` 用的名稱）
+- `mcp__discord__search_gifs`（`query`）：用關鍵字查 GIF（GIPHY），回 5 個候選（標題＋媒體網址）。
+  挑一個，用 `send_message` 把那一則的網址原樣送出；不要連清單一起貼、不要改網址。一輪最多 3 次；
+  沒設定 `giphy.apiKey`、GIPHY 限流或服務故障時回錯誤（見「設定」的 `giphy` 段）
 - `mcp__discord__read_history`（`before`、`date`、`limit` 都可省略）：讀這個頻道的訊息，預設 20 則、最多 50 則、總長 6000 字。
   沒給時間就從最新往前讀；`before` 從那則往前；`date`（`YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`）從那個時間往後讀，兩個不能一起給。
   未來的時間回「還沒有訊息」；和 `search_history` 合計一輪最多 3 次
@@ -893,7 +912,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
 `POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
-`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
@@ -1018,7 +1037,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 24 個，唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 25 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。
