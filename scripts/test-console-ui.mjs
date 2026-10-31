@@ -665,6 +665,83 @@ try {
     }
   });
 
+  if (!original) await test('Discord 控制台：黑話與頻道標籤可搜尋', async () => {
+    let entries = [
+      { id: 's1', kind: 'slang', term: '大肥魚', meaning: '群內 AI 的暱稱', usage: '呼叫 AI 時用', status: 'confirmed', seen: 1 },
+      { id: 's2', kind: 'slang', term: '破防', meaning: '心態崩了', usage: '自嘲時', status: 'rejected', seen: 2 },
+      { id: 's3', kind: 'slang', term: '脆', meaning: 'Threads 平台', usage: '提到討論時', status: 'confirmed', seen: 3 },
+      { id: 't1', kind: 'style', channelId: 'c1', channelName: '閒聊', term: '短句', meaning: '大家隨意聊', status: 'confirmed', seen: 1 },
+      { id: 't2', kind: 'style', channelId: 'c2', channelName: 'general', guildName: '伺服器甲', term: '正式', meaning: '語氣正式', status: 'candidate', seen: 2 },
+    ];
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries, learning: { enabled: true } }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    try {
+      const dcErrors = [];
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      p.on('pageerror', error => dcErrors.push(error.message));
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#slang`);
+      await p.waitForFunction(() => document.querySelectorAll('#slang-rows tr').length === 3);
+      const terms = () => p.locator('#slang-rows tr td:first-child').allTextContents();
+      const tags = () => p.locator('#style-rows tr td:nth-child(2)').allTextContents();
+
+      await p.fill('#slang-search', '心態');
+      assert.deepEqual(await terms(), ['破防'], '搜得到意思');
+      assert.equal(await p.locator('#slang-filter button[data-status="all"]').textContent(), '全部 1', '狀態計數只算搜尋結果');
+      await p.fill('#slang-search', '呼叫');
+      assert.deepEqual(await terms(), ['大肥魚'], '搜得到用法');
+      await p.fill('#slang-search', 'threads');
+      assert.deepEqual(await terms(), ['脆'], '不分大小寫');
+
+      await p.fill('#style-search', 'general');
+      assert.deepEqual(await tags(), ['正式'], '頻道標籤搜得到頻道名');
+      assert.equal(await p.locator('#slang-rows tr').count(), 1, '兩張卡片的搜尋互不影響');
+      await p.fill('#style-search', '甲');
+      assert.deepEqual(await tags(), ['正式'], '頻道標籤搜得到伺服器名');
+      await p.fill('#style-search', '隨意');
+      assert.deepEqual(await tags(), ['短句'], '頻道標籤搜得到描述');
+      await p.fill('#style-search', '正式');
+      assert.deepEqual(await tags(), ['正式'], '頻道標籤搜得到標籤本身');
+
+      await p.fill('#slang-search', '不存在');
+      assert.match(await p.locator('#slang-rows').textContent(), /沒有符合的項目/);
+
+      // 先搜一個會命中的字，重新整理後多一筆也命中的詞條，確認搜尋字真的有留下。
+      await p.fill('#slang-search', '心態');
+      entries = [...entries, { id: 's4', kind: 'slang', term: '佛系', meaning: '心態放平', usage: '不想爭時', status: 'candidate', seen: 1 }];
+      await Promise.all([
+        p.waitForResponse(r => new URL(r.url()).pathname === '/api/slang'),
+        p.locator('#refresh').click(),
+      ]);
+      await p.waitForFunction(() => document.querySelectorAll('#slang-rows tr').length === 2);
+      assert.deepEqual(await terms(), ['破防', '佛系'], '重新整理後仍套用搜尋字');
+      assert.equal(await p.locator('#slang-filter button[data-status="all"]').textContent(), '全部 2', '重新整理後計數跟著搜尋結果');
+
+      await p.locator('#slang-filter button[data-status="confirmed"]').click();
+      assert.match(await p.locator('#slang-rows').textContent(), /這個狀態沒有項目/, '有搜尋結果、但被狀態過濾掉');
+      await p.locator('#slang-filter button[data-status="all"]').click();
+      await p.fill('#slang-search', '');
+      assert.equal(await p.locator('#slang-rows tr').count(), 4, '清掉搜尋就回到全部');
+      assert.deepEqual(dcErrors, []);
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('Discord 控制台：黑話／頻道表欄寬與列高固定，操作按鈕不隨內容位移', async () => {
     let entries = [
       { id: 's1', kind: 'slang', term: '短', meaning: '短', usage: '短', status: 'candidate', seen: 1 },

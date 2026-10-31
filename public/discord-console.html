@@ -242,6 +242,7 @@
   <section class="card">
     <h2>黑話詞庫 <span id="slang-count" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
+      <input id="slang-search" type="search" aria-label="搜尋黑話" placeholder="搜尋詞、意思、用法" style="max-width:260px">
       <div class="seg" id="slang-filter"></div>
       <span id="slang-learning" class="muted"></span>
     </div>
@@ -259,6 +260,7 @@
     <h2>頻道風格 <span id="style-count" class="muted"></span></h2>
     <div class="row" style="margin-bottom:10px">
       <select id="style-channel" aria-label="頻道" style="min-width:min(280px,100%);max-width:340px"></select>
+      <input id="style-search" type="search" aria-label="搜尋頻道標籤" placeholder="搜尋頻道、標籤、描述" style="max-width:260px">
       <div class="seg" id="style-filter"></div>
       <span class="muted" style="font-size:12px">跟黑話同一次抽；確認後才會注入那個頻道</span>
     </div>
@@ -823,7 +825,7 @@
 
   const LIST_PAGE_SIZE = 20;
   // 自動重新整理每 5 秒重畫一次，過濾和頁碼放在這裡才不會被重設。
-  const listView = { slang: { status: 'all', page: 1 }, style: { status: 'all', page: 1, channel: 'all' } };
+  const listView = { slang: { status: 'all', page: 1, query: '' }, style: { status: 'all', page: 1, query: '', channel: 'all' } };
   const LIST_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']];
   let triggerData = { users: [] };
   let triggerSearch = '';
@@ -870,10 +872,15 @@
     );
   }
 
-  function renderEntryList(kind, all, { cells, empty }) {
+  function renderEntryList(kind, all, { cells, fields, empty }) {
     const view = listView[kind];
-    const counts = { all: all.length, candidate: 0, confirmed: 0, rejected: 0 };
-    for (const entry of all) if (counts[entry.status] !== undefined) counts[entry.status] += 1;
+    // 搜尋欄位由呼叫端決定；篩選後的筆數才是分頁和狀態計數的基準。
+    const query = view.query.trim().toLowerCase();
+    const matched = query
+      ? all.filter((entry) => fields(entry).some((value) => String(value ?? '').toLowerCase().includes(query)))
+      : all;
+    const counts = { all: matched.length, candidate: 0, confirmed: 0, rejected: 0 };
+    for (const entry of matched) if (counts[entry.status] !== undefined) counts[entry.status] += 1;
     $(kind + '-count').textContent = `（待確認 ${counts.candidate}｜已確認 ${counts.confirmed}｜已拒絕 ${counts.rejected}）`;
     $(kind + '-filter').replaceChildren(...LIST_FILTERS.map(([status, label]) => {
       const button = el('button', { type: 'button', dataset: { list: kind, status }, textContent: `${label} ${counts[status]}` });
@@ -881,13 +888,13 @@
       return button;
     }));
 
-    const shown = view.status === 'all' ? all : all.filter((entry) => entry.status === view.status);
+    const shown = view.status === 'all' ? matched : matched.filter((entry) => entry.status === view.status);
     const pages = Math.max(1, Math.ceil(shown.length / LIST_PAGE_SIZE));
     view.page = Math.min(Math.max(1, view.page), pages);
     const rows = shown.slice((view.page - 1) * LIST_PAGE_SIZE, view.page * LIST_PAGE_SIZE);
     $(kind + '-rows').replaceChildren(...(rows.length
       ? rows.map((entry) => el('tr', {}, ...cells(entry), el('td', {}, entryActions(entry))))
-      : [el('tr', {}, el('td', { colSpan: 6, className: 'muted empty-cell' }, all.length ? '這個狀態沒有項目。' : empty))]));
+      : [el('tr', {}, el('td', { colSpan: 6, className: 'muted empty-cell' }, query && !matched.length ? '沒有符合的項目。' : all.length ? '這個狀態沒有項目。' : empty))]));
     $(kind + '-pager').replaceChildren(...(pages > 1 ? [
       el('button', { type: 'button', className: 'ghost', dataset: { list: kind, page: String(view.page - 1) }, textContent: '上一頁', disabled: view.page <= 1 }),
       el('span', { className: 'muted' }, `第 ${view.page} / ${pages} 頁（${shown.length} 筆）`),
@@ -940,6 +947,7 @@
       : '黑話學習已關閉（config.json 的 discord.slang.enabled）';
     renderEntryList('slang', slangEntries.filter((entry) => entry.kind !== 'style'), {
       empty: '還沒有詞條；在允許的頻道累積 20 則訊息後會自動學。',
+      fields: (entry) => [entry.term, entry.meaning, entry.usage],
       cells: (entry) => [
         el('td', { title: String(entry.term ?? '') }, el('div', { className: 'cell-clamp' }, el('strong', {}, entry.term))),
         el('td', { title: String(entry.meaning ?? '') }, el('div', { className: 'cell-clamp' }, entry.meaning)),
@@ -950,6 +958,8 @@
     });
     renderEntryList('style', renderStyleChannels(slangEntries.filter((entry) => entry.kind === 'style')), {
       empty: '還沒有頻道風格；黑話學習每次抽取時會順便產出。',
+      // 頻道風格沒有「用法」欄位，搜尋改成頻道名、伺服器名、標籤和描述。
+      fields: (entry) => [entry.channelName || entry.channelId, entry.guildName, entry.term, entry.meaning],
       cells: (entry) => {
         const channel = '#' + (entry.channelName || entry.channelId) + (entry.guildName ? ` · ${entry.guildName}` : '');
         return [
@@ -1242,7 +1252,14 @@
   });
 
   for (const kind of ['slang', 'style']) {
+    // 瀏覽器重新載入時可能還原輸入值，以 listView 為準，避免搜尋框有字、列表卻沒過濾。
+    $(kind + '-search').value = listView[kind].query;
     $(kind + '-rows').addEventListener('click', onEntryAction);
+    $(kind + '-search').addEventListener('input', (event) => {
+      listView[kind].query = event.target.value;
+      listView[kind].page = 1;
+      renderSlang({ entries: slangEntries, learning: lastSlangLearning });
+    });
     for (const part of ['-filter', '-pager']) {
       $(kind + part).addEventListener('click', (event) => {
         const button = event.target.closest('button[data-list]');
