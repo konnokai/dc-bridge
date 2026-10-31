@@ -238,7 +238,7 @@ tool(
 
 tool(
   'search_emojis',
-  '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。【常用表情】沒有的、或想找更貼的才查。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
+  '查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。【常用表情】和【本伺服器表情】沒有合適的、或想先看某個表情長怎樣才查；query 給情緒詞（例如「無語」）或表情名稱。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {
     token: sessionToken,
     query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),

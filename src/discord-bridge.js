@@ -89,7 +89,7 @@ import {
   takeReloadSummary,
 } from './core/discord-reload.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { bumpEmojiUsage, buildEmojiHint, formatEmojiLine, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, formatEmojiLine, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -2571,7 +2571,9 @@ async function main() {
     if (event.type === 'compaction/start') showCompactNotice(key);
     if (event.type === 'compaction/end') {
       hideCompactNotice(key);
+      // 壓縮後【常用表情】和索引可能被吃掉；下一批重帶一次。
       if (event.data?.error) log(`壓縮失敗 ${key}：${String(event.data.error).slice(0, 200)}`);
+      else emojiShown.delete(key);
     }
     const usageTokens = event.type === 'assistant/message' ? event.data?.usage?.totalTokens : undefined;
     if (Number.isFinite(usageTokens)) contextTokens.set(frame.sessionId, usageTokens);
@@ -3077,15 +3079,26 @@ async function main() {
       });
     }
 
-    // 常用表情：跨伺服器按使用次數取前 8 個；同會話帶過、沒變就不重帶。
+    // 表情：本伺服器前 8 個＋跨伺服器前 4 個，加上本伺服器其餘表情的情緒索引。
+    // 兩段各自去重（同會話帶過、沒變就不重帶），索引才不會被常用表情的排序拖著每批重送。
     let emojiHint = '';
     if (cfg.discord.emoji.enabled && guild) {
       if (!emojiShown.has(key)) emojiShown.set(key, new Map());
-      emojiHint = onceInSession(emojiShown.get(key), 'emoji', buildEmojiHint(emojiCatalogs, {
+      const shown = emojiShown.get(key);
+      const hintText = buildEmojiHint(emojiCatalogs, {
         guildId: job.guildId,
         usage: emojiUsage,
         maxChars: cfg.discord.emoji.maxChars,
-      }), Date.now(), MEMORY_REFRESH_MS);
+      });
+      const indexText = buildEmojiIndex(emojiCatalogs, {
+        guildId: job.guildId,
+        // 從常用表情的文字反推名字，索引不重複列；格式改了這裡要跟著改。
+        exclude: new Set([...hintText.matchAll(/^- (.+?)：/gm)].map((match) => match[1])),
+      });
+      emojiHint = [
+        onceInSession(shown, 'emoji', hintText, Date.now(), MEMORY_REFRESH_MS),
+        onceInSession(shown, 'emoji-index', indexText, Date.now(), MEMORY_REFRESH_MS),
+      ].filter(Boolean).join('\n');
     }
 
     // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
