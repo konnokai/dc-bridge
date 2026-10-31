@@ -77,7 +77,7 @@ Discord 不 import `src/bridge.js`。
 | `roles/` | 人格卡（QQ 控制台用） | QQ |
 | `assets/` | 圖片等資源；`ai-chan-sheets/` 是 11 個 AI 娘的三視圖與設定圖（畫圖參考，外部作品，授權見該目錄 README） | — |
 | `docs/` | 全部文件，見 [README.md](README.md) | 兩條 |
-| `state/` | 執行時資料（會話映射、筆記、帳本、鎖、`discord-images/` 生圖輸出、`discord-codex-reset.json` 重置 ping 狀態、`discord-codex-quota.json` 生圖額度快照）。`.gitignore` 排除，**不要刪** | 兩條 |
+| `state/` | 執行時資料（會話映射、筆記、帳本、鎖、`discord-images/` 生圖輸出、`discord-image-jobs.json` 生圖工作、`discord-codex-reset.json` 重置 ping 狀態、`discord-codex-quota.json` 生圖額度快照）。`.gitignore` 排除，**不要刪** | 兩條 |
 | `config.json` | 真實設定，不入庫；模板是 `config.example.json` | 兩條 |
 
 ## 四、`scripts/` 命名
