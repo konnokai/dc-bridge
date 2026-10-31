@@ -177,7 +177,7 @@ tool(
 
 tool(
   'add_reaction',
-  '對某則訊息按一個表情反應。比回一句話更輕：同意、好笑、看到了，按一下就好。',
+  '對某則訊息按一個表情反應。用在有人接你的梗、誇你、回你的問題這類跟你有關的訊息；沒在找你的閒聊不用按，跳過就好。',
   {
     token: sessionToken,
     message: messageRef('要按 reaction 的那則訊息'),
