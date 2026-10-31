@@ -29,6 +29,7 @@ import {
   invitePermissionsBitfield,
   isConversationAllowed,
   isDeniedUser,
+  isSilentMessage,
   isTransientDshError,
   loadSessions,
   matchesTerms,
@@ -651,6 +652,7 @@ async function main() {
   let consoleTokenValue = '';
   let agentApiHandle = null;
   const primedKeys = new Set(); // 自由參與：這次啟動後已經帶過頻道上下文的會話
+  const silentPending = new Map(); // key -> 還沒被任何一批上下文帶到的「只當背景」訊息 id
   const needsOpening = new Set(); // key → 新會話的開場提示還沒真的送進模型
   const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
   const quietState = createQuietState(); // key -> 安靜到什麼時候
@@ -907,6 +909,7 @@ async function main() {
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
     primedKeys.delete(key);
+    silentPending.delete(key);
     refusals.forget(key);
     agentSender.forgetKey(key);
     quietState.forget(key);
@@ -1166,6 +1169,10 @@ async function main() {
 
   async function deliverAgentMessage(key, { content, replyTo, sticker, file }) {
     const replyMessage = replyTo ? await fetchByRef(key, replyTo) : null;
+    // 退出、被封鎖或在不理名單的人：他的訊息只能當上下文，不能回覆。
+    if (replyMessage && !canReadMessage(cfg.discord, replyMessage, client.user.id, ignoredUser)) {
+      throw toolError('這則不能回覆：對方已退出、被封鎖或在不理名單', 403);
+    }
     let stickerId = null;
     if (sticker) {
       const wanted = sticker.trim().toLowerCase();
@@ -1228,6 +1235,9 @@ async function main() {
 
   async function deliverReaction(key, { message, emoji }) {
     const target = await fetchByRef(key, message);
+    if (!canReadMessage(cfg.discord, target, client.user.id, ignoredUser)) {
+      throw toolError('不能對這則按表情：對方已退出、被封鎖或在不理名單', 403);
+    }
     const name = String(emoji ?? '').trim().replace(/^:|:$/g, '');
     refreshEmojiCatalogs();
     const custom = substituteEmojiNames(`:${name}:`, { guildId: target.guildId ?? null, catalogs: emojiCatalogs });
@@ -1403,7 +1413,7 @@ async function main() {
    * 記憶工具的共同關卡：令牌、開關、私聊／NSFW、每輪上限、#編號 → 發言者。
    * 有 name 就核對發言者：#編號 指錯人時（例如重啟前的舊編號）不能記到別人身上。
    */
-  async function memoryTarget(body, name = null) {
+  async function memoryTarget(body, name = null, { checkRead = true } = {}) {
     const { key, channel } = await agentSender.resolve(body.token);
     if (!cfg.discord.memory.enabled) throw toolError('群友記憶沒開（config.json 的 discord.memory.enabled）', 403);
     if (!channel.guildId) throw toolError('私聊不記群友記憶', 403);
@@ -1411,6 +1421,9 @@ async function main() {
     if (used >= MEMORY_WRITES_PER_TURN) throw toolError(`一輪最多寫 ${MEMORY_WRITES_PER_TURN} 次記憶，下一輪再記`, 429);
     const ref = textArg(body.message);
     const target = await fetchByRef(key, ref);
+    if (checkRead && !canReadMessage(cfg.discord, target, client.user.id, ignoredUser)) {
+      throw toolError('他的訊息不能記：對方已退出、被封鎖或在不理名單', 403);
+    }
     if (target.author?.bot) throw toolError('不記 bot', 400);
     // REST 抓回來的訊息不一定帶 member，prompt 顯示的是伺服器暱稱，要另外抓。
     const member = target.member ?? await target.guild?.members.fetch(target.author.id).catch(() => null);
@@ -1733,7 +1746,8 @@ async function main() {
         if (replied && !ignoredUser(replied.author?.id)
           && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) {
           repliedMessage = replied;
-          lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
+          const mark = isSilentMessage(cfg.discord, replied, client.user.id) ? '⊘' : '';
+          lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${mark}${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
           // 被回覆的那則本身可能是 embed（例如其他 bot 的圖文），只寫「沒有文字」會讓模型看不到內容。
           lines.push(...embedLines(replied.embeds, replied, '回覆的連結預覽'));
         }
@@ -1927,7 +1941,8 @@ async function main() {
       return { text: `已記住。${flat(name, 40)} 現在記著：${numberFacts(facts)}` };
     },
     async 'forget-fact'(body) {
-      const { key, target } = await memoryTarget(body);
+      // 刪記憶永遠可以做：退出或被封鎖的人想被忘掉，不該因為讀不到他的訊息而刪不掉。
+      const { key, target } = await memoryTarget(body, null, { checkRead: false });
       const facts = forgetFact(memoryStore, { userId: target.author.id, number: body.number });
       if (!facts) throw toolError(`沒有第 ${body.number} 條：用 user_info 看最新的清單`, 404);
       markMemoryDirty();
@@ -2867,6 +2882,7 @@ async function main() {
             author: authorName(referenced),
             content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
             hasImage: referenced.attachments?.size > 0,
+            silent: isSilentMessage(cfg.discord, referenced, client.user.id),
           });
         }
       } catch (error) {
@@ -2889,7 +2905,8 @@ async function main() {
     if (images.length > 0) log(`附加 ${images.length} 張圖 (${key})`);
 
     // 頻道上下文：預設模式每批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶，
-    // 之後每一則都已經進過會話，再帶只是重複燒 token。
+    // 之後每一則都已經進過會話，再帶只是重複燒 token。例外是 /blacklist 退出的人說話後，
+    // 下一批要再帶一次，才不會漏掉他們的訊息（silentPending）。
     let context = '';
     const wantContext = guild && cfg.discord.context.enabled && cfg.discord.context.messages > 0
       && (requireMentionFor(key) || quietAt || !primedKeys.has(key));
@@ -2897,20 +2914,26 @@ async function main() {
       try {
         // 從最後一則往前抓，再扣掉批次自己的訊息：@ 模式下兩則 @ 之間的閒聊也要看得到。
         const batchIds = new Set(job.entries.map((entry) => entry.id));
+        const boundary = job.entries.at(-1).id;
         const fetched = await job.channel.messages.fetch({
           limit: Math.min(100, cfg.discord.context.messages + job.entries.length),
-          before: job.entries.at(-1).id,
+          before: boundary,
         });
         // 有 // 標記的訊息不進上下文，也不收黑話樣本。bot 自己的訊息不套這個規則。
-        // deny 的人一律不進上下文、不收樣本；他 @bot 的那一則已經隨自己的批次送過模型了。
+        // 管理員封鎖與模型不理的人不進上下文；自己退出（deny.self）的人要進來，只是標成 ⊘、不回。
         const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id)
-          && !isDeniedUser(cfg.discord, entry.author?.id)
+          && !cfg.discord.deny.users.includes(String(entry.author?.id ?? ''))
           && !ignoredUser(entry.author?.id)
           && (entry.author?.bot || !isSkippedMessage(entry.content, client.user.id)));
-        // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）。
+        // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）；退出的人不收。
         for (const entry of history) {
-          if (!entry.author?.bot && entry.content) collectSlangSample(entry, resolveMentions(entry.content, entry));
+          if (!entry.author?.bot && entry.content && !cfg.discord.deny.self.includes(String(entry.author.id))) {
+            collectSlangSample(entry, resolveMentions(entry.content, entry));
+          }
         }
+        // 退出的人那則已經落在這次抓的範圍（比批次最後一則舊），算帶到了；還在後面的留給下一批。
+        const pending = silentPending.get(key);
+        if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);
         context = formatRecentContext(
           history.reverse().map((entry) => ({
             ref: messageRefs.register(key, entry.id),
@@ -2919,6 +2942,7 @@ async function main() {
             replyName: repliedName(entry),
             bot: entry.author?.id === client.user.id,
             hasImage: entry.attachments?.size > 0,
+            silent: isSilentMessage(cfg.discord, entry, client.user.id),
           })),
           cfg.discord.context,
         );
@@ -3092,7 +3116,8 @@ async function main() {
       const error = accepted.result?.error;
       throw new Error(`${error?.code ?? '未知錯誤'}${error?.message ? `：${error.message}` : ''}`);
     }
-    primedKeys.add(key);
+    // 還有「只當背景」的訊息沒被上下文涵蓋時不要標記，下一批會再重帶一次。
+    if (!silentPending.has(key)) primedKeys.add(key);
     // DSH 的斜線命令會直接回結果，不經過模型、也不會產生回合。
     const command = accepted.result.value?.command;
     if (command) {
@@ -3753,11 +3778,18 @@ async function main() {
     };
     const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
     const repliedUserId = message.mentions?.repliedUser?.id ?? null;
-    // 自己用 /blacklist 退出的人唯一的活路：@bot 或回覆 bot。管理員封鎖（deny.users）沒有例外。
+    // 自己用 /blacklist 退出的人：@bot 或回覆 bot 才照正常流程，其他訊息只當頻道背景。
     const addressedToBot = Boolean(guildId)
       && shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
-    if (!isConversationAllowed(cfg.discord, { ...ids, ignoreUserDeny: addressedToBot })) return;
+    if (!isConversationAllowed(cfg.discord, ids)) return;
     const key = conversationKeyFor(ids);
+    if (!addressedToBot && cfg.discord.deny.self.includes(message.author.id)) {
+      // 記下這則還沒被上下文帶到：下一批若沒涵蓋它（它在批次最後一則之後），會再重帶一次。
+      primedKeys.delete(key);
+      silentPending.set(key, message.id);
+      log(`略過 ${key} user=${message.author.id}（/blacklist 退出，只當上下文）`);
+      return;
+    }
     // 發言頻率：這則在 handleMessage 最前面就記，早於所有 return（含 // 與空訊息）。
     activity.record(key);
     // 表情使用次數：同樣早於所有 return，// 訊息也算（那只是叫模型不要回，不是不存在）。
@@ -3884,7 +3916,7 @@ async function main() {
       await interaction.reply({
         content: muted
           ? '已把你移出黑名單，bot 又會處理你的訊息了。'
-          : '已把你加入黑名單：bot 不會處理你的訊息（所有伺服器共用），只有 @我 或回覆我時才會回。再跑一次 /blacklist 可以移出。',
+          : '已把你加入黑名單：bot 不會回你的訊息、也不會按你訊息的表情（所有伺服器共用），只有 @我 或回覆我時才會回。你的訊息仍會當頻道背景，讓它看懂上下文。再跑一次 /blacklist 可以移出。',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -4183,7 +4215,10 @@ async function main() {
     // @ 模式期間沒叫 bot 的閒聊，模型沒看過。這裡一次清全部，設定變更不常發生。
     const mentionMapChanged = JSON.stringify(cfg.discord.requireMentionInChannel)
       !== JSON.stringify(next.requireMentionInChannel);
-    if ((cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) || mentionMapChanged) primedKeys.clear();
+    if ((cfg.discord.requireMentionInGuild && !next.requireMentionInGuild) || mentionMapChanged) {
+      primedKeys.clear();
+      silentPending.clear();
+    }
     cfg.discord.allow = next.allow;
     cfg.discord.deny = next.deny;
     cfg.discord.ownerIds = next.ownerIds;

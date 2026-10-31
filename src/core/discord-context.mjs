@@ -23,8 +23,8 @@ export const OPENING_HINT = '【開場】這是這個會話的第一批訊息。
  * 引用訊息的一行摘要；沒有內容也沒有圖片就回空字串。
  * ref 是被引用那則的 #編號：原文只留 300 字，模型要用 view_message 看全文或看附件時靠它。
  */
-export function formatQuote({ ref, author, content, hasImage } = {}) {
-  const who = clean(author) || '未知';
+export function formatQuote({ ref, author, content, hasImage, silent = false } = {}) {
+  const who = `${silent ? '⊘' : ''}${clean(author) || '未知'}`;
   const text = clean(content) || (hasImage ? '[圖片]' : '');
   if (!text) return '';
   return `[引用 ${ref ? `#${ref} ` : ''}${who}：${cut(text, 300)}]`;
@@ -111,7 +111,8 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const entry = list[i];
     const reply = entry.replyName ? ` ↪回覆 ${clean(defang(entry.replyName)) || '未知'}` : '';
-    const author = `${entry.ref ? `#${entry.ref} ` : ''}${clean(defang(entry.author)) || '未知'}${entry.bot ? '（你）' : ''}${reply}`;
+    const mark = entry.silent ? '⊘' : '';
+    const author = `${entry.ref ? `#${entry.ref} ` : ''}${mark}${clean(defang(entry.author)) || '未知'}${entry.bot ? '（你）' : ''}${reply}`;
     const body = cut(clean(defang(entry.content)) || '[圖片]', 400);
     const line = `${author}：${body}`;
     if (used + line.length > maxChars) {
@@ -126,5 +127,6 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
     used += line.length + 1;
   }
   if (lines.length === 0) return '';
-  return `【最近頻道訊息】\n${lines.join('\n')}`;
+  const legend = lines.some((line) => line.includes('⊘')) ? '（⊘ = 已退出，只看不回）' : '';
+  return `【最近頻道訊息】${legend}\n${lines.join('\n')}`;
 }

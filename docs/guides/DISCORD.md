@@ -83,7 +83,7 @@ pm2 logs dc-bridge
 | `allow.channels` | 允許的頻道 id（討論串用自己的 id，不是母頻道） |
 | `allow.users` | 允許私聊的 user id。**不影響伺服器頻道** |
 | `deny.guilds` / `deny.channels` / `deny.users` | 黑名單，優先於白名單。`deny.channels` 也擋掉這個頻道底下的討論串。`deny.users` 是**管理員封鎖**（控制台或 `config.json` 編輯）：bot 完全不處理他的訊息，@bot 也一樣 |
-| `deny.self` | 使用者自己用 `/blacklist` 退出的名單。同樣不處理他的訊息，**唯一例外**是他 @bot 或回覆 bot 的那一則照常處理。管理員封鎖的人不能用 `/blacklist` 自己解除。控制台「白名單與媒體」卡片可以直接改這份名單 |
+| `deny.self` | 使用者自己用 `/blacklist` 退出的名單。bot 不回他的訊息、不按他的訊息 reaction，只有他 @bot 或回覆 bot 的那一則照常處理。其他訊息仍會當頻道背景（【最近頻道訊息】標 `⊘`）送進模型，但沒叫 bot 的不進批次、不學黑話、不進每日摘要，讀歷史與搜尋也看不到。管理員封鎖的人不能用 `/blacklist` 自己解除。控制台「白名單與媒體」卡片可以直接改這份名單 |
 | `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `requireMentionInChannel` | 單頻道覆寫：`{ "頻道ID": true }` = 該頻道只能 @bot；`false` = 該頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。值必須是 JSON boolean（`"false"` 字串會被拒絕）。討論串用自己的 id，**不繼承**母頻道的覆寫（跟 `allow.channels` 一樣）；私聊不受影響。沒開 `messageContentIntent` 時一律要 @bot。控制台「設定」可以用 `頻道ID=true` 一行一個編輯 |
@@ -108,7 +108,7 @@ pm2 logs dc-bridge
 | `media.maxVideoSeconds` | 影片只看前面幾秒，預設 60（5 ~ 120；6 格抽樣的上限就是 120 秒） |
 | `videoLinks.enabled` | 群友貼 YouTube 這類連結時，`view_message` 用 yt-dlp 抽幾格畫面，預設 `false` |
 | `videoLinks.ytDlpPath` | yt-dlp 的位置；留空就用 `YTDLP_PATH` 環境變數或 PATH 裡的 `yt-dlp` |
-| `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則） |
+| `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則）；有人用 `/blacklist` 退出後，下一批會再帶一次，把他們的訊息補進來 |
 | `context.messages` | 抓幾則，預設 12（0 = 關閉，上限 50） |
 | `context.maxChars` | 上下文區塊的字數上限，預設 3000 |
 | `security.blockSensitive` | 回覆含本機路徑／憑證／已知令牌時整條攔截，預設 `true` |
@@ -258,7 +258,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。前面還有回合時會排進同一條會話佇列，不會直接拒絕；等待期間這個頻道的一般訊息排到問完才送。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
 | `/forget` | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶與觸發統計，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
-| `/blacklist` | 所有人 | 切換自己的 `deny.self`：每次執行都會切換（不在名單 → 加入，已在名單 → 移出），立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不再處理你的訊息：沒在叫 bot 的不回、不進批次、不學黑話，也不進頻道上下文與每日摘要，讀歷史、搜尋也看不到；別人引用你的訊息時，引用內文照常附上。唯一例外是 @bot 或回覆 bot 的那一則（那一則照正常流程處理，`view_message`、`user_info`、讀歷史與搜尋都看得到，跟一般訊息一樣；伺服器頻道的搜尋 API 認不出回覆對象，那邊只有 @bot 的一則認得）。在 `deny.users`（管理員封鎖）裡的人不能自己解除，會回一句請找管理員。私聊仍然全擋。只能改自己，回覆只有自己看得到。別人把你的訊息轉發出去時，轉發的內容不受這份名單影響 |
+| `/blacklist` | 所有人 | 切換自己的 `deny.self`：每次執行都會切換（不在名單 → 加入，已在名單 → 移出），立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不回你的訊息、不按你訊息的表情；沒在叫 bot 的訊息不進批次、不學黑話、不進每日摘要，但會當成頻道背景進【最近頻道訊息】（標 `⊘`），所以對話上下文不會缺。唯一例外是 @bot 或回覆 bot 的那一則照正常流程處理（那一則 `view_message`、`user_info`、讀歷史與搜尋都看得到，跟一般訊息一樣；伺服器頻道的搜尋 API 認不出回覆對象，那邊只有 @bot 的一則認得）。別人引用你的訊息時，引用內文照常附上，但那則被引用的原文你仍不能 `view_message`（除非它是 ★ 那一則）。在 `deny.users`（管理員封鎖）裡的人不能自己解除，會回一句請找管理員。私聊仍然全擋。只能改自己，回覆只有自己看得到。別人把你的訊息轉發出去時，轉發的內容不受這份名單影響 |
 | 其他 `/` 開頭 | 管理員 | 文字原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
 `/reset`、`/reload-system-prompt`、`/status`、`/invite`、`/console`、`/mention`、`/ask`、`/memory`、`/forget`、`/blacklist`
@@ -316,7 +316,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 | 名單 | 誰設定 | 存在哪 | @bot 會不會處理 |
 | --- | --- | --- | --- |
 | `deny.users` | 管理員 | `config.json` | 不會 |
-| `deny.self` | 本人用 `/blacklist` | `config.json` | 會（唯一例外） |
+| `deny.self` | 本人用 `/blacklist` | `config.json` | 會（★ 照常，其他只當背景） |
 | 模型的不理名單 | 模型用 `ignore_user` | `state/discord-ignore.json` | 不會 |
 
 - 生效期間那個人的新訊息不進來：不進批次、不進頻道上下文、不進每日摘要、不學黑話；
@@ -755,6 +755,7 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 
 - `mcp__discord__send_message`（`content`、`reply_to` 可省略）：送一則訊息（Discord Markdown；`:名稱:` 會換成伺服器表情）。
   沒有 `message` 參數：正文只放 `content`，要接的那則 `#編號` 只放 `reply_to`；`content` 只有一個查得到的 `#編號` 會被擋（400）。
+  已退出（`deny.self`）、管理員封鎖（`deny.users`）或模型不理名單的訊息不能當 `reply_to`，會回 403。
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
   `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
 - `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道。
@@ -793,7 +794,8 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
 - `mcp__discord__create_poll`（`question`、`answers`、`hours`／`multi` 可省略）：在這個頻道發一個 Discord 投票。
   題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。
   文字過敏感資訊閘門，佔「一輪 5 則」的名額。bot 沒有「建立投票」權限時回錯誤
-- `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji
+- `mcp__discord__add_reaction`（`message`、`emoji`）：對那則訊息按表情；`emoji` 是伺服器表情名稱或一個 Unicode emoji。
+  對象是已退出、被封鎖或模型不理名單的訊息時回 403
 - `mcp__discord__remove_reaction`（`message`、`emoji`）：收回你在那則訊息按過的同一個表情。
   只能收回自己按的；沒按過或已經收回時回 404，一輪最多 3 次（跟 `add_reaction` 分開算）
 - `mcp__discord__set_quiet`（`minutes`、`reason` 可省略）：讓自己安靜 1~120 分鐘。這段時間**沒叫 bot** 的頻道訊息
@@ -818,8 +820,9 @@ SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，�
   加成等級、頻道與身分組數量、自訂表情與貼圖數量、bot 在這裡的暱稱，以及目前頻道的名稱、主題、是否 NSFW。私聊回錯誤
 - `mcp__discord__conversation_stats`（沒有其他參數）：查對話次數統計：全部伺服器加總的今天人數／總人數／總次數／畫圖次數，
   以及這個伺服器最常找 bot 的前 5 人（私聊只回數字，不列名字）
-- `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）
-- `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條
+- `mcp__discord__remember_user`（`message`、`name`、`fact`）：記住那則訊息發言者的一件事；`name` 對不上發言者就回錯誤（見「群友記憶」）。
+  他的訊息讀不到（已退出、被封鎖、在模型不理名單）時回 403
+- `mcp__discord__forget_user_fact`（`message`、`number`）：刪掉那個人記憶裡的第 `number` 條。刪除不受上面的讀取限制
 - `mcp__discord__note_event`（`text`、`days` 可省略）：記一條這個頻道發生的事（約定、決定、反覆被提起的事件、梗的由來），
   最多 150 字；`days` 幾天後過期，預設 30、最多 180。一輪最多 2 條，私聊不能記
 - `mcp__discord__search_notes`（`query`／`days` 可省略）：查這個頻道的筆記；`query` 的每個詞都要出現，
@@ -909,12 +912,15 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   被引用的那則先從 discord.js 的訊息快取找（bot 開著時收到的訊息都在裡面，不打 API）；
   快取沒有就抓那一則，抓不到（被刪、rate limit）才只寫 `↪回覆 某人`。
   原作者在 `deny.users` / `deny.self` 裡也照樣帶：引用是群友自己貼進來的公開內容。
+  `deny.self` 的引用會在名字前標 `⊘`（只看，不回、不按表情）；`deny.users` 的引用要 `reply_to` 或按表情會回 403。
   模型不理名單裡的人例外：他的話不帶，只留 `↪回覆 某人`。
   只認同一個頻道的一般回覆：轉發和別頻道的引用不帶（那個頻道可能不在白名單裡）。
 - **頻道上下文**：會用 `channel.messages.fetch` 抓這一批第一則之前的 `context.messages` 則訊息放進
   prompt。預設模式每一批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶（橋接重啟或
-  `/reset` 後再帶一次）。這需要 bot 的 **Read Message History** 權限；不需要 Message Content 意圖。
-  抓回來的歷史訊息裡，`deny.users` / `deny.self` / 模型不理名單的人不會進上下文，也不會被收進黑話語料。
+  `/reset` 後再帶一次；有 `deny.self` 的人說話後，下一批也會再帶）。這需要 bot 的 **Read Message History** 權限；不需要 Message Content 意圖。
+  抓回來的歷史訊息裡，`deny.users` 與模型不理名單的人不會進上下文，也不會被收進黑話語料；
+  `deny.self`（本人用 `/blacklist` 退出）的訊息會進上下文，那一行前面標 `⊘`：只當背景，模型不回、不按 reaction，
+  黑話語料一樣不收。
   引用不算在內：被引用的原文照上面的規則附上（模型不理名單的人例外）。
   私聊不加，DSH 會話本身就有上下文。
 - **圖片**：批次裡每則訊息的圖片依序編號，那一行會標 `[圖1]`、`[圖2]`，圖片本體跟著送進模型；
@@ -974,9 +980,10 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 2. **fail-closed preset**：啟動時向 DSH 要 preset 清單；`agentPreset` 不在清單裡就拒絕建立會話，並在頻道
    回報安裝提示。**絕不**回退到 DSH 預設 preset（那通常有完整本地工具）。
 3. **白名單**：預設全擋。`deny` 優先於 `allow`；`deny.channels` 也擋母頻道底下的討論串。
-   `deny.users` 是管理員封鎖，完全擋。`deny.self` 是自己用 `/blacklist` 退出的名單，只擋「沒在叫 bot」的訊息：
-   @bot 或回覆 bot 時照常處理。模型自己用 `ignore_user` 設的名單也完全擋，@bot 一樣不處理；
-   三份名單分開，控制台看得到模型那份。私聊三種名單都全擋（私聊每則都算叫 bot，例外不適用）。
+   `deny.users` 是管理員封鎖，完全擋。`deny.self` 是自己用 `/blacklist` 退出的名單：@bot 或回覆 bot 時照常處理；
+   其他訊息只當頻道背景（【最近頻道訊息】標 `⊘`），不進批次、不回、不按 reaction、不學黑話，讀歷史與搜尋也看不到。
+   模型自己用 `ignore_user` 設的名單也完全擋，@bot 一樣不處理；三份名單分開，控制台看得到模型那份。
+   私聊三種名單都全擋（私聊每則都算叫 bot，例外不適用）。
 4. **審批只有 `ownerIds` 能回**；管理命令同理（slash command 選單只給伺服器管理員看，執行時再驗 `ownerIds`）。
 5. **單一實例**：`state/discord-bridge.lock` 有活著的 PID 就拒絕啟動。
 6. **發送端點只在本機**：`mcp-discord` 與 `mcp-slang` 走 `127.0.0.1` 的隨機埠，要 `x-agent-token`

@@ -94,7 +94,7 @@ export function normalizeDiscordConfig(raw) {
       guilds: idList(src.deny?.guilds, 'discord.deny.guilds'),
       channels: idList(src.deny?.channels, 'discord.deny.channels'),
       users: idList(src.deny?.users, 'discord.deny.users'),
-      // 自己用 /blacklist 退出的名單：只有這份允許「@bot 或回覆 bot」的例外。
+      // 自己用 /blacklist 退出的名單：訊息只當背景，@bot 或回覆 bot 才照常處理。
       self: idList(src.deny?.self, 'discord.deny.self'),
     },
     allowAllWhenEmpty: src.allowAllWhenEmpty === true,
@@ -302,13 +302,13 @@ export function sessionLabelFor(key, { guildName, channelName, userName } = {}) 
  * 討論串：白名單只看自己的 id（文件寫明），黑名單連母頻道（parentId）一起看；
  * 否則在被禁的頻道開一個討論串就能繞過黑名單。
  *
- * `ignoreUserDeny`：自己用 /blacklist 退出的人（`deny.self`）@bot 或回覆 bot 時，呼叫端傳 true，
- * 只跳過 self 那一關（而且只在伺服器頻道生效）。`deny.users` 是管理員封鎖，一律擋，沒有例外。
+ * `deny.self`（本人用 /blacklist 退出）不擋伺服器頻道：他的訊息要當上下文，只是不回、不按 reaction
+ * （見 `isSilentMessage`）。私聊沒有上下文可言，仍然全擋。`deny.users` 是管理員封鎖，一律擋。
  */
-export function isConversationAllowed(cfg, { guildId, channelId, parentId = null, userId, ignoreUserDeny = false }) {
+export function isConversationAllowed(cfg, { guildId, channelId, parentId = null, userId }) {
   const id = String(userId);
   if (cfg.deny.users.includes(id)) return false;
-  if (!(ignoreUserDeny && guildId) && cfg.deny.self.includes(id)) return false;
+  if (!guildId && cfg.deny.self.includes(id)) return false;
 
   if (guildId) {
     const guild = String(guildId);
@@ -359,10 +359,30 @@ export function questionAudience(users = []) {
   return [...new Set((users ?? []).map((user) => String(user?.userId ?? '')).filter(Boolean))];
 }
 
-/** 這個人的訊息要不要當成「沒看到」：管理員封鎖（deny.users）或自己退出（deny.self）。 */
+/** 每日摘要要不要跳過這個人：管理員封鎖（deny.users）或本人用 /blacklist 退出（deny.self）。 */
 export function isDeniedUser(cfg, userId) {
   const id = String(userId ?? '');
   return cfg.deny.users.includes(id) || cfg.deny.self.includes(id);
+}
+
+/**
+ * 這則是不是「本人退出，而且不是在叫 bot」：只當頻道背景，模型不回、不按 reaction。
+ * 私聊不算（`deny.self` 在私聊直接全擋）。
+ */
+export function isSilentMessage(cfg, message, botUserId) {
+  const id = String(message?.author?.id ?? '');
+  if (!message?.guildId || !cfg.deny.self.includes(id)) return false;
+  // discord.js 的 Message 給 Map + repliedUser；搜尋 API 的原始訊息只有 mention 陣列，認不出回覆對象。
+  const mentions = message.mentions;
+  const mentionedUserIds = Array.isArray(mentions)
+    ? mentions.map((user) => user?.id)
+    : [...(mentions?.users?.keys() ?? [])];
+  return !shouldHandleGuildMessage({
+    mentionedUserIds,
+    repliedUserId: Array.isArray(mentions)
+      ? message?.referenced_message?.author?.id ?? null
+      : mentions?.repliedUser?.id ?? null,
+  }, botUserId, true);
 }
 
 /**
@@ -376,17 +396,7 @@ export function canReadMessage(cfg, message, botUserId, isIgnored = () => false)
   if (cfg.deny.users.includes(id)) return false;
   if (!cfg.deny.self.includes(id)) return true;
   if (!message?.guildId) return false;
-  // discord.js 的 Message 給 Map + repliedUser；搜尋 API 的原始訊息只有 mention 陣列，認不出回覆對象。
-  const mentions = message.mentions;
-  const mentionedUserIds = Array.isArray(mentions)
-    ? mentions.map((user) => user?.id)
-    : [...(mentions?.users?.keys() ?? [])];
-  return shouldHandleGuildMessage({
-    mentionedUserIds,
-    repliedUserId: Array.isArray(mentions)
-      ? message?.referenced_message?.author?.id ?? null
-      : mentions?.repliedUser?.id ?? null,
-  }, botUserId, true);
+  return !isSilentMessage(cfg, message, botUserId);
 }
 
 /** `/blacklist`：把一個人加入或移出 deny.self（自己退出的名單），其他欄位原樣保留。 */
