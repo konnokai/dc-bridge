@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeImageForModel, normalizeVideoForModel, normalizeVideoUrlForModel, sniffImage, sniffVideo } from '../media-normalize.js';
+import { messageParts } from './discord-context.mjs';
 
 /** 允許抓圖的 host（精確比對，子網域不算）。 */
 // images-ext-*：Discord 替連結預覽代抓的外部圖片。原站由 Discord 去抓，橋接只連 Discord 的主機。
@@ -294,17 +295,19 @@ export function describeSkipped(skipped) {
 }
 
 /**
- * view_message 的圖片來源：本則附件、被回覆那則的附件、本則貼圖，
+ * view_message 的圖片來源：本則與轉發快照的附件、貼圖，
  * 以及本則、被回覆那則、修復 bot 補上的連結預覽。
  * 被回覆那則的附件也要帶：引文只留 300 字，原圖只有這裡看得到。
  */
 export function viewMediaItems({ target, replied = null, fixMessages = [] } = {}) {
+  const parts = messageParts(target);
+  const repliedParts = messageParts(replied);
   return [
-    ...(target?.attachments?.values?.() ?? []),
-    ...(replied?.attachments?.values?.() ?? []),
-    ...stickerImages(target?.stickers),
-    ...embedImages(target?.embeds),
-    ...embedImages(replied?.embeds),
+    ...parts.attachments,
+    ...repliedParts.attachments,
+    ...stickerImages(parts.stickers),
+    ...embedImages(parts.embeds),
+    ...embedImages(repliedParts.embeds),
     ...fixMessages.flatMap((message) => embedImages(message.embeds)),
   ];
 }

@@ -48,7 +48,7 @@ import {
   stripBotMention,
   isSkippedMessage,
 } from './core/discord-core.mjs';
-import { OPENING_HINT, formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
+import { OPENING_HINT, formatQuote, formatRecentContext, formatTimeContext, linkPaths, messageParts, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
@@ -1365,7 +1365,10 @@ async function main() {
   }
 
   const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-  const withStickers = (message) => [message.content, stickerLabel(message.stickers)].filter(Boolean).join(' ');
+  const withStickers = (message) => {
+    const parts = messageParts(message);
+    return [parts.text, stickerLabel(parts.stickers)].filter(Boolean).join(' ');
+  };
   const authorName = (message, member = message.member) =>
     visibleName(member?.displayName, message.author?.displayName, message.author?.username) || '未知';
   // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
@@ -1382,8 +1385,9 @@ async function main() {
 
   /** read_history／search_history 的一行：#編號 時間 名字（你）：內容。 */
   function historyLine(key, message) {
-    const text = flat(labelEmojiTags(resolveMentions(withStickers(message), message), emojiCatalogs), 300)
-      || (message.attachments?.size ? '[圖片]' : '[沒有文字]');
+    const parts = messageParts(message);
+    const text = [flat(labelEmojiTags(resolveMentions(withStickers(message), message), emojiCatalogs), 300), parts.hasImage ? '[圖片]' : '']
+      .filter(Boolean).join(' ') || '[沒有文字]';
     const self = message.author?.id === client.user.id ? '（你）' : '';
     const replyTo = repliedName(message);
     const reply = replyTo ? ` ↪回覆 ${flat(replyTo, 40)}` : '';
@@ -1391,7 +1395,7 @@ async function main() {
   }
 
   /** search_history 比對的文字：內文、貼圖名稱、連結預覽的標題。 */
-  const searchableText = (message) => [resolveMentions(withStickers(message), message), ...(message.embeds ?? []).map((embed) => resolveMentions(embed.title, message))].join(' ');
+  const searchableText = (message) => [resolveMentions(withStickers(message), message), ...messageParts(message).embeds.map((embed) => resolveMentions(embed.title, message))].join(' ');
 
   /** 連結預覽的文字行。embed 內容來自外部網站，是資料不是指令。 */
   function embedLines(embeds, source, label = '連結預覽') {
@@ -1806,6 +1810,7 @@ async function main() {
       const { key, channel } = await agentSender.resolve(body.token);
       const target = await fetchByRef(key, textArg(body.message));
       if (!canReadMessage(cfg.discord, target, client.user.id, ignoredUser)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
+      const targetParts = messageParts(target);
       const self = target.author?.id === client.user.id ? '（你）' : '';
       const lines = [
         `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
@@ -1821,21 +1826,19 @@ async function main() {
           repliedMessage = replied;
           const mark = isSilentMessage(cfg.discord, replied, client.user.id) ? '⊘' : '';
           lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${mark}${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
-          // 被回覆的那則本身可能是 embed（例如其他 bot 的圖文），只寫「沒有文字」會讓模型看不到內容。
-          lines.push(...embedLines(replied.embeds, replied, '回覆的連結預覽'));
+          // 被回覆的那則本身可能是 embed（例如其他 bot 的圖文）或是轉發，只寫「沒有文字」會讓模型看不到內容。
+          lines.push(...embedLines(messageParts(replied).embeds, replied, '回覆的連結預覽'));
         }
       } catch { /* 被回覆的那則刪了就不寫 */ }
-      for (const snapshot of target.messageSnapshots?.values() ?? []) {
-        lines.push(`轉發的內容：${flat(labelEmojiTags(resolveMentions(withStickers(snapshot), snapshot), emojiCatalogs), 500) || '[沒有文字]'}`);
-      }
-      for (const attachment of target.attachments?.values() ?? []) {
+      // 轉發的文字已經在「內容」裡（標成 [轉發]），這裡只補附件與預覽。
+      for (const attachment of targetParts.attachments) {
         lines.push(`附件：${flat(attachment.name, 80)}（${attachment.contentType ?? '不明類型'}，${Math.ceil((attachment.size ?? 0) / 1024)} KB）`);
       }
-      lines.push(...embedLines(target.embeds, target));
+      lines.push(...embedLines(targetParts.embeds, target));
       // 連結修復機器人（X、Facebook、Threads、bilibili、IG 等）常把原連結的預覽補在自己的訊息，
       // 批次 prompt 跳過 bot 訊息，所以在這裡一起讀。用回覆關係或路徑相同的連結認出它。
       // shortcut: b23 這類整個換路徑的短連結只能靠回覆關係，沒回覆就看不到。
-      const targetPaths = linkPaths(target.content);
+      const targetPaths = linkPaths(targetParts.text);
       let fixMessages = [];
       if (targetPaths.length) {
         const nearby = await channel.messages.fetch({ after: target.id, limit: 10, cache: false }).catch(() => null);
@@ -1860,7 +1863,7 @@ async function main() {
       }
       const reactions = [...(target.reactions?.cache.values() ?? [])].map((reaction) => `${reaction.emoji.id ? `:${reaction.emoji.name}:` : reaction.emoji.name}×${reaction.count}`);
       if (reactions.length) lines.push(`reaction：${reactions.join(' ')}`);
-      if (!target.content && !self && !cfg.discord.messageContentIntent) lines.push('（沒開 Message Content 意圖，可能讀不到文字）');
+      if (!targetParts.text && !self && !cfg.discord.messageContentIntent) lines.push('（沒開 Message Content 意圖，可能讀不到文字）');
 
       // 圖片：本則與被回覆那則的附件與連結預覽、貼圖（只用 Discord 代理過的網址），
       // 一起下載、各自失敗只少那張。
@@ -1884,7 +1887,7 @@ async function main() {
       // 群友貼的影片連結（YouTube 等）：按需用 yt-dlp 取直連網址，跟附件同一套抽格。
       // 只在這則訊息真的有白名單連結、media 沒關、而且還有圖片名額時才跑；失敗只多一行原因。
       const linkUrl = cfg.discord.videoLinks.enabled && cfg.discord.media.enabled && images.length < cfg.discord.media.maxCount
-        ? videoLinks(target.content)[0]
+        ? videoLinks(targetParts.text)[0]
         : '';
       if (linkUrl) {
         // 整個工具呼叫有 60 秒上限（mcp-discord 的逾時）；花光的話連前面那些文字都會被丟掉。
@@ -2917,8 +2920,9 @@ async function main() {
       skipped.push(...(entry.media?.skipped ?? []));
       // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
       // 到這裡才讀 message.embeds：批次已經等過 debounce，多半拿到了。沒有就只剩網址。
+      // 轉發的預覽圖在快照裡，一起算。
       const items = cfg.discord.media.enabled
-        ? [...(entry.media?.accepted ?? []), ...embedImages(entry.message?.embeds)]
+        ? [...(entry.media?.accepted ?? []), ...embedImages(messageParts(entry.message).embeds)]
         : [];
       for (const item of items.slice(cfg.discord.media.maxCount)) {
         skipped.push({ name: item.name, reason: `一則訊息最多 ${cfg.discord.media.maxCount} 張` });
@@ -2956,7 +2960,7 @@ async function main() {
             ref: messageRefs.register(key, referenced.id),
             author: authorName(referenced),
             content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
-            hasImage: referenced.attachments?.size > 0,
+            hasImage: messageParts(referenced).hasImage,
             silent: isSilentMessage(cfg.discord, referenced, client.user.id),
           });
         }
@@ -3016,7 +3020,7 @@ async function main() {
             content: labelEmojiTags(resolveMentions(withStickers(entry), entry), emojiCatalogs),
             replyName: repliedName(entry),
             bot: entry.author?.id === client.user.id,
-            hasImage: entry.attachments?.size > 0,
+            hasImage: messageParts(entry).hasImage,
             silent: isSilentMessage(cfg.discord, entry, client.user.id),
           })),
           cfg.discord.context,
@@ -3236,12 +3240,10 @@ async function main() {
     const conf = cfg.discord.reactions;
     if (!conf.enabled || !message.guildId) return false;
     if (/^[!/]/.test(text)) return false;
-    // 有圖片（附件或連結預覽）的訊息不自動按：戰績圖、截圖、梗圖先交給模型判斷，避免只憑文字亂按。
-    const hasImageAttachment = [...(message.attachments?.values() ?? [])].some((attachment) => {
-      const type = String(attachment?.contentType ?? '');
-      return type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(String(attachment?.name ?? ''));
-    });
-    if (hasImageAttachment || (message.embeds ?? []).some((embed) => embed.image || embed.thumbnail)) return false;
+    // 有圖片（附件、轉發快照或連結預覽）的訊息不自動按：戰績圖、截圖、梗圖先交給模型判斷，避免只憑文字亂按。
+    const parts = messageParts(message);
+    const hasImageAttachment = parts.hasImage;
+    if (hasImageAttachment || parts.embeds.some((embed) => embed.image || embed.thumbnail)) return false;
 
     const now = Date.now();
     if ((reactionLastAt.get(key) ?? 0) + conf.cooldownMs > now) return false;
@@ -3731,7 +3733,7 @@ async function main() {
             .map((message) => ({
               at: message.createdTimestamp,
               author: `${authorName(message)}${message.author?.id === client.user.id ? '（你）' : ''}`,
-              text: flat(labelEmojiTags(resolveMentions(withStickers(message), message), null), 300) || (message.attachments?.size ? '[圖片]' : ''),
+              text: flat(labelEmojiTags(resolveMentions(withStickers(message), message), null), 300) || (messageParts(message).hasImage ? '[圖片]' : ''),
             }))
             .filter((message) => message.text);
           if (messages.length < SUMMARY_MIN_MESSAGES) continue;
@@ -3885,8 +3887,11 @@ async function main() {
       && bumpEmojiUsage(emojiUsage, guildId, message.content, { entries: usageCatalog.entries }) > 0) markEmojiUsageDirty();
     const quietAt = quietUntil(key);
 
-    const rawText = stripBotMention(message.content, client.user.id);
+    const parts = messageParts(message);
+    const rawText = stripBotMention(parts.content, client.user.id);
     const text = resolveMentions(rawText, message);
+    // 轉發的文字是別人貼進來的內容：給模型看，但不當成這一位群友說的話（黑話、提問回答、斜線指令都不算）。
+    const fullText = resolveMentions(stripBotMention(parts.text, client.user.id), message);
     // `\//`（畫面顯示 `//`）開頭＝這則只給人看。標記優先於 @ 和提問回答。
     if (isSkippedMessage(message.content, client.user.id)) {
       log(`跳過 ${key} user=${message.author.id}（// 標記）`);
@@ -3906,14 +3911,14 @@ async function main() {
       if (requireMentionFor(key) || isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
     }
 
-    const stickers = stickerLabel(message.stickers);
+    const stickers = stickerLabel(parts.stickers);
     const media = cfg.discord.media.enabled
-      ? collectMediaAttachments([...(message.attachments?.values() ?? []), ...stickerImages(message.stickers)], cfg.discord.media)
+      ? collectMediaAttachments([...parts.attachments, ...stickerImages(parts.stickers)], cfg.discord.media)
       : { accepted: [], skipped: [] };
     // 只有 @bot／回覆 bot、沒有其他內容：不能當空訊息丟掉，模型要知道有人在叫它。
-    const emptyDirect = direct && !text && !stickers && media.accepted.length === 0;
-    if (!text && !stickers && media.accepted.length === 0) {
-      if (direct && message.attachments?.size) {
+    const emptyDirect = direct && !fullText && !stickers && media.accepted.length === 0;
+    if (!fullText && !stickers && media.accepted.length === 0) {
+      if (direct && parts.attachments.length) {
         const reason = media.skipped[0]?.reason ?? '附件沒有送進模型';
         await sendLong(key, `附件沒有送進模型：${reason}`);
         return;
@@ -3929,7 +3934,7 @@ async function main() {
       const hanging = pending.get(key);
       // 提問只收這一輪被問的人；審批只收管理員。其他人的訊息照常進一般對話，不會被吃掉。
       // 只有 @／回覆、沒有文字的空訊息不算答案，留給一般對話。
-      if (hanging && !emptyDirect && await answerPending(hanging, text, key, isOwner, message.author.id)) return;
+      if (hanging && text && await answerPending(hanging, text, key, isOwner, message.author.id)) return;
 
       // 非管理員的斜線指令一律擋掉，不送進模型（模型會把它當一般文字回答）。
       if (text.startsWith('/') && !isOwner) {
@@ -3945,13 +3950,13 @@ async function main() {
       guildId,
       userId: message.author.id,
       author,
-      text: [labelEmojiTags(text, emojiCatalogs), stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
+      text: [labelEmojiTags(fullText, emojiCatalogs), stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       // 黑話比對用原文：表情描述是目錄產生的字，不該被當成群友講的話。
-      rawText: [text, stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
+      rawText: [fullText, stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       direct,
       isOwner,
       media,
-      hasImage: (message.attachments?.size ?? 0) > 0,
+      hasImage: parts.hasImage,
       at: message.createdTimestamp,
     });
     lastActive.set(key, Date.now());

@@ -60,7 +60,7 @@ import { searchGifs } from '../src/core/discord-gif.mjs';
 import { sniffImage } from '../src/media-normalize.js';
 import { fetchStreamUrl, parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
-import { OPENING_HINT, formatQuote, formatRecentContext, formatTimeContext, linkPaths, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
+import { OPENING_HINT, formatQuote, formatRecentContext, formatTimeContext, linkPaths, messageParts, parseHistoryDate, referencedMessage } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped } from '../src/core/discord-quiet.mjs';
@@ -2936,6 +2936,21 @@ console.log('## 8. 附件（圖片與影片）');
   ok(collectMediaAttachments(viewed, limits).accepted.length === 2, '被回覆那則的附件照同一套規則把關');
   ok(viewMediaItems({ target: {} }).length === 0, '沒有附件、貼圖、embed 就沒有圖');
 
+  // 轉發：本則沒有附件，圖片在 messageSnapshots 裡，view_message 也要看得到。
+  const forwardedTarget = {
+    content: '',
+    attachments: new Map(),
+    embeds: [],
+    stickers: new Map(),
+    messageSnapshots: new Map([['s1', {
+      content: '',
+      attachments: new Map([['a1', att({ name: 'forwarded.png' })]]),
+      embeds: [],
+      stickers: new Map(),
+    }]]),
+  };
+  ok(viewMediaItems({ target: forwardedTarget }).length === 1, 'view_message 的圖片來源含轉發快照的附件');
+
   await assert.rejects(() => fetchDiscordMedia('https://evil.example.com/x.png', limits), /非 Discord CDN/);
   await assert.rejects(() => fetchDiscordMedia('http://cdn.discordapp.com/x.png', limits), /非 Discord CDN/);
 
@@ -3217,6 +3232,8 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(formatQuote({}) === '', '空引用回空字串');
   const longQuote = formatQuote({ author: 'a', content: 'x'.repeat(500) });
   ok(longQuote.length < 340 && longQuote.endsWith(']'), '引用過長會截斷');
+  ok(formatQuote({ author: 'a', content: 'x'.repeat(500), hasImage: true }).endsWith('[圖片]]'),
+    '長引文也不能把 [圖片] 截掉');
 
   let fetches = 0;
   const cachedRef = { id: 'r1', content: 'API' };
@@ -3240,6 +3257,33 @@ console.log('## 10. 引用、上下文、出站閘門');
   partialCache.channel.messages.cache.set('r1', { id: 'r1', partial: true, content: '' });
   ok((await referencedMessage(partialCache))?.content === 'fetched' && fetches === 2,
     '快取裡是 partial 就重新抓，不拿空訊息');
+
+  // 轉發：本則沒有內容，文字與附件都在 messageSnapshots；快照的 mention 不拿快照自己解析。
+  const snapshot = {
+    content: 'https://www.threads.com/share/x',
+    attachments: new Map([['a1', { name: 'image0.png', contentType: 'image/png' }]]),
+    embeds: [],
+    stickers: new Map(),
+  };
+  const forwardParts = messageParts({ content: '看這個', messageSnapshots: new Map([['s1', snapshot]]) });
+  ok(forwardParts.text === '看這個 [轉發] https://www.threads.com/share/x', '轉發內容接在 [轉發] 後面');
+  ok(forwardParts.attachments.length === 1, '轉發快照的附件一起算');
+  const bareForward = messageParts({
+    content: '',
+    messageSnapshots: new Map([['s1', { content: '', attachments: new Map([['a1', { name: 'a.png' }]]) }]]),
+  });
+  ok(bareForward.forwarded === '[轉發]' && bareForward.attachments.length === 1, '只有圖的轉發也要標 [轉發]');
+  ok(bareForward.hasImage === true, '轉發的圖片算 hasImage');
+  ok(messageParts({ attachments: new Map([['p', { name: 'a.pdf', contentType: 'application/pdf' }]]) }).hasImage === false,
+    'PDF 不算 [圖片]');
+  ok(messageParts({ attachments: new Map([['v', { name: 'a.mp4', contentType: '' }]]) }).hasImage === true,
+    '影片附件算 hasImage（抽格後看得到）');
+  ok(messageParts({ content: '普通訊息' }).text === '普通訊息' && messageParts({}).attachments.length === 0,
+    '沒有快照的一般訊息維持原樣');
+  ok(formatQuote({ author: 'nekofoxball', content: '[轉發] https://x', hasImage: true })
+    === '[引用 nekofoxball：[轉發] https://x [圖片]]', '引文有文字也有圖時標 [圖片]，模型才知道要 view_message');
+  ok(formatRecentContext([{ author: 'A', content: '看這個', hasImage: true }], { maxMessages: 1, maxChars: 100 })
+    .includes('A：看這個 [圖片]'), '上下文有文字也有圖時也標 [圖片]');
   ok(searchTerms('  期末考  ＡＢＣ ').join('|') === '期末考|abc', '搜尋詞：去空白、全形轉半形、轉小寫');
   ok(matchesTerms('明天ABC期末考', searchTerms('abc 期末考')), '每個詞都出現才算符合（不分大小寫）');
   ok(!matchesTerms('明天期末考', searchTerms('abc 期末考')), '少一個詞就不符合');

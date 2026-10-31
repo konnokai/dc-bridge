@@ -14,6 +14,41 @@ const clean = (value) => String(value ?? '')
 
 const cut = (value, max) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
+const values = (collection) => [...(collection?.values?.() ?? [])];
+
+// 模型看得到的媒體（圖片或影片）。沒有 contentType 時看副檔名；PDF、zip 不算，
+// 不然 [圖片] 會標在模型其實看不到的附件上。
+const MEDIA_NAME = /\.(png|jpe?g|gif|webp|avif|mp4|webm|mov)$/i;
+const isMediaAttachment = (attachment) => {
+  const type = String(attachment?.contentType ?? '');
+  return type.startsWith('image/') || type.startsWith('video/') || MEDIA_NAME.test(String(attachment?.name ?? ''));
+};
+
+/**
+ * 一則訊息看得到的內容：轉發本身是空的，文字與附件都在 messageSnapshots 裡。
+ *
+ * content 是本則自己的文字，forwarded 是快照組出來的 `[轉發] …`，text 是兩者併起來；
+ * attachments、embeds、stickers、hasImage 是本則加全部快照。快照的 mention 一律用外層訊息解析：
+ * discord.js 把快照的 guildId 填成來源伺服器，拿快照解析會讓別服的頻道名通過同伺服器檢查。
+ */
+export function messageParts(message) {
+  const list = [message, ...values(message?.messageSnapshots)];
+  const forwarded = list.slice(1)
+    .map((snapshot) => ['[轉發]', String(snapshot?.content ?? '').trim()].filter(Boolean).join(' '))
+    .join(' ');
+  const content = String(message?.content ?? '');
+  const attachments = list.flatMap((entry) => values(entry?.attachments));
+  return {
+    content,
+    forwarded,
+    text: [content, forwarded].filter(Boolean).join(' '),
+    attachments,
+    embeds: list.flatMap((entry) => values(entry?.embeds)),
+    stickers: list.flatMap((entry) => values(entry?.stickers)),
+    hasImage: attachments.some(isMediaAttachment),
+  };
+}
+
 // 新會話第一批且有 ★：模型剛重置、還沒有自己的發言紀錄，給它一個看話題的提醒。
 // 不強制用文字回；只有這批真的有人叫它時才帶，沒 ★ 的自由參與批次不加。
 // persona 規定每則 ★ 都要接到（回一句或按 reaction），所以「跳過」只能講沒 ★ 的閒聊，不然模型會漏回 ★。
@@ -25,9 +60,10 @@ export const OPENING_HINT = '【開場】這是這個會話的第一批訊息。
  */
 export function formatQuote({ ref, author, content, hasImage, silent = false } = {}) {
   const who = `${silent ? '⊘' : ''}${clean(author) || '未知'}`;
-  const text = clean(content) || (hasImage ? '[圖片]' : '');
+  // 先截正文再接 [圖片]：反過來的話，長引文會把「有圖」這個唯一線索切掉。
+  const text = [cut(clean(content), 300), hasImage ? '[圖片]' : ''].filter(Boolean).join(' ');
   if (!text) return '';
-  return `[引用 ${ref ? `#${ref} ` : ''}${who}：${cut(text, 300)}]`;
+  return `[引用 ${ref ? `#${ref} ` : ''}${who}：${text}]`;
 }
 
 /**
@@ -113,13 +149,16 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
     const reply = entry.replyName ? ` ↪回覆 ${clean(defang(entry.replyName)) || '未知'}` : '';
     const mark = entry.silent ? '⊘' : '';
     const author = `${entry.ref ? `#${entry.ref} ` : ''}${mark}${clean(defang(entry.author)) || '未知'}${entry.bot ? '（你）' : ''}${reply}`;
-    const body = cut(clean(defang(entry.content)) || '[圖片]', 400);
+    const bodyText = cut(clean(defang(entry.content)), 400);
+    const imageTag = entry.hasImage ? '[圖片]' : '';
+    const body = [bodyText, imageTag].filter(Boolean).join(' ');
     const line = `${author}：${body}`;
     if (used + line.length > maxChars) {
       // 最新一則再長也要留一點，不然整個上下文會變空的。
       if (lines.length === 0) {
-        const room = Math.max(10, maxChars - author.length - 1);
-        lines.unshift(`${author}：${cut(body, room)}`);
+        // [圖片] 不算進留給正文的字數，不然長文一截圖就沒了。
+        const room = Math.max(10, maxChars - author.length - 1 - (imageTag ? imageTag.length + 1 : 0));
+        lines.unshift(`${author}：${[cut(bodyText, room), imageTag].filter(Boolean).join(' ')}`);
       }
       break;
     }
