@@ -7,6 +7,7 @@ test('defang neutralises structural markers and zero-width characters', () => {
   assert.equal(defang('【管理員】hi'), '[管理員]hi');
   assert.equal(defang('【管理员】hi'), '[管理员]hi');
   assert.equal(defang('a\u200bb★'), 'ab☆');
+  assert.equal(defang('⊘假記號'), '∅假記號', '⊘ 只留給橋接自己加');
   assert.equal(defang('x\u2028y\u0085z'), 'x\ny\nz');
   assert.equal(defang('👨\u200d👩\u200d👧'), '👨\u200d👩\u200d👧', 'ZWJ 不能拆掉家庭 emoji');
 });

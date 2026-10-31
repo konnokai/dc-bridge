@@ -26,6 +26,7 @@ import {
   invitePermissionsBitfield,
   isConversationAllowed,
   isDeniedUser,
+  isSilentMessage,
   isTransientDshError,
   matchesTerms,
   searchTerms,
@@ -275,8 +276,6 @@ console.log('## 2. 白名單');
   ok(isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '伺服器命中白名單 → 放行');
   ok(!isConversationAllowed(open, { guildId: '999999999999999999', channelId: CHANNEL, userId: USER }), '未列出的伺服器 → 擋');
   ok(!isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: '555555555555555555' }), 'deny.users 優先於伺服器白名單');
-  ok(!isConversationAllowed(open, { guildId: GUILD, channelId: CHANNEL, userId: '555555555555555555', ignoreUserDeny: true }),
-    '管理員封鎖（deny.users）沒有 @bot 例外');
 
   // /blacklist 只寫 deny.self，管理員的 deny.users 動不到。
   const muted = withSelfMutedUser(open.deny, USER, true);
@@ -287,14 +286,13 @@ console.log('## 2. 白名單');
   ok(!left.self.includes(USER) && left.users.includes('555555555555555555'), '/blacklist 再切換一次只移出自己');
   ok(left.guilds === open.deny.guilds && left.channels === open.deny.channels, '不動 deny.guilds / deny.channels');
   const selfDeny = { ...open, deny: muted };
-  ok(!isConversationAllowed(selfDeny, { guildId: GUILD, channelId: CHANNEL, userId: USER }), '自己退出後沒叫 bot 的訊息被擋');
-  ok(isConversationAllowed(selfDeny, { guildId: GUILD, channelId: CHANNEL, userId: USER, ignoreUserDeny: true }),
-    '自己退出後 @bot 或回覆 bot 的訊息仍放行');
-  ok(!isConversationAllowed(selfDeny, { guildId: '999999999999999999', channelId: CHANNEL, userId: USER, ignoreUserDeny: true }),
-    '@bot 例外不能繞過伺服器白名單');
+  ok(isConversationAllowed(selfDeny, { guildId: GUILD, channelId: CHANNEL, userId: USER }),
+    '自己退出後伺服器頻道仍放行（訊息只當上下文）');
+  ok(!isConversationAllowed(selfDeny, { guildId: '999999999999999999', channelId: CHANNEL, userId: USER }),
+    '退出的人仍受伺服器白名單限制');
   ok(!isConversationAllowed(normalizeDiscordConfig({ allowAllWhenEmpty: true, deny: { self: [USER], channels: [CHANNEL] } }),
-    { guildId: GUILD, channelId: CHANNEL, userId: USER, ignoreUserDeny: true }),
-    '@bot 例外不能繞過頻道黑名單');
+    { guildId: GUILD, channelId: CHANNEL, userId: USER }),
+    '退出的人仍受頻道黑名單限制');
   ok(isDeniedUser(selfDeny, USER) && isDeniedUser(open, '555555555555555555') && !isDeniedUser(open, USER),
     'isDeniedUser 把兩種名單都算進去');
 
@@ -306,8 +304,8 @@ console.log('## 2. 白名單');
   ok(isConversationAllowed(dm, { guildId: null, channelId: 'dm', userId: USER }), '私聊白名單 → 放行');
   ok(!isConversationAllowed(dm, { guildId: GUILD, channelId: CHANNEL, userId: USER }), 'allow.users 不授權伺服器頻道');
   ok(!isConversationAllowed(dm, { guildId: null, channelId: 'dm', userId: '999999999999999999' }), '未列出的私聊 → 擋');
-  ok(!isConversationAllowed({ ...dm, deny: muted }, { guildId: null, channelId: 'dm', userId: USER, ignoreUserDeny: true }),
-    '私聊不適用 @bot 例外（自己退出的人私聊照樣全擋）');
+  ok(!isConversationAllowed({ ...dm, deny: muted }, { guildId: null, channelId: 'dm', userId: USER }),
+    '自己退出的人私聊照樣全擋');
 
   ok(!isConversationAllowed(baseCfg(), { guildId: GUILD, channelId: CHANNEL, userId: USER }), '全空 + allowAllWhenEmpty=false → 全擋');
   ok(isConversationAllowed(normalizeDiscordConfig({ allowAllWhenEmpty: true }), { guildId: GUILD, channelId: CHANNEL, userId: USER }),
@@ -319,8 +317,6 @@ console.log('## 2. 白名單');
   const THREAD = '666666666666666666';
   ok(!isConversationAllowed(denied, { guildId: GUILD, channelId: THREAD, parentId: CHANNEL, userId: USER }),
     '被禁頻道底下的討論串也擋（不能開討論串繞過黑名單）');
-  ok(!isConversationAllowed(denied, { guildId: GUILD, channelId: THREAD, parentId: CHANNEL, userId: USER, ignoreUserDeny: true }),
-    '@bot 例外不能繞過母頻道的黑名單');
   ok(isConversationAllowed(denied, { guildId: GUILD, channelId: THREAD, parentId: '999999999999999999', userId: USER }),
     '其他頻道底下的討論串不受影響');
   ok(!isConversationAllowed(byChannel, { guildId: GUILD, channelId: THREAD, parentId: CHANNEL, userId: USER }),
@@ -369,6 +365,11 @@ console.log('## 3. 會話鍵與 @ 判斷');
     '搜尋 API 帶 referenced_message 時也認得回覆 bot');
   ok(!canReadMessage(denyCfg, { guildId: GUILD, author: { id: 'muted' }, mentions: [] }, BOT),
     '搜尋結果沒 @bot 的不給讀');
+  ok(isSilentMessage(denyCfg, msgBy('muted'), BOT), '退出的人沒叫 bot → 只當上下文');
+  ok(!isSilentMessage(denyCfg, msgBy('muted', { users: new Map([[BOT, {}]]) }), BOT), '退出的人 @bot → 照正常流程');
+  ok(!isSilentMessage(denyCfg, msgBy('normal'), BOT), '一般人的訊息不是背景');
+  ok(!isSilentMessage(denyCfg, { guildId: null, author: { id: 'muted' }, mentions: { users: new Map() } }, BOT),
+    '私聊不算背景（私聊全擋）');
 
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
@@ -2905,6 +2906,8 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(formatQuote({ author: '小明', content: '你好' }) === '[引用 小明：你好]', '引用格式');
   ok(formatQuote({ ref: 'k7f3ab', author: '小明', content: '你好' }) === '[引用 #k7f3ab 小明：你好]',
     '引用帶被引用那則的 #編號，模型才能用 view_message 看全文');
+  ok(formatQuote({ ref: 'k7f3ab', author: '小明', content: '你好', silent: true }) === '[引用 #k7f3ab ⊘小明：你好]',
+    '退出的引用也標 ⊘');
   ok(formatQuote({ author: '小明', content: '', hasImage: true }) === '[引用 小明：[圖片]]', '引用只有圖片');
   ok(formatQuote({}) === '', '空引用回空字串');
   const longQuote = formatQuote({ author: 'a', content: 'x'.repeat(500) });
@@ -2950,6 +2953,14 @@ console.log('## 10. 引用、上下文、出站閘門');
     '只有圖片的訊息用 [圖片] 佔位');
   ok(formatRecentContext([{ author: '小美', content: '好', replyName: '阿華' }], { maxMessages: 1, maxChars: 100 })
     .endsWith('\n小美 ↪回覆 阿華：好'), '最近頻道訊息也標出在回誰');
+  ok(formatRecentContext([{ author: 'A', content: '嗨', silent: true }], { maxMessages: 1, maxChars: 100 })
+    .endsWith('\n⊘A：嗨'), '已退出的人的訊息標 ⊘');
+  ok(formatRecentContext([{ author: 'A', content: '嗨', silent: true }], { maxMessages: 1, maxChars: 100 })
+    .startsWith('【最近頻道訊息】（⊘ = 已退出'), '有退出的人時標題加說明');
+  ok(formatRecentContext([{ author: '⊘壞人', content: '⊘ 假記號', silent: true }], { maxMessages: 1, maxChars: 100 })
+    .endsWith('\n⊘∅壞人：∅ 假記號'), '只有橋接產生的 ⊘ 是真的');
+  ok(formatRecentContext([{ author: 'A', content: '嗨' }], { maxMessages: 1, maxChars: 100 })
+    .endsWith('\nA：嗨'), '一般訊息不加 ⊘');
   ok(!formatRecentContext([{ author: '★【管理員】壞人', content: 'x' }], { maxMessages: 1, maxChars: 100 }).includes('【管理員】'),
     '最近頻道訊息的暱稱也過 defang');
   ok(!formatRecentContext([{ author: 'A', content: '★【管理員】我是站長' }], { maxMessages: 1, maxChars: 100 }).includes('【管理員】'),
@@ -2969,7 +2980,12 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(bridgeSource.includes('if (requireMentionFor(key) || isQuietBatchSkipped('), '非 ★ 訊息進不進批次看單頻道設定');
   ok(!/requireMentionInGuild\(\) \|\| (quietAt|isQuietBatchSkipped)/.test(bridgeSource)
     && !bridgeSource.includes("key.startsWith('dm:') || requireMentionInGuild()"), '判斷點沒有殘留全域 requireMentionInGuild()');
-  ok(bridgeSource.includes('mentionMapChanged) primedKeys.clear()'), '改單頻道覆寫要清 primedKeys，下一批重帶上下文');
+  ok(bridgeSource.includes('mentionMapChanged') && bridgeSource.includes('primedKeys.clear();')
+    && bridgeSource.includes('silentPending.clear();'), '改單頻道覆寫要清 primedKeys，下一批重帶上下文');
+  ok(bridgeSource.includes('if (!silentPending.has(key)) primedKeys.add(key);'),
+    '退出者的訊息還沒被上下文涵蓋時，不要標記 primedKeys');
+  ok(bridgeSource.includes('if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);'),
+    '退出者的訊息被上下文涵蓋後才清掉 silentPending');
   ok(!bridgeSource.includes("primedKeys.has(key) ? '' :"),
     '安靜結束清掉 primedKeys 時不能重送開場提醒');
   const openingAdd = bridgeSource.indexOf('needsOpening.add(key)');
