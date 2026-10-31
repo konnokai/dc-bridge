@@ -114,10 +114,10 @@ pm2 logs dc-bridge
 | `security.blockSensitive` | 回覆含本機路徑／憑證／已知令牌時整條攔截，預設 `true` |
 | `queue.max` | DSH 連不上時每個會話最多排幾批，預設 50 |
 | `queue.retryMs` | 恢復後的重試間隔，預設 10000 |
-| `emoji.enabled` | `search_emojis`、每批【常用表情】與 `:名稱:` 代換的總開關，預設 `true` |
+| `emoji.enabled` | `search_emojis`、【常用表情】／【本伺服器表情】與 `:名稱:` 代換的總開關，預設 `true` |
 | `emoji.dir` | 表情目錄位置，預設 `state/discord-emoji/` |
 | `emoji.maxCandidates` | `search_emojis` 一次最多回幾個表情，預設 12（3~30） |
-| `emoji.maxChars` | `search_emojis` 結果與【常用表情】的字數上限，預設 600 |
+| `emoji.maxChars` | `search_emojis` 結果與【常用表情】的字數上限，預設 600（【本伺服器表情】另計，上限 2500 字） |
 | `reactions.enabled` | 對「沒叫 bot」的頻道訊息偶爾加 reaction，預設 `false` |
 | `reactions.probability` | 命中後實際加 reaction 的機率，預設 0.15 |
 | `reactions.cooldownMs` | 同一頻道兩次 reaction 的最短間隔，預設 10 分鐘 |
@@ -505,8 +505,10 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
    建置期間卡片會顯示「更新中…（已完成/總數）」與日誌尾巴，子程序的輸出一併進
    控制台「日誌」與 pm2 log，不用等建置結束才看得到進度。
 
-2. **常用表情提示**：prompt 只附**所有伺服器**加起來使用次數前 8 個（名稱＋使用時機；
-   當前伺服器 +6 分）。同一個會話 30 分鐘最多帶一次，沒用過的不列，內容沒變就不重複帶。
+2. **表情提示**：prompt 附兩段，同一個會話 30 分鐘最多帶一次，內容沒變就不重複帶，壓縮後清掉重帶。
+   - 【常用表情】：本伺服器用過的前 8 個＋其他伺服器前 4 個（名稱＋使用時機）。沒用過的不列。
+   - 【本伺服器表情】：本伺服器其餘表情按情緒分組（好笑、無語、困惑…），只列名稱；
+     分不到組的不列，已經在【常用表情】的不重複列。上限 2500 字。
    其他表情用 `mcp__discord__search_emojis` 查：當前伺服器 +6 分、名稱命中 +4、
    中文 bigram 關鍵字命中 +2，只回命中關鍵字的，最多 `emoji.maxCandidates` 個、
    受 `emoji.maxChars` 限制；query 留空就列當前伺服器的，並按群友實際使用的次數排序
@@ -886,8 +888,8 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 令牌不再寫進 prompt：DSH 外掛 `dc-session-token` 用 `exec.agent.id` 向橋接換這個會話的令牌，
 在工具執行前補進參數（模型看不到，也抄不走）。
 Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫它）都要接到（回一句或按 reaction），
-好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的。沒有 ★ 的訊息三選一：有話想接就說、有感覺但沒話就按 reaction、
-真的無感才跳過；reaction 不佔說話頻率，persona 叫它通常按 1 個、一輪最多 3 個，並列了該按與不該按的情況。
+好幾個人在叫它時一輪可以送好幾則、用 `reply_to` 各回各的。沒有 ★ 的訊息有話才說、沒話就跳過，
+跳過是最常見的情況；reaction 只用在 persona 列的「該按」情況，不是「看到了」的意思，通常按 1 個、一輪最多 3 個。
 沒有 ★ 的訊息裡的「你」，persona 規定當成在對前面說話的人，不是對 bot（群友說「你是小丑」不會被當成在罵它）。
 **沒有呼叫工具，這一輪就不送**；回合文字可能只是思考，橋接不會代送，只會在日誌記一行。
 

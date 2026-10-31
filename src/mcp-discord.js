@@ -177,7 +177,7 @@ tool(
 
 tool(
   'add_reaction',
-  '對某則訊息按一個表情反應。比回一句話更輕：同意、好笑、看到了，按一下就好。',
+  '對某則訊息按一個表情反應。用在有人接你的梗、誇你、回你的問題這類跟你有關的訊息；沒在找你的閒聊不用按，跳過就好。',
   {
     token: sessionToken,
     message: messageRef('要按 reaction 的那則訊息'),
@@ -238,7 +238,7 @@ tool(
 
 tool(
   'search_emojis',
-  '用關鍵字查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。【常用表情】沒有的、或想找更貼的才查。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
+  '查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。【常用表情】和【本伺服器表情】沒有合適的、或想先看某個表情長怎樣才查；query 給情緒詞（例如「無語」）或表情名稱。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {
     token: sessionToken,
     query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),

@@ -1,6 +1,6 @@
 // Discord 自訂表情目錄：挑選、格式化、把 `:名稱:` 換成真正的 emoji tag。
 //
-// prompt 只帶常用前 8 個（跨伺服器、按使用次數）；其餘用 search_emojis 查，背後是 retrieveEmojis。
+// prompt 帶【常用表情】（本服 8＋跨服 4）和【本伺服器表情】的情緒索引；其餘用 search_emojis 查，背後是 retrieveEmojis。
 // v1 用關鍵字（中文 bigram）排序，不碰 embedding；之後要換成向量檢索時，
 // 只需替換 retrieveEmojis 的實作，工具介面與 `:名稱:` 協定都不用改。
 //
@@ -152,32 +152,60 @@ export function retrieveEmojis(catalogs, { guildId = null, text = '', k = 12, ma
 }
 
 const HINT_HEADER = '【常用表情（句子裡寫 :名稱:，reaction 直接寫名稱）】';
-const HINT_MAX = 8;
+const INDEX_HEADER = '【本伺服器表情（按情緒分；句子裡寫 :名稱:，reaction 直接寫名稱）】';
+const INDEX_MAX_CHARS = 2500;
 
 /**
- * prompt 的【常用表情】：所有目錄按使用次數取前 8 個，只留名稱與使用時機。
- * 跨伺服器的表情也能用，所以不局限當前伺服器；同名只列一次，本地版本加分。
- * 沒有使用紀錄就不注入：純目錄順序跟當下無關。
+ * 情緒分組用的詞表：順序有意義，排前面的先配到。
+ * 不放單一個字「笑」：會把「靦腆微笑」也分進「好笑」。
  */
-export function buildEmojiHint(catalogs, { guildId = null, usage = null, max = HINT_MAX, maxChars = 600 } = {}) {
+export const EMOJI_MOODS = [
+  ['好笑', ['大笑', '笑死', '好笑', '爆笑', '噴笑', '笑爛']],
+  ['無語', ['無語', '呆滯', '傻眼', '無奈', '白眼', '放空']],
+  ['困惑', ['困惑', '疑惑', '問號', '不懂']],
+  ['驚訝', ['驚訝', '震驚', '嚇', '吃驚']],
+  ['哭／委屈', ['大哭', '哭', '委屈', '難過', '眼淚']],
+  ['崩潰', ['崩潰', '絕望', '抓狂']],
+  ['生氣／嫌棄', ['生氣', '憤怒', '嫌棄', '鄙視', '不滿']],
+  ['害羞／撒嬌', ['害羞', '撒嬌', '臉紅', '靦腆']],
+  ['喜歡／愛心', ['愛心', '喜歡', '抱抱']],
+  ['得意', ['得意', '自信', '炫耀', '壞笑']],
+  ['期待／興奮', ['期待', '興奮', '好耶', '歡呼']],
+  ['應援／拍手', ['應援', '螢光棒', '拍手', '加油']],
+  ['打招呼', ['打招呼', '揮手', '早安', '晚安', '再見']],
+  ['累／睡', ['睡', '累', '疲倦']],
+  ['吃', ['吃', '餓']],
+  ['開心', ['開心', '微笑', '滿足']],
+  ['看戲', ['看戲', '圍觀', '偷看', '盯']],
+];
+
+/**
+ * prompt 的【常用表情】：本伺服器用過的前 localMax 個，其他伺服器前 otherMax 個。
+ * 只收有使用紀錄的：純目錄順序跟當下無關。同名只列一次，本伺服器優先。
+ * 私聊沒有「本伺服器」，全部合起來取 localMax + otherMax。
+ */
+export function buildEmojiHint(catalogs, { guildId = null, usage = null, localMax = 8, otherMax = 4, maxChars = 600 } = {}) {
   if (!catalogs?.size || !usage?.size) return '';
   const current = guildId === null || guildId === undefined ? null : String(guildId);
-  const rows = [];
+  const local = [];
+  const other = [];
   for (const [id, catalog] of catalogs) {
     for (const entry of catalog.entries ?? []) {
       if (!entry?.id || !entry?.name) continue;
       const count = Number(usage.get(id)?.get?.(String(entry.id))) || 0;
       if (count <= 0) continue;
-      rows.push({ entry, score: count + (current !== null && id === current ? CURRENT_GUILD_BONUS : 0) });
+      (current !== null && id === current ? local : other).push({ entry, count });
     }
   }
-  rows.sort((a, b) => b.score - a.score || String(a.entry.name).localeCompare(String(b.entry.name)));
+  const byCount = (a, b) => b.count - a.count || String(a.entry.name).localeCompare(String(b.entry.name));
+  const picks = current === null
+    ? other.sort(byCount).slice(0, localMax + otherMax)
+    : [...local.sort(byCount).slice(0, localMax), ...other.sort(byCount).slice(0, otherMax)];
 
   const lines = [];
   const seen = new Set();
   let used = HINT_HEADER.length + 1;
-  for (const { entry } of rows) {
-    if (lines.length >= max) break;
+  for (const { entry } of picks) {
     const key = String(entry.name).toLowerCase();
     if (seen.has(key)) continue;
     const line = `- ${entry.name}：${String(entry.usage || entry.description || '').replace(/\s+/g, ' ').trim().slice(0, 40)}`;
@@ -187,6 +215,53 @@ export function buildEmojiHint(catalogs, { guildId = null, usage = null, max = H
     used += line.length + 1;
   }
   return lines.length ? `${HINT_HEADER}\n${lines.join('\n')}` : '';
+}
+
+/** 先用 usage 比對整張詞表，比不到再比 tags、description。 */
+function moodOf(entry) {
+  const fields = [
+    entry.usage,
+    Array.isArray(entry.tags) ? entry.tags.join(' ') : entry.tags,
+    entry.description,
+  ];
+  for (const field of fields) {
+    const hay = String(field ?? '').toLowerCase();
+    if (!hay) continue;
+    for (const [mood, words] of EMOJI_MOODS) {
+      if (words.some((word) => hay.includes(word))) return mood;
+    }
+  }
+  return null;
+}
+
+/**
+ * 本伺服器其餘表情的索引：按情緒分組，只列名稱。
+ * 名字多是「Buki_12」這種看不出意思的，只列名字沒用，靠分組讓模型知道大概在講什麼。
+ * 分不到組的不列；exclude 是【常用表情】已經列過的名字。
+ */
+export function buildEmojiIndex(catalogs, { guildId = null, exclude = new Set(), maxChars = INDEX_MAX_CHARS } = {}) {
+  if (!catalogs?.size || guildId === null || guildId === undefined) return '';
+  const skip = new Set([...exclude].map((name) => String(name).toLowerCase()));
+  const groups = new Map(EMOJI_MOODS.map(([mood]) => [mood, []]));
+  for (const entry of catalogs.get(String(guildId))?.entries ?? []) {
+    if (!entry?.id || !entry?.name) continue;
+    const name = String(entry.name);
+    if (skip.has(name.toLowerCase())) continue;
+    const mood = moodOf(entry);
+    if (mood) groups.get(mood).push(name);
+  }
+
+  const lines = [];
+  let used = INDEX_HEADER.length + 1;
+  for (const [mood, names] of groups) {
+    if (!names.length) continue;
+    names.sort((a, b) => a.localeCompare(b));
+    const line = `- ${mood}：${names.join(' ')}`;
+    if (used + line.length + 1 > maxChars) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.length ? `${INDEX_HEADER}\n${lines.join('\n')}` : '';
 }
 
 function emojiIndex(catalogs) {
