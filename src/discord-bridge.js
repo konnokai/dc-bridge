@@ -145,7 +145,15 @@ import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from '.
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { createAgentSendHandler } from './core/discord-send-handler.mjs';
-import { IMAGE_JOB_TTL_MS, createImageJobHandler, drawUsersForFile } from './core/discord-image-jobs.mjs';
+import {
+  IMAGE_JOB_STALE_TEXT,
+  IMAGE_JOB_TTL_MS,
+  createImageJobHandler,
+  drawUsersForFile,
+  loadImageJobs,
+  saveImageJobs,
+  sweepStaleImageJobs,
+} from './core/discord-image-jobs.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -166,6 +174,7 @@ const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 // generate_image 的輸出目錄；dc-draw-image 會把 outputDir 固定到這裡，send_image 也只認這裡。
 const AGENT_IMAGE_DIR = path.join(STATE_DIR, 'discord-images');
+const IMAGE_JOBS_FILE = path.join(STATE_DIR, 'discord-image-jobs.json');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
@@ -489,8 +498,29 @@ async function main() {
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
   const turnUsers = new Map(); // key -> 目前回合的觸發者
   // 背景生圖：jobId -> { key, users, at }；完成後把觸發者掛到檔名上，等 send_image 再記畫圖次數。
-  const imageJobs = new Map();
-  const pendingDraws = new Map(); // 檔名 -> { key, users, at }
+  // 工作要存檔：橋接重啟時外掛還在本來那個 DSH 行程裡跑，不能跟著記憶體消失。
+  let imageJobsLoaded;
+  try {
+    imageJobsLoaded = loadImageJobs(IMAGE_JOBS_FILE, {
+      ttlMs: IMAGE_JOB_TTL_MS,
+      keys: new Set(Object.keys(sessions)),
+    });
+  } catch (error) {
+    // 讀檔失敗（權限、磁碟）不能讓整個橋接起不來；這次從空的工作表開始。
+    log(`⚠️ 生圖工作：讀取失敗（${error?.message ?? error}），這次從空的工作表開始`);
+    imageJobsLoaded = { jobs: new Map(), pendingDraws: new Map() };
+  }
+  const imageJobs = imageJobsLoaded.jobs;
+  const pendingDraws = imageJobsLoaded.pendingDraws; // 檔名 -> { key, users, at }
+  if (imageJobsLoaded.warning) log(`⚠️ 生圖工作：${imageJobsLoaded.warning}`);
+
+  function persistImageJobs() {
+    try {
+      saveImageJobs(IMAGE_JOBS_FILE, { jobs: imageJobs, pendingDraws });
+    } catch (error) {
+      log(`生圖工作存檔失敗：${error?.message ?? error}`);
+    }
+  }
   const turnTriggerRecorded = new Set(); // key -> 這個回合已經記過觸發
   const noToolRemindedAt = new Map(); // key -> 上次提醒「只回文字、沒呼叫工具」的時間
   const NO_TOOL_REMINDER_MS = 10 * 60_000;
@@ -925,6 +955,7 @@ async function main() {
     turnUsers.delete(key);
     for (const [jobId, job] of imageJobs) if (job.key === key) imageJobs.delete(jobId);
     for (const [name, entry] of pendingDraws) if (entry.key === key) pendingDraws.delete(name);
+    persistImageJobs();
     turnTriggerRecorded.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
@@ -1496,17 +1527,26 @@ async function main() {
     log,
   });
 
+  const handleImageJob = createImageJobHandler({
+    jobs: imageJobs,
+    pendingDraws,
+    turnUsers,
+    reverse,
+    sessions,
+    enqueuePrompt,
+    epochOf,
+    ttlMs: IMAGE_JOB_TTL_MS,
+  });
+
   const agentHandlers = {
-    imageJob: createImageJobHandler({
-      jobs: imageJobs,
-      pendingDraws,
-      turnUsers,
-      reverse,
-      sessions,
-      enqueuePrompt,
-      epochOf,
-      ttlMs: IMAGE_JOB_TTL_MS,
-    }),
+    // 每次回報（含 poll 續命）後存檔；存檔失敗只寫 log，不能讓回報變成 5xx。
+    imageJob: async (body) => {
+      try {
+        return await handleImageJob(body);
+      } finally {
+        persistImageJobs();
+      }
+    },
     async send(body) {
       const refusal = await prepareRefusal(body);
       if (refusal?.replaced) return refusal.replaced;
@@ -3117,7 +3157,8 @@ async function main() {
       throw new Error(`${error?.code ?? '未知錯誤'}${error?.message ? `：${error.message}` : ''}`);
     }
     // 還有「只當背景」的訊息沒被上下文涵蓋時不要標記，下一批會再重帶一次。
-    if (!silentPending.has(key)) primedKeys.add(key);
+    // 純系統訊息（例如重啟後的【生圖完成】）沒有批次，也不能算這個會話已經帶過上下文。
+    if (!silentPending.has(key) && (job.entries?.length ?? 0) > 0) primedKeys.add(key);
     // DSH 的斜線命令會直接回結果，不經過模型、也不會產生回合。
     const command = accepted.result.value?.command;
     if (command) {
@@ -4146,6 +4187,24 @@ async function main() {
   // 啟動失敗就讓它失敗：沒有發送端點，模型就完全無法回話，比直接掛掉更難查。
   agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: agentHandlers, log });
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
+  // 外掛失聯（DSH 重啟、當掉、連不上）：不會再有 poll 或 done，等 2 分鐘就收掉並告訴頻道。
+  const imageJobSweep = setInterval(() => {
+    const stale = sweepStaleImageJobs({ jobs: imageJobs });
+    if (stale.length === 0) return;
+    persistImageJobs();
+    for (const job of stale) {
+      if (!sessions[job.key]) continue;
+      log(`生圖工作失聯，丟棄（${job.key}，job ${job.jobId}）`);
+      enqueuePrompt(job.key, {
+        entries: [],
+        direct: false,
+        system: true,
+        epoch: epochOf(job.key),
+        text: IMAGE_JOB_STALE_TEXT,
+      });
+    }
+  }, 30_000);
+  imageJobSweep.unref?.();
   scheduleSummaryCheck();
   scheduleFollowupCheck();
   codexResetPinger?.start();

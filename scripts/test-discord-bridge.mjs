@@ -720,8 +720,9 @@ console.log('## 7c. 畫圖參數鎖');
     'characters.json 缺失時外掛仍可載入（指定角色時才報錯）');
 
   // 假的橋接端點：收 imageJob 回報。外掛只認 state/discord-agent.json 的格式。
-  async function startFakeBridge(fakeDir, reports, { cancelPoll = false } = {}) {
+  async function startFakeBridge(fakeDir, reports, { cancelPoll = false, failPhase = '', failStatus = 500, failTimes = 0, endpointFile = '' } = {}) {
     const http = await import('node:http');
+    let failures = 0;
     const server = http.createServer((req, res) => {
       const chunks = [];
       req.on('data', (chunk) => chunks.push(chunk));
@@ -729,12 +730,16 @@ console.log('## 7c. 畫圖參數鎖');
         let body = null;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
         if (body) reports.push(body);
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(cancelPoll && body?.phase === 'poll' ? '{"cancel":true}' : '{"ok":true}');
+        const fail = failPhase && body?.phase === failPhase && failures < failTimes;
+        if (fail) failures += 1;
+        res.writeHead(fail ? failStatus : 200, { 'content-type': 'application/json' });
+        res.end(fail
+          ? JSON.stringify({ error: 'fake failure' })
+          : (cancelPoll && body?.phase === 'poll' ? '{"cancel":true}' : '{"ok":true}'));
       });
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const file = path.join(fakeDir, 'agent.json');
+    const file = endpointFile || path.join(fakeDir, 'agent.json');
     fs.writeFileSync(file, JSON.stringify({ url: `http://127.0.0.1:${server.address().port}`, token: 'test-agent-token' }));
     return { file, close: () => new Promise((resolve) => server.close(resolve)) };
   }
@@ -931,7 +936,7 @@ console.log(JSON.stringify({ ...fake.stats(), status: started.status }));
     fs.rmSync(fakeDir, { recursive: true, force: true });
   }
 
-  // 輪詢發現工作被取消（/reset 或橋接重啟）：一樣要停掉 Codex。
+  // 輪詢發現工作被取消（/reset 或會話不存在）：一樣要停掉 Codex。
   {
     const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-poll-cancel-'));
     const fakeModule = path.join(fakeDir, 'codex.mjs');
@@ -978,6 +983,227 @@ console.log(JSON.stringify({ ...fake.stats(), status: started.status }));
     ok(reports.some((report) => report.phase === 'poll')
       && !reports.some((report) => report.phase === 'done' || report.phase === 'failed'),
       '取消後不再回報完成或失敗');
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // 完成回報撞上橋接重啟：5xx 要退避重送，成功後就停。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-report-retry-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    const fakeImage = path.join(fakeDir, `dc-retry-${process.pid}.png`);
+    fs.writeFileSync(fakeImage, 'not a real png, but the test only checks the copy');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 5000;
+export function findCodexBin() { return '/fake/codex'; }
+export async function runCodexGenerate() {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return { file: process.env.FAKE_IMAGE_FILE, files: [process.env.FAKE_IMAGE_FILE], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+`);
+    const reports = [];
+    const bridge = await startFakeBridge(fakeDir, reports, { failPhase: 'done', failStatus: 500, failTimes: 1 });
+    const script = `
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+await tool.execute({ prompt: 'retry' }, { agent: { id: 'sess-retry' } });
+await new Promise((resolve) => setTimeout(resolve, 150));
+`;
+    const run = await runAsync(script, {
+      DC_AI_CODEX_MODULE: fakeModule,
+      FAKE_IMAGE_FILE: fakeImage,
+      DC_AGENT_FILE: bridge.file,
+      DC_IMAGE_REPORT_DELAYS_MS: '30,30',
+    });
+    await bridge.close();
+    const done = reports.filter((report) => report.phase === 'done');
+    ok(run.status === 0 && done.length === 2 && done[1].file?.endsWith(path.basename(fakeImage)),
+      '完成回報遇到 5xx 會重試，成功後就停');
+    fs.rmSync(path.join(draw.IMAGE_DIR, path.basename(fakeImage)), { force: true });
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // 4xx 不是重試的理由：會話已結束或工作已經不存在，再送也只會被拒絕。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-report-4xx-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    const fakeImage = path.join(fakeDir, `dc-4xx-${process.pid}.png`);
+    fs.writeFileSync(fakeImage, 'not a real png, but the test only checks the copy');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 5000;
+export function findCodexBin() { return '/fake/codex'; }
+export async function runCodexGenerate() {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  return { file: process.env.FAKE_IMAGE_FILE, files: [process.env.FAKE_IMAGE_FILE], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+`);
+    const reports = [];
+    const bridge = await startFakeBridge(fakeDir, reports, { failPhase: 'done', failStatus: 403, failTimes: 99 });
+    const script = `
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+await tool.execute({ prompt: 'denied' }, { agent: { id: 'sess-4xx' } });
+await new Promise((resolve) => setTimeout(resolve, 150));
+`;
+    const run = await runAsync(script, {
+      DC_AI_CODEX_MODULE: fakeModule,
+      FAKE_IMAGE_FILE: fakeImage,
+      DC_AGENT_FILE: bridge.file,
+      DC_IMAGE_REPORT_DELAYS_MS: '30,30',
+    });
+    await bridge.close();
+    const done = reports.filter((report) => report.phase === 'done');
+    ok(run.status === 0 && done.length === 1, '完成回報拿到 4xx 就直接放棄，不重試');
+    fs.rmSync(path.join(draw.IMAGE_DIR, path.basename(fakeImage)), { force: true });
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // 橋接重啟時連不上：不能兩次 poll 就放棄，要撐到容忍時間才停下。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-poll-unreachable-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 5000;
+export function findCodexBin() { return '/fake/codex'; }
+let startedAt = 0;
+let abortedAt = 0;
+export async function runCodexGenerate(options) {
+  startedAt = Date.now();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, 400);
+    options.signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      abortedAt = Date.now();
+      reject(new Error('aborted'));
+    });
+  });
+  return { file: null, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+export function stats() { return { startedAt, abortedAt }; }
+`);
+    const reports = [];
+    const bridge = await startFakeBridge(fakeDir, reports, { failPhase: 'poll', failStatus: 500, failTimes: 99 });
+    const script = `
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+await tool.execute({ prompt: 'unreachable' }, { agent: { id: 'sess-unreachable' } });
+await new Promise((resolve) => setTimeout(resolve, 350));
+const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
+console.log(JSON.stringify(fake.stats()));
+`;
+    const run = await runAsync(script, {
+      DC_AI_CODEX_MODULE: fakeModule,
+      DC_AGENT_FILE: bridge.file,
+      DC_IMAGE_JOB_POLL_MS: '30',
+      DC_IMAGE_UNREACHABLE_MAX_MS: '120',
+    });
+    await bridge.close();
+    let stats = null;
+    try { stats = JSON.parse(run.stdout.trim()); } catch {}
+    ok(run.status === 0 && stats?.abortedAt > 0 && stats.abortedAt - stats.startedAt >= 120,
+      '連不上橋接時要撐到容忍時間才中止，不是兩次 poll 就放棄');
+    ok(!reports.some((report) => report.phase === 'done' || report.phase === 'failed'),
+      '連不上而中止後不回報完成或失敗');
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // 輪詢拿到 4xx（會話或工作已經不被承認）：立刻停，不用等容忍時間。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-poll-4xx-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 5000;
+export function findCodexBin() { return '/fake/codex'; }
+let startedAt = 0;
+let abortedAt = 0;
+export async function runCodexGenerate(options) {
+  startedAt = Date.now();
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, 400);
+    options.signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      abortedAt = Date.now();
+      reject(new Error('aborted'));
+    });
+  });
+  return { file: null, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+export function stats() { return { startedAt, abortedAt }; }
+`);
+    const reports = [];
+    const bridge = await startFakeBridge(fakeDir, reports, { failPhase: 'poll', failStatus: 403, failTimes: 99 });
+    const script = `
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+await tool.execute({ prompt: 'dead-session' }, { agent: { id: 'sess-4xx-poll' } });
+await new Promise((resolve) => setTimeout(resolve, 200));
+const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
+console.log(JSON.stringify(fake.stats()));
+`;
+    const run = await runAsync(script, {
+      DC_AI_CODEX_MODULE: fakeModule,
+      DC_AGENT_FILE: bridge.file,
+      DC_IMAGE_JOB_POLL_MS: '30',
+      DC_IMAGE_UNREACHABLE_MAX_MS: '1000',
+    });
+    await bridge.close();
+    let stats = null;
+    try { stats = JSON.parse(run.stdout.trim()); } catch {}
+    ok(run.status === 0 && stats?.abortedAt > 0 && stats.abortedAt - stats.startedAt < 150,
+      '輪詢拿到 4xx 直接中止，不用等容忍時間');
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // 真正的重啟：端點檔消失，新的橋接用新的埠與 token 出現，done 要送到新端點。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-endpoint-swap-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    const endpointFile = path.join(fakeDir, 'agent.json');
+    const fakeImage = path.join(fakeDir, `dc-swap-${process.pid}.png`);
+    fs.writeFileSync(fakeImage, 'not a real png, but the test only checks the copy');
+    fs.writeFileSync(fakeModule, `
+export const DEFAULT_TIMEOUT_MS = 5000;
+export function findCodexBin() { return '/fake/codex'; }
+export async function runCodexGenerate() {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  return { file: process.env.FAKE_IMAGE_FILE, files: [process.env.FAKE_IMAGE_FILE], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+`);
+    const firstReports = [];
+    const bridgeA = await startFakeBridge(fakeDir, firstReports, { endpointFile });
+    const script = `
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let tool;
+plugin.apply({ on: () => {}, tools: { register: (definition) => { tool = definition; } } });
+await tool.execute({ prompt: 'restart' }, { agent: { id: 'sess-swap' } });
+await new Promise((resolve) => setTimeout(resolve, 400));
+`;
+    const childRun = runAsync(script, {
+      DC_AI_CODEX_MODULE: fakeModule,
+      FAKE_IMAGE_FILE: fakeImage,
+      DC_AGENT_FILE: endpointFile,
+      DC_IMAGE_REPORT_DELAYS_MS: '40,40,40,40,40,40',
+    });
+    for (let i = 0; i < 100 && !firstReports.some((report) => report.phase === 'start'); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // 舊橋接停了：端點檔先消失，外掛的完成回報會先失敗，等新端點出現再重送。
+    fs.rmSync(endpointFile, { force: true });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const secondReports = [];
+    const bridgeB = await startFakeBridge(fakeDir, secondReports, { endpointFile });
+    const run = await childRun;
+    await bridgeA.close();
+    await bridgeB.close();
+    const done = secondReports.filter((report) => report.phase === 'done');
+    ok(run.status === 0 && firstReports.some((report) => report.phase === 'start')
+      && done.length === 1 && done[0].file?.endsWith(path.basename(fakeImage))
+      && !secondReports.some((report) => report.phase === 'failed'),
+      '端點檔消失後重試會讀到新橋接的埠與 token');
+    fs.rmSync(path.join(draw.IMAGE_DIR, path.basename(fakeImage)), { force: true });
     fs.rmSync(fakeDir, { recursive: true, force: true });
   }
 
@@ -2982,8 +3208,8 @@ console.log('## 10. 引用、上下文、出站閘門');
     && !bridgeSource.includes("key.startsWith('dm:') || requireMentionInGuild()"), '判斷點沒有殘留全域 requireMentionInGuild()');
   ok(bridgeSource.includes('mentionMapChanged') && bridgeSource.includes('primedKeys.clear();')
     && bridgeSource.includes('silentPending.clear();'), '改單頻道覆寫要清 primedKeys，下一批重帶上下文');
-  ok(bridgeSource.includes('if (!silentPending.has(key)) primedKeys.add(key);'),
-    '退出者的訊息還沒被上下文涵蓋時，不要標記 primedKeys');
+  ok(bridgeSource.includes('if (!silentPending.has(key) && (job.entries?.length ?? 0) > 0) primedKeys.add(key);'),
+    '退出者的訊息還沒被上下文涵蓋時不要標記 primedKeys；純系統訊息也不算帶過上下文');
   ok(bridgeSource.includes('if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);'),
     '退出者的訊息被上下文涵蓋後才清掉 silentPending');
   ok(!bridgeSource.includes("primedKeys.has(key) ? '' :"),

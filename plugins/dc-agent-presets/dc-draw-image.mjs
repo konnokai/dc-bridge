@@ -97,8 +97,16 @@ const QUOTA_MAX_AGE_MS = 10 * 60_000
 const AGENT_ENDPOINT_FILE = process.env.DC_AGENT_FILE
   || path.join(path.dirname(IMAGE_DIR), 'discord-agent.json')
 const REPORT_TIMEOUT_MS = 5000
-// 背景工作每 15 秒問橋接還在不在：/reset、橋接重啟或外掛當掉時才能停掉 Codex。
+// 背景工作每 15 秒問橋接還在不在：/reset 或會話結束時才能停掉 Codex。
 const JOB_POLL_MS = Math.max(10, Number(process.env.DC_IMAGE_JOB_POLL_MS) || 15_000)
+// 橋接重啟時 API 要等 Discord 登入完才開，連不上不能像 /reset 一樣馬上停。
+const UNREACHABLE_MAX_MS = Math.max(50, Number(process.env.DC_IMAGE_UNREACHABLE_MAX_MS) || 3 * 60_000)
+// 完成／失敗只送一次會撞上重啟；只有斷線、401 或 5xx 才退避重送，其他 4xx 直接放棄。
+// 總共等約 3 分鐘，跟 poll 的容忍時間一致；橋接在這段時間內回來就送得成功。
+const FINAL_REPORT_DELAYS_MS = (process.env.DC_IMAGE_REPORT_DELAYS_MS || '1000,2000,4000,8000,15000,30000,60000,60000')
+  .split(',')
+  .map((value) => Number(value))
+  .filter((value) => Number.isFinite(value) && value >= 0)
 
 /** 快照說額度太低時回原因；過期、壞掉或不存在回 null（放行）。 */
 export function drawQuotaBlock() {
@@ -268,6 +276,7 @@ function releaseJob(sessionId, controller) {
 /**
  * 回報生圖狀態給橋接；由橋接排進會話閘門，不能直接 agent.followup。
  * 直接 followup 會搶在橋接正在等的批次前面，讓 /ask 與回合歸屬認錯。橋接沒跑就只留在 log。
+ * @returns {{body: any, retry: boolean}} retry 代表斷線、401 或 5xx，值得重送；其他 4xx 不用。
  */
 async function reportImageJob(payload, { quiet = false } = {}) {
   const logError = (message) => { if (!quiet) console.error(`[dc-draw-image] ${message}`) }
@@ -276,11 +285,11 @@ async function reportImageJob(payload, { quiet = false } = {}) {
     endpoint = JSON.parse(fs.readFileSync(AGENT_ENDPOINT_FILE, 'utf8'))
   } catch (error) {
     logError(`讀不到橋接端點（${AGENT_ENDPOINT_FILE}）：${error?.message ?? error}`)
-    return null
+    return { body: null, retry: true }
   }
   if (!endpoint?.url || !endpoint?.token) {
     logError('橋接端點檔缺少 url/token：本次生圖不通知頻道')
-    return null
+    return { body: null, retry: true }
   }
   try {
     const res = await fetch(`${endpoint.url}/imageJob`, {
@@ -293,12 +302,13 @@ async function reportImageJob(payload, { quiet = false } = {}) {
     try { body = await res.json() } catch { body = null }
     if (!res.ok) {
       logError(`橋接拒絕生圖通知（${payload.phase}）：${body?.error ?? `HTTP ${res.status}`}`)
-      return null
+      // 401 是舊端點 token：橋接重啟後會換一組，重讀端點檔再送就好。
+      return { body: null, retry: res.status >= 500 || res.status === 401 }
     }
-    return body
+    return { body, retry: false }
   } catch (error) {
     logError(`連不上橋接，生圖通知沒送出（${payload.phase}）：${error?.message ?? error}`)
-    return null
+    return { body: null, retry: true }
   }
 }
 
@@ -312,20 +322,27 @@ async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputIma
   let dest = null
   let text
   let pollTimer = null
-  let pollFailures = 0
+  let unreachableSince = null
   const poll = async () => {
     if (signal?.aborted) return
-    const body = await reportImageJob({ phase: 'poll', sessionId, jobId }, { quiet: true })
-    if (body?.cancel) {
+    const result = await reportImageJob({ phase: 'poll', sessionId, jobId }, { quiet: true })
+    if (result.body?.cancel) {
       controller?.abort(new Error('生圖工作已取消'))
       return
     }
-    if (!body) {
-      pollFailures += 1
-      if (pollFailures >= 2) controller?.abort(new Error('連不上橋接，取消生圖'))
+    if (result.body) {
+      unreachableSince = null
       return
     }
-    pollFailures = 0
+    // 4xx 不用再等：這個會話或工作已經不被橋接承認。
+    if (!result.retry) {
+      controller?.abort(new Error('橋接拒絕生圖輪詢'))
+      return
+    }
+    unreachableSince ??= Date.now()
+    if (Date.now() - unreachableSince > UNREACHABLE_MAX_MS) {
+      controller?.abort(new Error('連不上橋接，取消生圖'))
+    }
   }
   pollTimer = setInterval(() => { void poll() }, JOB_POLL_MS)
   pollTimer.unref?.()
@@ -368,13 +385,20 @@ async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputIma
     pruneImages()
     releaseJob(sessionId, controller)
   }
-  await reportImageJob({
+  const payload = {
     phase: dest ? 'done' : 'failed',
     sessionId,
     jobId,
     file: dest ?? undefined,
     text,
-  })
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    // 第一次與最後一次留 log；中間的重試只留給成功或放棄時看。
+    const quiet = attempt > 0 && attempt < FINAL_REPORT_DELAYS_MS.length
+    const result = await reportImageJob(payload, { quiet })
+    if (result.body || !result.retry || attempt >= FINAL_REPORT_DELAYS_MS.length) break
+    await new Promise((resolve) => setTimeout(resolve, FINAL_REPORT_DELAYS_MS[attempt]))
+  }
 }
 
 export function apply(ctx) {
@@ -513,7 +537,7 @@ export function apply(ctx) {
       trackJob(sessionId, controller)
       // 先回報開始，橋接才知道這張圖是誰要的；橋接沒受理就不畫，免得畫完沒人送。
       const reported = await reportImageJob({ phase: 'start', sessionId, jobId })
-      if (!reported) {
+      if (!reported.body) {
         releaseJob(sessionId, controller)
         throw new Error('橋接沒有受理這次生圖（沒開或會話已結束），先不畫圖：回報管理員')
       }
