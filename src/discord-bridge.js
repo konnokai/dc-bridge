@@ -89,7 +89,7 @@ import {
   takeReloadSummary,
 } from './core/discord-reload.mjs';
 import { findSensitive } from './core/discord-security.mjs';
-import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, formatEmojiLine, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, formatEmojiLine, isUnicodeEmoji, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -1283,7 +1283,7 @@ async function main() {
     const custom = substituteEmojiNames(`:${name}:`, { guildId: target.guildId ?? null, catalogs: emojiCatalogs });
     if (custom.startsWith('<')) {
       await target.react(custom);
-    } else if (name.length <= 16 && /^\p{Extended_Pictographic}/u.test(name)) {
+    } else if (isUnicodeEmoji(name)) {
       await target.react(name);
     } else {
       throw toolError(`找不到表情「${emoji}」：自訂表情先用 search_emojis 查名稱，或直接給一個 Unicode emoji`, 404);

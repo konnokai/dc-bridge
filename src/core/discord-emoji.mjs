@@ -338,6 +338,15 @@ export function substituteEmojiNames(text, { guildId = null, catalogs } = {}) {
   });
 }
 
+// 鍵帽（4️⃣）和國旗（🇹🇼）的開頭不是 Extended_Pictographic，要另外列。
+const UNICODE_EMOJI = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3)/u;
+
+/** 看起來是一個 Unicode emoji；完整驗證交給 Discord，這裡只擋明顯不是的輸入。 */
+export function isUnicodeEmoji(value) {
+  const text = String(value ?? '');
+  return text.length <= 16 && UNICODE_EMOJI.test(text);
+}
+
 /**
  * reaction 在快取裡的 key：自訂表情是表情 id，Unicode 是原文。
  * rendered 是 substituteEmojiNames 的結果；原始輸入認不出可用表情時回 null。
@@ -346,8 +355,7 @@ export function reactionKey(rendered, name) {
   const custom = /^<a?:([^:]+):([^:>]+)>$/.exec(String(rendered ?? ''));
   if (custom) return custom[2];
   const value = String(name ?? '').trim().replace(/^:|:$/g, '');
-  if (value.length <= 16 && /^\p{Extended_Pictographic}/u.test(value)) return value;
-  return null;
+  return isUnicodeEmoji(value) ? value : null;
 }
 
 /**
