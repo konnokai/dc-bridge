@@ -44,6 +44,8 @@ import {
   splitDiscordMessage,
   stripBotMention,
   isSkippedMessage,
+  viewChannelId,
+  viewMessageTarget,
 } from '../src/core/discord-core.mjs';
 import {
   collectMediaAttachments,
@@ -373,6 +375,24 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(!isSilentMessage(denyCfg, msgBy('normal'), BOT), '一般人的訊息不是背景');
   ok(!isSilentMessage(denyCfg, { guildId: null, author: { id: 'muted' }, mentions: { users: new Map() } }, BOT),
     '私聊不算背景（私聊全擋）');
+
+  const refLookup = (ref) => (ref === '#k7f3ab' ? '111' : null);
+  ok(viewMessageTarget('#k7f3ab', refLookup) === '111', 'view_message：先用 #編號查這個頻道的表');
+  ok(viewMessageTarget('123456789012345678', refLookup) === '123456789012345678', 'view_message：查不到編號就當訊息 ID');
+  ok(viewMessageTarget('#123456789012345678', refLookup) === '123456789012345678', 'view_message：訊息 ID 前面加 # 也收');
+  ok(viewMessageTarget('12345', refLookup) === null, 'view_message：太短又不對編號 → 找不到');
+  ok(viewMessageTarget(null, refLookup) === null, 'view_message：沒給訊息 → 找不到');
+  ok(viewChannelId('') === '' && viewChannelId(null) === '', 'view_message：沒給 channel 就用目前頻道');
+  ok(viewChannelId('<#123456789012345678>') === '123456789012345678', 'view_message：channel 收 <#id>');
+  ok(viewChannelId('123456789012345678') === '123456789012345678', 'view_message：channel 收純 id');
+  ok(viewChannelId('abc') === null, 'view_message：channel 不是 id → 錯誤');
+
+  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
+  const viewBody = bridgeSource.slice(bridgeSource.indexOf('async view(body)'), bridgeSource.indexOf('async user(body)'));
+  ok(viewBody.includes('ignoredUser(target.author?.id)') && !viewBody.includes('canReadMessage('),
+    'view_message 只擋模型的不理名單，deny 名單不擋唯讀');
+  ok(viewBody.includes('source.messages.fetch'), 'view_message 的連結修復 bot 跟著來源頻道抓');
+  ok(bridgeSource.includes('found.guildId !== channel.guildId'), 'view_message 不能跨伺服器讀');
 
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
@@ -2619,6 +2639,8 @@ console.log('## 7e. Discord MCP 發送工具');
     ok(tools.map((t) => `mcp__discord__${t.name}`).sort().join() === [...DISCORD_TOOL_NAMES].sort().join(),
       `MCP 註冊的工具剛好就是白名單裡那 ${DISCORD_TOOL_NAMES.length} 個`);
     ok(tools.every((t) => !(t.inputSchema?.required ?? []).includes('token')), '每個工具都不要求 token（外掛會帶入）');
+    const viewTool = tools.find((t) => t.name === 'view_message');
+    ok(!viewTool.inputSchema?.required?.includes('channel'), 'view_message：channel 可省略');
     const sendTool = tools.find((t) => t.name === 'send_message');
     ok(sendTool.inputSchema?.required?.includes('content')
       && !sendTool.inputSchema?.required?.includes('token')
@@ -2664,7 +2686,7 @@ console.log('## 7e. Discord MCP 發送工具');
       delete_message: ['/delete', { message: '#k7f3ab' }],
       create_poll: ['/poll', { question: '吃什麼', answers: ['拉麵', '咖哩'] }],
       search_history: ['/search', { query: '期末考' }],
-      view_message: ['/view', { message: '#k7f3ab' }],
+      view_message: ['/view', { message: '#k7f3ab', channel: '123456789012345678' }],
       remember_user: ['/remember', { message: '#k7f3ab', name: '小明', fact: '在準備考試' }],
       forget_user_fact: ['/forget-fact', { message: '#k7f3ab', number: 1 }],
       note_event: ['/note', { text: '週五晚上約好一起打牌' }],
@@ -2676,6 +2698,8 @@ console.log('## 7e. Discord MCP 發送工具');
       const r = await client.callTool({ name, arguments: { token: 't', ...args } });
       ok(r.isError !== true && received[before]?.url === route, `${name} 打到橋接的 ${route}`);
     }
+    ok(received.find((entry) => entry.url === '/view')?.channel === '123456789012345678',
+      'view_message 把 channel 原樣傳給橋接');
     const searched = await client.callTool({ name: 'search_emojis', arguments: { token: 't' } });
     ok(String(searched.content?.[0]?.text) === '來自 /emojis', '唯讀工具把橋接回的 text 原樣交給模型');
     const userResult = await client.callTool({ name: 'user_info', arguments: { token: 't', message: '#k7f3ab' } });

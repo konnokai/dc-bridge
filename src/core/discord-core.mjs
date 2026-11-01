@@ -400,6 +400,24 @@ export function canReadMessage(cfg, message, botUserId, isIgnored = () => false)
   return !isSilentMessage(cfg, message, botUserId);
 }
 
+/**
+ * `view_message` 的 message 參數：#編號（同一個頻道看過的）優先，查不到才當訊息 ID。
+ * 編號是 6 個字母數字，訊息 ID 是 17~20 位數字，不會撞。
+ */
+export function viewMessageTarget(value, lookupRef) {
+  const given = String(value ?? '').trim();
+  const id = given.replace(/^#/, '');
+  return lookupRef(given) ?? (/^\d{17,20}$/.test(id) ? id : null);
+}
+
+/** `view_message` 的 channel 參數：空字串 = 目前頻道；`<#id>` 與純 id 都收，其他回 null。 */
+export function viewChannelId(value) {
+  const given = String(value ?? '').trim();
+  if (!given) return '';
+  const id = given.replace(/^<#(\d+)>$/, '$1');
+  return /^\d{17,20}$/.test(id) ? id : null;
+}
+
 /** `/blacklist`：把一個人加入或移出 deny.self（自己退出的名單），其他欄位原樣保留。 */
 export function withSelfMutedUser(deny, userId, muted) {
   const id = String(userId);

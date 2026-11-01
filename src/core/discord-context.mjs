@@ -70,8 +70,8 @@ export function formatQuote({ ref, author, content, hasImage, silent = false } =
  * 這則回覆的是哪一則。快取裡有就直接用；快取沒有就抓那一則（一次 API 呼叫）。
  * 引用是群友自己帶進對話的內容，少了它模型看不懂在回什麼，所以沒叫 bot 也要拿。
  *
- * 只認同一個頻道的一般回覆（type 0）：轉發與討論串起點會指到別的頻道，那裡可能不在白名單。
- * 所以也不用 fetchReference()，它會照 reference.channelId 去任何快取裡的頻道抓。
+ * 只認同一個頻道的一般回覆（type 0）：轉發與討論串起點會指到別的頻道，不能讓批次 prompt
+ * 順便抓其他頻道的內容。所以也不用 fetchReference()，它會照 reference.channelId 去任何快取裡的頻道抓。
  */
 export async function referencedMessage(message) {
   const reference = message?.reference;

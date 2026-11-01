@@ -47,6 +47,8 @@ import {
   splitDiscordMessage,
   stripBotMention,
   isSkippedMessage,
+  viewChannelId,
+  viewMessageTarget,
 } from './core/discord-core.mjs';
 import { OPENING_HINT, formatQuote, formatRecentContext, formatTimeContext, linkPaths, messageParts, parseHistoryDate, referencedMessage } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
@@ -1551,6 +1553,38 @@ async function main() {
     ttlMs: IMAGE_JOB_TTL_MS,
   });
 
+  /**
+   * view_message 要讀的頻道：預設目前會話；給了 channel 就讀同一個伺服器的其他頻道。
+   * 能不能讀交給 Discord 的頻道權限判斷，這裡只擋跨伺服器與私聊：模型拿到的內容會貼進公開頻道，
+   * 不能讓它讀別的伺服器。`allow` / `deny.channels` 不擋這條唯讀路徑（管理頻道通常 bot 本來就沒有讀取權限）。
+   */
+  async function viewSourceChannel(channel, rawChannelId) {
+    const id = viewChannelId(rawChannelId);
+    if (id === null) throw toolError('channel 要是頻道 ID', 400);
+    if (!id) return channel;
+    if (!channel.guildId) throw toolError('私聊只能看目前的頻道', 400);
+    const found = await client.channels.fetch(id).catch(() => null);
+    if (!found?.isTextBased?.() || found.guildId !== channel.guildId) {
+      throw toolError('找不到那個頻道：只能用同一個伺服器、bot 看得到的頻道 ID', 404);
+    }
+    return found;
+  }
+
+  /** view_message 的 message：#編號（這個頻道看過的）或訊息 ID（Discord 訊息連結的最後一段）。 */
+  async function fetchViewMessage(key, source, current, rawMessage) {
+    const given = textArg(rawMessage);
+    // 給了別的頻道時不查 #編號：表綁目前會話，查到的 id 會抓錯頻道。
+    const lookup = (ref) => (source.id === current.id ? messageRefs.lookup(key, ref) : null);
+    const id = viewMessageTarget(given, lookup);
+    if (!id) throw toolError(`找不到訊息 ${given}：要用這個頻道出現過的 #編號，或訊息 ID`, 404);
+    const message = await source.messages.fetch(id).catch((error) => {
+      if (error?.code === 50001 || error?.code === 50013) throw toolError('bot 沒有這個頻道的讀取權限', 403);
+      return null;
+    });
+    if (!message) throw toolError(`訊息 ${given} 已經不存在（可能被刪了）`, 404);
+    return message;
+  }
+
   let gifCooldownUntil = 0;
   const agentHandlers = {
     // 每次回報（含 poll 續命）後存檔；存檔失敗只寫 log，不能讓回報變成 5xx。
@@ -1808,24 +1842,28 @@ async function main() {
     async view(body) {
       const viewStart = Date.now();
       const { key, channel } = await agentSender.resolve(body.token);
-      const target = await fetchByRef(key, textArg(body.message));
-      if (!canReadMessage(cfg.discord, target, client.user.id, ignoredUser)) throw toolError('這個人已退出或被封鎖，他的訊息不給讀', 403);
+      const source = await viewSourceChannel(channel, body.channel);
+      const target = await fetchViewMessage(key, source, channel, body.message);
+      // 唯讀不受 deny.users／deny.self 限制，只有模型自己的不理名單會擋。
+      if (ignoredUser(target.author?.id)) throw toolError('這個人在你的不理名單，他的訊息不讀', 403);
       const targetParts = messageParts(target);
       const self = target.author?.id === client.user.id ? '（你）' : '';
+      // 別的頻道不登記 #編號：編號表綁這個會話，之後 reply_to 會抓錯頻道。
+      const labelFor = (message) => (source.id === channel.id
+        ? `#${messageRefs.register(key, message.id)}`
+        : `頻道 ${source.id} 訊息 ${message.id}`);
       const lines = [
-        `#${messageRefs.register(key, target.id)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
+        `${labelFor(target)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
         `內容：${flat(labelEmojiTags(resolveMentions(withStickers(target), target), emojiCatalogs), VIEW_TEXT_MAX) || '（沒有文字）'}`,
       ];
       let repliedMessage = null;
       try {
-        // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它就看不懂在回什麼。
-        // 模型自己不理的人例外：他的話與圖都不帶。
+        // 引用是群友貼進來的公開內容，少了它就看不懂在回什麼；模型自己不理的人例外。
         const replied = await referencedMessage(target);
-        if (replied && !ignoredUser(replied.author?.id)
-          && (replied.author?.bot || !isSkippedMessage(replied.content, client.user.id))) {
+        if (replied && !ignoredUser(replied.author?.id)) {
           repliedMessage = replied;
           const mark = isSilentMessage(cfg.discord, replied, client.user.id) ? '⊘' : '';
-          lines.push(`回覆 #${messageRefs.register(key, replied.id)} ${mark}${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
+          lines.push(`回覆 ${labelFor(replied)} ${mark}${flat(authorName(replied), 40)}：${flat(labelEmojiTags(resolveMentions(withStickers(replied), replied), emojiCatalogs), 300) || '[沒有文字]'}`);
           // 被回覆的那則本身可能是 embed（例如其他 bot 的圖文）或是轉發，只寫「沒有文字」會讓模型看不到內容。
           lines.push(...embedLines(messageParts(replied).embeds, replied, '回覆的連結預覽'));
         }
@@ -1841,7 +1879,7 @@ async function main() {
       const targetPaths = linkPaths(targetParts.text);
       let fixMessages = [];
       if (targetPaths.length) {
-        const nearby = await channel.messages.fetch({ after: target.id, limit: 10, cache: false }).catch(() => null);
+        const nearby = await source.messages.fetch({ after: target.id, limit: 10, cache: false }).catch(() => null);
         fixMessages = [...(nearby?.values() ?? [])]
           .sort(bySnowflake)
           .filter((message) => message.author?.bot && message.author.id !== client.user.id
