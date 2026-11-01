@@ -52,8 +52,12 @@ import {
   describeSkipped,
   embedImages,
   fetchDiscordMedia,
+  loadReferenceImage,
+  parseDrawRef,
   prepareMediaBlock,
+  referenceRefsByUrl,
   resolveGeneratedImage,
+  resolveReferenceImage,
   stickerImages,
   stickerLabel,
   viewMediaItems,
@@ -96,7 +100,7 @@ import {
   messageRefOf,
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
-import { createBatcher, createTurnGate, formatBatch, repliedName, resolveMentions, visibleName } from '../src/core/discord-batch.mjs';
+import { createBatcher, createTurnGate, formatBatch, imageRefTag, repliedName, resolveMentions, visibleName } from '../src/core/discord-batch.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
@@ -109,6 +113,10 @@ function ok(cond, label) {
 }
 const throws = (fn, re, label) => {
   try { fn(); ok(false, `${label}（應該要拋錯）`); }
+  catch (error) { ok(re.test(String(error?.message ?? error)), label); }
+};
+const throwsAsync = async (fn, re, label) => {
+  try { await fn(); ok(false, `${label}（應該要拋錯）`); }
   catch (error) { ok(re.test(String(error?.message ?? error)), label); }
 };
 
@@ -570,6 +578,14 @@ console.log('## 7. dc-chat preset 與守衛');
       '守衛自己就擋檔名（外掛沒載入也讀不到 CWD 的圖）');
     ok(typeof imageGuard(imageExec({ inputImage: '／etc／passwd' })) === 'string',
       '守衛也擋全形斜線路徑');
+    ok(imageGuard(imageExec({ inputImage: 'ref:#k7f3ab/1' })) === undefined,
+      '使用者參考圖 ref:#編號/張數 放行');
+    ok(imageGuard(imageExec({ inputImage: 'self,ref:#k7f3ab/1' })) === undefined,
+      '角色代號和使用者參考圖可以混用');
+    ok(typeof imageGuard(imageExec({ inputImage: 'ref:../secret.png' })) === 'string',
+      '參考圖編號夾路徑要擋');
+    ok(typeof imageGuard(imageExec({ inputImage: 'ref:#k7f3ab/1,ref:#k7f3ab/2,ref:#k7f3ab/3' })) === 'string',
+      '使用者參考圖最多 2 張');
     ok(typeof imageGuard(imageExec({ outputDir: '/tmp/x' })) === 'string',
       '守衛自己就擋自填 outputDir');
     ok(typeof imageGuard({ name: 'write' }) === 'string', '開畫圖不放寬其他本機工具');
@@ -744,7 +760,7 @@ console.log('## 7c. 畫圖參數鎖');
     'characters.json 缺失時外掛仍可載入（指定角色時才報錯）');
 
   // 假的橋接端點：收 imageJob 回報。外掛只認 state/discord-agent.json 的格式。
-  async function startFakeBridge(fakeDir, reports, { cancelPoll = false, failPhase = '', failStatus = 500, failTimes = 0, endpointFile = '' } = {}) {
+  async function startFakeBridge(fakeDir, reports, { cancelPoll = false, failPhase = '', failStatus = 500, failTimes = 0, endpointFile = '', refPng = '' } = {}) {
     const http = await import('node:http');
     let failures = 0;
     const server = http.createServer((req, res) => {
@@ -753,6 +769,15 @@ console.log('## 7c. 畫圖參數鎖');
       req.on('end', () => {
         let body = null;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+        // 生圖參考圖：只有 /imageRef 這條路回圖；測試只認 #abc123。
+        if (req.url === '/imageRef') {
+          const good = Boolean(refPng) && /^#?abc123(\/\d+)?$/.test(String(body?.ref ?? ''));
+          res.writeHead(good ? 200 : 404, { 'content-type': 'application/json' });
+          res.end(good
+            ? JSON.stringify({ ok: true, name: 'ref.png', mimeType: 'image/png', data: refPng })
+            : '{"error":"no such ref"}');
+          return;
+        }
         if (body) reports.push(body);
         const fail = failPhase && body?.phase === failPhase && failures < failTimes;
         if (fail) failures += 1;
@@ -856,6 +881,108 @@ console.log(JSON.stringify({ ...fake.stats(), multi, bad, statuses: started.map(
     ok(stats?.calls?.[2]?.inputImage === fs.realpathSync(draw.SELF_SHEET) && hasOrder,
       '四個角色時第一張走 inputImage，其餘 -i 保持順序');
     fs.rmSync(path.join(draw.IMAGE_DIR, path.basename(fakeImage)), { force: true });
+    fs.rmSync(fakeDir, { recursive: true, force: true });
+  }
+
+  // 使用者參考圖：工具呼叫當下才向橋接要圖，寫成這次工作的暫存檔，跑完就刪。
+  {
+    const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-ref-'));
+    const fakeModule = path.join(fakeDir, 'codex.mjs');
+    const fakeImage = path.join(fakeDir, `dc-ref-${process.pid}.png`);
+    const refRoot = path.join(fakeDir, 'refs');
+    // 1×1 的 PNG，夠讓外掛寫檔、Codex 讀路徑。
+    const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    fs.writeFileSync(fakeImage, 'not a real png, but the test only checks the copy');
+    fs.writeFileSync(fakeModule, `
+import fs from 'node:fs';
+const REF_ROOT = ${JSON.stringify(`${refRoot}${path.sep}`)};
+export const DEFAULT_TIMEOUT_MS = 100;
+export function findCodexBin() { return '/fake/codex'; }
+const calls = [];
+export async function runCodexGenerate(options) {
+  const refArgs = (options.extraArgs ?? []).filter((arg) => String(arg).startsWith(REF_ROOT));
+  calls.push({
+    inputImage: options.inputImage,
+    prompt: options.prompt,
+    exists: options.inputImage ? fs.existsSync(options.inputImage) : null,
+    refArgs,
+    refArgsExist: refArgs.filter((arg) => fs.existsSync(arg)).length,
+  });
+  return { file: process.env.FAKE_IMAGE_FILE, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
+}
+export function stats() { return { calls }; }
+`);
+    const reports = [];
+    const bridge = await startFakeBridge(fakeDir, reports, { refPng: pngB64 });
+    const script = `
+import fs from 'node:fs';
+const plugin = await import(${JSON.stringify(pathToFileURL(drawPath).href)});
+let listener = null;
+let tool = null;
+plugin.apply({ on: (event, fn) => { if (event === 'tools/execute') listener = fn; }, tools: { register: (definition) => { tool = definition; } } });
+const run = async (args) => {
+  const exec = { name: 'generate_image', agent: { id: 'sess-ref' }, arguments: args };
+  try {
+    await listener(exec, async () => tool.execute(exec.arguments, { agent: exec.agent }));
+    return { ok: true, args: exec.arguments };
+  } catch (error) { return { ok: false, error: error.message }; }
+};
+const solo = await run({ prompt: 'add a party hat', inputImage: 'ref:#abc123/1' });
+const mixed = await run({ prompt: 'draw us together', inputImage: 'self,ref:#abc123/1' });
+const reversed = await run({ prompt: 'draw us together', inputImage: 'ref:#abc123/1,self' });
+const missing = await run({ prompt: 'x', inputImage: 'ref:#nope/1' });
+const tooMany = await run({ prompt: 'x', inputImage: 'ref:#abc123/1,ref:#abc123/1,ref:#abc123/1' });
+// 直接在 REF_DIR 根目錄放一個檔案：形狀不對，execute 自己就要擋。
+const strayPath = ${JSON.stringify(path.join(refRoot, 'stray.png'))};
+fs.writeFileSync(strayPath, Buffer.from(${JSON.stringify(pngB64)}, 'base64'));
+const stray = await tool.execute({ prompt: 'x', inputImage: strayPath }, { agent: { id: 'sess-ref' } })
+  .then(() => 'ok', () => 'rejected');
+fs.rmSync(strayPath, { force: true });
+await new Promise((resolve) => setTimeout(resolve, 400));
+const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
+const leftover = fs.existsSync(${JSON.stringify(refRoot)}) ? fs.readdirSync(${JSON.stringify(refRoot)}) : [];
+console.log(JSON.stringify({ solo, mixed, reversed, missing, tooMany, stray, stats: fake.stats(), leftover }));
+`;
+    const run = await runAsync(script, {
+      DC_AI_CODEX_MODULE: fakeModule,
+      FAKE_IMAGE_FILE: fakeImage,
+      DC_AGENT_FILE: bridge.file,
+      DC_IMAGE_REF_DIR: refRoot,
+    });
+    await bridge.close();
+    let result = null;
+    try { result = JSON.parse(run.stdout.trim()); } catch {}
+    const { solo, mixed, reversed, missing, tooMany, stray, stats, leftover } = result ?? {};
+    ok(run.status === 0 && solo?.ok && mixed?.ok && reversed?.ok,
+      `使用者參考圖會向橋接要圖並開始生圖${run.status === 0 ? '' : `（${(run.stderr ?? '').slice(0, 200)}）`}`);
+    ok(typeof solo?.args?.inputImage === 'string' && solo.args.inputImage.startsWith(refRoot),
+      'ref:#編號/張數 換成這次工作的暫存檔路徑');
+    ok(/the picture the user supplied/.test(solo?.args?.prompt ?? ''),
+      '使用者參考圖的 prompt 補上「保留本人、忽略背景」的說明');
+    ok(stats?.calls?.[0]?.exists === true, 'Codex 開跑時暫存檔還在');
+    ok(mixed?.args?.inputImage?.split(',')[0] === draw.SELF_SHEET
+      && mixed.args.inputImage.split(',')[1]?.startsWith(refRoot),
+      '角色代號與使用者參考圖按模型給的順序排');
+    ok(/image 1 = DeepSeek-chan/.test(mixed?.args?.prompt ?? '')
+      && /image 2 = the picture the user supplied/.test(mixed?.args?.prompt ?? ''),
+      '混用時 prompt 的 image 編號對到實際順序');
+    ok(/These are separate subjects/.test(mixed?.args?.prompt ?? ''),
+      '混用時要求不要把兩個人的特徵混在一起');
+    ok(reversed?.args?.inputImage?.startsWith(refRoot)
+      && reversed.args.inputImage.split(',')[1] === draw.SELF_SHEET,
+      '順序反過來也照模型給的排');
+    ok(/image 1 = the picture the user supplied/.test(reversed?.args?.prompt ?? ''),
+      '順序反過來時 image 1 就是使用者的圖');
+    ok(stats?.calls?.length === 3 && stats.calls.every((call) => call.exists),
+      '每個工作開跑時參考圖都還在');
+    ok(stats?.calls?.[1]?.refArgs?.length === 1 && stats.calls[1].refArgsExist === 1,
+      '第二張之後的參考圖走 -i，而且檔案真的存在');
+    ok(missing?.ok === false && /no such ref/.test(missing.error ?? ''),
+      '橋接說找不到時把原因回給模型');
+    ok(tooMany?.ok === false && /最多 2 張/.test(tooMany.error ?? ''),
+      '使用者參考圖超過 2 張直接拒絕');
+    ok(stray === 'rejected', 'REF_DIR 根目錄的檔案不能當參考圖');
+    ok(Array.isArray(leftover) && leftover.length === 0, '生圖結束後暫存目錄清乾淨');
     fs.rmSync(fakeDir, { recursive: true, force: true });
   }
 
@@ -3063,6 +3190,91 @@ console.log('## 8. 附件（圖片與影片）');
     }
     if (linked) throws(() => resolveGeneratedImage(genDir, 'link.png'), /符號連結/, '符號連結不送');
     fs.rmSync(parent, { recursive: true, force: true });
+  }
+
+  // 生圖參考圖：ref 解析與「這則訊息的第 n 張附件」。下載用注入的假函式，不連網。
+  {
+    ok(parseDrawRef('#k7f3ab/1')?.ref === 'k7f3ab' && parseDrawRef('#k7f3ab/1')?.index === 1,
+      'ref:#編號/張數 解析出編號與張數');
+    ok(imageRefTag('k7f3ab', 1) === '[圖 #k7f3ab/1]', '批次 prompt 的參考圖標記格式固定');
+    ok(parseDrawRef('k7f3ab')?.index === 1, '沒寫張數時預設第 1 張');
+    ok(parseDrawRef('k7f3ab/10')?.index === 10, '張數可以兩位數');
+    ok(parseDrawRef('') === null && parseDrawRef('#/1') === null && parseDrawRef('../k7f3ab/1') === null
+      && parseDrawRef('k7f3ab/0') === null, '壞格式回 null（空、沒有編號、路徑、0）');
+
+    const png = makePng(8, 8);
+    const message = {
+      id: '123456789012345678',
+      attachments: new Map([
+        ['1', att({ name: 'one.png' })],
+        ['2', att({ name: 'two.png' })],
+      ]),
+      stickers: new Map(),
+      embeds: [],
+    };
+    const image = await loadReferenceImage(message, 2, limits, { fetchMedia: async () => png });
+    ok(image.name === 'two.png' && image.mimeType === 'image/png' && Buffer.from(image.data, 'base64').equals(png),
+      '第 2 張附件抓成參考圖，位元組原樣回傳');
+    await throwsAsync(() => loadReferenceImage(message, 3, limits, { fetchMedia: async () => png }),
+      /只有 2 張/, '張數超出範圍回清楚的原因');
+    await throwsAsync(() => loadReferenceImage({ ...message, attachments: new Map() }, 1, limits, { fetchMedia: async () => png }),
+      /沒有.*附件/, '沒有附件時回清楚的原因');
+    const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    await throwsAsync(() => loadReferenceImage(message, 1, limits, { fetchMedia: async () => gif }),
+      /動圖/, '動圖不當參考圖');
+    await throwsAsync(() => loadReferenceImage(message, 1, limits, { fetchMedia: async () => Buffer.from('definitely not an image') }),
+      /不是 PNG/, '認不出來的檔案擋下來');
+
+    // 會話範圍：sessionId 必須還是這個頻道的活動會話；#編號 只查本頻道登記過的訊息。
+    const reverse = new Map([['sess-1', 'ch:1']]);
+    const sessions = { 'ch:1': 'sess-1' };
+    const refs = createMessageRefs();
+    const ref = refs.register('ch:1', message.id);
+    const channel = { messages: { fetch: async (id) => (id === message.id ? message : null) } };
+    const solo = await resolveReferenceImage({
+      sessionId: 'sess-1', ref: `#${ref}/1`, reverse, sessions, refs,
+      resolveChannel: async () => channel, limits, fetchMedia: async () => png,
+    });
+    ok(solo.name === 'one.png', 'resolveReferenceImage 用 #編號找到訊息裡的圖');
+    await throwsAsync(() => resolveReferenceImage({
+      sessionId: 'sess-1', ref: `#${ref}/1`, reverse, sessions, refs,
+      resolveChannel: async () => channel, limits, enabled: false, fetchMedia: async () => png,
+    }), /沒開圖片功能/, 'media 關掉時拿不到參考圖');
+    await throwsAsync(() => resolveReferenceImage({
+      sessionId: 'sess-2', ref: `#${ref}/1`, reverse, sessions, refs,
+      resolveChannel: async () => channel, limits, fetchMedia: async () => png,
+    }), /已經結束/, '別的會話拿不到參考圖');
+    await throwsAsync(() => resolveReferenceImage({
+      sessionId: 'sess-1', ref: '#missing/1', reverse, sessions, refs,
+      resolveChannel: async () => channel, limits, fetchMedia: async () => png,
+    }), /找不到訊息/, '沒登記過的編號查不到');
+    await throwsAsync(() => resolveReferenceImage({
+      sessionId: 'sess-1', ref: `#${ref}/1`, reverse, sessions, refs,
+      resolveChannel: async () => ({ messages: { fetch: async () => null } }), limits, fetchMedia: async () => png,
+    }), /不存在/, '訊息被刪了就說清楚');
+    await throwsAsync(() => resolveReferenceImage({
+      sessionId: 'sess-1', ref: '#/1', reverse, sessions, refs,
+      resolveChannel: async () => channel, limits, fetchMedia: async () => png,
+    }), /格式不對/, '格式不對回 400');
+
+    // view_message 的參考圖清單：只有附件／貼圖才有 ref，被擋掉的附件不佔編號。
+    const sticker = { id: '9', name: 's', format: 1, url: 'https://cdn.discordapp.com/stickers/9.png' };
+    const withSticker = {
+      id: '123456789012345679',
+      attachments: new Map([
+        ['1', att({ name: 'ok.png' })],
+        ['2', att({ name: 'big.png', size: limits.maxBytes + 1, url: 'https://cdn.discordapp.com/attachments/1/2/big.png' })],
+        ['3', att({ name: 'skip.pdf', contentType: 'application/pdf', url: 'https://cdn.discordapp.com/attachments/1/2/skip.pdf' })],
+      ]),
+      stickers: new Map([['9', sticker]]),
+      embeds: [],
+    };
+    const urlRefs = referenceRefsByUrl([withSticker, null], limits, () => '#abc123');
+    ok(urlRefs.get('https://cdn.discordapp.com/attachments/1/2/a.png?ex=1') === 'ref:#abc123/1',
+      'view_message 的附件對到 ref:#編號/1');
+    ok(urlRefs.get(sticker.url) === 'ref:#abc123/2', '貼圖接在附件後面算第 2 張');
+    ok(![...urlRefs.keys()].some((url) => url.includes('big.png')), '被擋掉的附件不佔編號');
+    ok(![...urlRefs.keys()].some((url) => url.includes('skip.pdf')), '不是圖片的附件不佔編號');
   }
 
   const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;

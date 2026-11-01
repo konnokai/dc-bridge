@@ -147,7 +147,9 @@ import {
   fetchDiscordMedia,
   prepareMediaBlock,
   prepareVideoUrlBlock,
+  referenceRefsByUrl,
   resolveGeneratedImage,
+  resolveReferenceImage,
   stickerImages,
   stickerLabel,
   viewMediaItems,
@@ -156,7 +158,7 @@ import { fetchStreamUrl, videoLinks } from './core/discord-video-link.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, createTurnGate, defang, formatBatch, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch, imageRefTag, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
@@ -1659,6 +1661,17 @@ async function main() {
         persistImageJobs();
       }
     },
+    // 生圖參考圖：外掛用 sessionId + `#編號/張數` 來拿群友貼的圖。
+    imageRef: (body) => resolveReferenceImage({
+      sessionId: body?.sessionId,
+      ref: body?.ref,
+      reverse,
+      sessions,
+      refs: messageRefs,
+      resolveChannel,
+      limits: cfg.discord.media,
+      enabled: cfg.discord.media.enabled,
+    }),
     async send(body) {
       const refusal = await prepareRefusal(body);
       if (refusal?.replaced) return refusal.replaced;
@@ -1969,6 +1982,10 @@ async function main() {
 
       // 圖片：本則與被回覆那則的附件與連結預覽、貼圖（只用 Discord 代理過的網址），
       // 一起下載、各自失敗只少那張。
+      // 同一個頻道的訊息才有 #編號，所以只有這裡的圖能當生圖參考（ref:#編號/張數）。
+      const refByUrl = source.id === channel.id && cfg.discord.media.enabled
+        ? referenceRefsByUrl([target, repliedMessage], cfg.discord.media, labelFor)
+        : new Map();
       const media = collectMediaAttachments(viewMediaItems({ target, replied: repliedMessage, fixMessages }), cfg.discord.media);
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
         const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media);
@@ -1977,9 +1994,15 @@ async function main() {
           data: prepared.block.data,
           mimeType: prepared.block.mediaType,
           note: item.mime?.startsWith('video/') ? prepared.note : '',
+          ref: refByUrl.get(item.url) ?? '',
         };
       }));
-      const images = settled.filter((r) => r.status === 'fulfilled').map(({ value }) => ({ data: value.data, mimeType: value.mimeType }));
+      const kept = settled.filter((result) => result.status === 'fulfilled');
+      const images = kept.map(({ value }) => ({ data: value.data, mimeType: value.mimeType }));
+      // 圖片的實際順序（扣掉下載失敗的）才對得上模型看到的第幾張，所以等 settled 之後才算。
+      const imageRefs = kept
+        .map(({ value }, index) => (value.ref ? `圖 ${index + 1} = ${value.ref}` : ''))
+        .filter(Boolean);
       const videoNotes = settled.flatMap((r) => (r.status === 'fulfilled' && r.value.note ? [r.value.note] : []));
       const missed = [
         ...media.skipped.map((s) => `${flat(s.name, 60)}（${s.reason}）`),
@@ -2017,6 +2040,7 @@ async function main() {
       }
 
       if (images.length) lines.push(`附上 ${images.length} 張圖。`);
+      if (imageRefs.length) lines.push(`生圖參考（generate_image 的 inputImage 填這個）：${imageRefs.join('、')}。`);
       if (videoNotes.length) lines.push(`影片說明：${videoNotes.map((note) => flat(note, 80)).join('；')}`);
       if (missed.length) lines.push(`看不到的圖：${missed.join('；')}`);
       return { text: lines.join('\n'), images };
@@ -3099,21 +3123,28 @@ async function main() {
     const skipped = [];
     for (const entry of job.entries) {
       skipped.push(...(entry.media?.skipped ?? []));
+      const entryRef = messageRefs.register(key, entry.id);
       // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
       // 到這裡才讀 message.embeds：批次已經等過 debounce，多半拿到了。沒有就只剩網址。
       // 轉發的預覽圖在快照裡，一起算。
+      const attachments = entry.media?.accepted ?? [];
       const items = cfg.discord.media.enabled
-        ? [...(entry.media?.accepted ?? []), ...embedImages(messageParts(entry.message).embeds)]
+        ? [...attachments, ...embedImages(messageParts(entry.message).embeds)]
         : [];
       for (const item of items.slice(cfg.discord.media.maxCount)) {
         skipped.push({ name: item.name, reason: `一則訊息最多 ${cfg.discord.media.maxCount} 張` });
       }
       const imageTags = [];
-      for (const item of items.slice(0, cfg.discord.media.maxCount)) {
+      for (const [index, item] of items.slice(0, cfg.discord.media.maxCount).entries()) {
         if (images.length >= cfg.discord.media.maxCount) {
           skipped.push({ name: item.name, reason: `一批最多 ${cfg.discord.media.maxCount} 張` });
           continue;
         }
+        // 附件與貼圖可以拿 #編號/張數 當生圖參考；連結預覽的圖不是那則訊息的附件，只標 [圖]。
+        // GIF 一律不標：參考圖拒收 GIF，標了只會讓模型白試一次。
+        const refTag = index < attachments.length && item.mime !== 'image/gif' && !item.mime?.startsWith('video/')
+          ? imageRefTag(entryRef, index + 1)
+          : '';
         try {
           const buffer = await fetchDiscordMedia(item.url, cfg.discord.media);
           const prepared = await prepareMediaBlock(buffer, item.name, cfg.discord.media);
@@ -3121,7 +3152,7 @@ async function main() {
             images.push(prepared.block);
             // 影片的 note 要讓模型看到：它得知道只抽了前幾十秒、這是一張格子圖。
             const note = item.mime?.startsWith('video/') ? flat(prepared.note, 80) : '';
-            imageTags.push(note ? `[圖${images.length}：${note}]` : `[圖${images.length}]`);
+            imageTags.push(refTag || (note ? `[圖：${note}]` : '[圖]'));
             if (prepared.note) log(`圖片 ${item.name}：${prepared.note}`);
           } else {
             skipped.push({ name: item.name, reason: prepared.error });
@@ -3130,6 +3161,8 @@ async function main() {
           skipped.push({ name: item.name, reason: error?.message ?? String(error) });
         }
       }
+      // 編輯過的訊息，圖片張數或順序可能跟模型記得的不一樣；標一下，叫它不確定就再看一次。
+      if (entry.message?.editedAt && imageTags.some((tag) => tag.startsWith('[圖 #'))) imageTags.push('[已編輯]');
       let quote = '';
       try {
         const referenced = await referencedMessage(entry.message);
@@ -3154,7 +3187,7 @@ async function main() {
         rawText: entry.rawText ?? entry.text,
         direct: entry.direct,
         isOwner: entry.isOwner,
-        ref: messageRefs.register(key, entry.id),
+        ref: entryRef,
         quote,
         // 引用內容看不到時（抓不到或被回覆的那則沒內容），至少寫出在回誰。
         replyName: quote ? '' : repliedName(entry.message),

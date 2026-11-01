@@ -125,6 +125,81 @@ export async function fetchDiscordMedia(url, { maxBytes, timeoutMs = 20_000 } = 
 }
 
 /**
+ * 生圖參考圖的編號：`#k7f3ab/1`（第 1 張）或 `k7f3ab`（預設第 1 張）。
+ * 張數從 1 起算；格式不對回 null，由呼叫端回一句看得懂的錯。
+ */
+export function parseDrawRef(value) {
+  const match = /^#?([0-9a-z]{4,12})(?:\/([1-9]\d?))?$/i.exec(String(value ?? '').trim());
+  return match ? { ref: match[1].toLowerCase(), index: match[2] ? Number(match[2]) : 1 } : null;
+}
+
+const drawRefError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
+
+/**
+ * view_message 用：把每則訊息的附件／貼圖對應到 `ref:#編號/張數`，模型才知道哪張圖能當
+ * 生圖參考。名單跟 `loadReferenceImage` 完全一樣（附件＋貼圖、同一套上限），編號才對得上。
+ * 連結預覽的圖不在名單裡：它們不是訊息附件，`/imageRef` 也拿不到。
+ * @param labelOf (message) => '#編號'；別的頻道沒有編號，呼叫端自己過濾
+ * @returns {Map<string, string>} 附件網址 → `ref:#編號/張數`
+ */
+export function referenceRefsByUrl(messages, limits, labelOf) {
+  const refs = new Map();
+  for (const message of messages) {
+    if (!message) continue;
+    const parts = messageParts(message);
+    const { accepted } = collectMediaAttachments([...parts.attachments, ...stickerImages(parts.stickers)], limits);
+    accepted.forEach((item, index) => refs.set(item.url, `ref:${labelOf(message)}/${index + 1}`));
+  }
+  return refs;
+}
+
+/**
+ * 一則訊息的第 index 張附件（1 起算）→ 給 Codex 的靜態參考圖。
+ * 來源跟批次 prompt 的 `[圖 #編號/張數]` 一樣是「附件 + 貼圖」，編號才對得上。
+ * 影片與動圖不收：模型看到的版本是多格拼圖，拿去當參考只會畫出格子。
+ * @param options.fetchMedia 測試注入用，預設抓 Discord CDN
+ * @returns {Promise<{name:string, mimeType:string, data:string}>}
+ */
+export async function loadReferenceImage(message, index, limits, { fetchMedia = fetchDiscordMedia } = {}) {
+  const parts = messageParts(message);
+  const { accepted, skipped } = collectMediaAttachments([...parts.attachments, ...stickerImages(parts.stickers)], limits);
+  if (!accepted.length) {
+    throw drawRefError(`這則訊息沒有能當參考圖的附件${skipped[0]?.reason ? `（${skipped[0].reason}）` : ''}`, 400);
+  }
+  if (!Number.isInteger(index) || index < 1 || index > accepted.length) {
+    throw drawRefError(`這則訊息只有 ${accepted.length} 張附件，張數要填 1~${accepted.length}`, 400);
+  }
+  const item = accepted[index - 1];
+  const buffer = await fetchMedia(item.url, limits);
+  if (sniffVideo(buffer)) throw drawRefError('影片不能當參考圖，請用靜態圖片', 400);
+  const info = sniffImage(buffer);
+  if (!info) throw drawRefError('附件不是 PNG/JPEG/WebP 圖片', 400);
+  if (info.format === 'gif' || info.animated) throw drawRefError('GIF 或動圖不能當參考圖，請用 PNG/JPEG/WebP', 400);
+  const prepared = await prepareMediaBlock(buffer, item.name, limits);
+  if (!prepared.block) throw drawRefError(prepared.error, 400);
+  return { name: safeName(item.name), mimeType: prepared.block.mediaType, data: prepared.block.data };
+}
+
+/**
+ * 生圖參考圖的入口：外掛用 sessionId + `#編號/張數` 來拿圖。
+ * `messageRefs` 綁會話 key，所以只拿得到這個頻道登記過的訊息；別的伺服器、私聊、
+ * 已刪除的訊息一律拿不到。依賴從外面給，測試不用起橋接。
+ */
+export async function resolveReferenceImage({ sessionId, ref, reverse, sessions, refs, resolveChannel, limits, enabled = true, fetchMedia }) {
+  if (enabled === false) throw drawRefError('這個伺服器沒開圖片功能，不能拿參考圖', 403);
+  const key = reverse.get(String(sessionId ?? ''));
+  if (!key || sessions[key] !== sessionId) throw drawRefError('這個會話已經結束，拿不到參考圖', 403);
+  const parsed = parseDrawRef(ref);
+  if (!parsed) throw drawRefError('參考圖編號格式不對：要填 ref:#編號/張數', 400);
+  const id = refs.lookup(key, parsed.ref);
+  if (!id) throw drawRefError(`找不到訊息 #${parsed.ref}：只能用 prompt 裡出現過的 #編號`, 404);
+  const channel = await resolveChannel(key);
+  const message = await channel.messages.fetch(id).catch(() => null);
+  if (!message) throw drawRefError(`訊息 #${parsed.ref} 已經不存在（可能被刪了），這張圖不能當參考`, 404);
+  return loadReferenceImage(message, parsed.index, limits, { fetchMedia });
+}
+
+/**
  * 把【生圖完成】提示裡的 path 收斂成可直接上傳的本機檔案。
  *
  * 只認 dir 底下的檔名：模型給完整路徑或只給檔名都行，但 `..`、絕對路徑、
