@@ -21,6 +21,7 @@ const tests = [
   'test-discord-image-jobs.mjs',
   'test-discord-memory.mjs',
   'test-discord-notes.mjs',
+  'test-discord-dev-feedback.mjs',
   'test-discord-followup.mjs',
   'test-discord-slang.mjs',
   'test-discord-trigger-stats.mjs',

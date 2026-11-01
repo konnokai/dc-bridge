@@ -977,6 +977,76 @@ try {
     }
   });
 
+  if (!original) await test('Discord 控制台：回饋分頁列出意見、可跳到觸發訊息、不執行模型寫的 HTML', async () => {
+    let items = [{
+      id: 'df1',
+      at: '2026-11-01T04:05:06.000Z',
+      updatedAt: '2026-11-01T05:06:07.000Z',
+      updatedBy: 'ch:9',
+      updatedByLabel: '#別的頻道',
+      key: 'ch:3',
+      label: '#閒聊 · 伺服器',
+      sessionId: 'ses_0123456789abcdefghijklmn',
+      guildId: '2',
+      channelId: '3',
+      messageIds: ['4', '5'],
+      users: [{ userId: '6', name: '小明' }],
+      reason: '<img src=x onerror="window.__pwned=1">',
+      need: '第一行\n第二行',
+      expected: '能排版',
+    }];
+    let deleted = '';
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        notes: () => ({ enabled: true, notes: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        logs: () => [],
+        devFeedback: () => ({ items }),
+        deleteDevFeedback: (id) => {
+          if (id !== 'df1') return false;
+          items = items.filter((item) => item.id !== id);
+          deleted = id;
+          return true;
+        },
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1204, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      p.on('dialog', (dialog) => dialog.accept());
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#dev-feedback`);
+      await p.waitForFunction(() => document.querySelectorAll('#dev-feedback-rows tr').length === 1);
+      assert.equal(await p.locator('#dev-feedback-rows img').count(), 0, '模型寫的 HTML 不會變成節點');
+      assert.equal(await p.evaluate(() => window.__pwned ?? 0), 0, 'onerror 不會執行');
+      assert.match(await p.locator('#dev-feedback-rows td').nth(2).textContent(), /<img src=x/);
+      assert.match(await p.locator('#dev-feedback-count').textContent(), /1 筆/);
+      assert.match(await p.locator('#dev-feedback-rows td').nth(1).textContent(), /#閒聊 · 伺服器/);
+      assert.match(await p.locator('#dev-feedback-rows td').nth(1).textContent(), /觸發：小明/);
+      assert.match(await p.locator('#dev-feedback-rows td').nth(0).textContent(), /已編輯/);
+      assert.match(await p.locator('#dev-feedback-rows td').nth(0).textContent(), /由 #別的頻道/);
+      assert.equal(await p.locator('#dev-feedback-rows a').first().getAttribute('href'),
+        'https://discord.com/channels/2/3/4', '第一則觸發訊息有 Discord 跳轉連結');
+
+      const deletedResponse = p.waitForResponse((r) => new URL(r.url()).pathname === '/api/dev-feedback/delete');
+      await p.locator('#dev-feedback-rows button[data-dev-feedback-id]').click();
+      await deletedResponse;
+      await p.waitForFunction(() => document.querySelector('#dev-feedback-rows td').textContent.includes('還沒有人'));
+      assert.equal(deleted, 'df1', '刪除會呼叫 handler');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('No JavaScript errors, unknown API routes or external requests', async () => {
     assert.deepEqual(errors, []);
     assert.deepEqual(fixture.unknownRequests, []);

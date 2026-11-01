@@ -388,7 +388,7 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 控制台：http://127.0.0.1:3110/?token=<自動產生的 token>
 ```
 
-頁面分成 8 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
+頁面分成 9 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
 可以用滑鼠點，也可以在分頁列上用左右方向鍵切換。
 
 - **總覽**（`#overview`）
@@ -405,6 +405,10 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 - **對話**（`#triggers`）：誰觸發過對話、各自幾次、畫圖幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）
 - **會話**（`#sessions`）：頻道／伺服器名稱（私聊顯示使用者名稱）、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
+- **回饋**（`#dev-feedback`）：模型用 `submit_feedback` 送出的功能申請與意見，新的排前面。
+  每筆有時間、頻道／伺服器、觸發者、當時的 DSH session、原因／需求／預期結果，以及觸發那一輪訊息的 Discord 跳轉連結；
+  編輯過會標「已編輯」，從別的頻道改的會一併顯示來源；可以逐筆刪除。內容只存在 `state/discord-dev-feedback.json`，不會出現在頻道。
+  端點：`GET /api/dev-feedback`、`POST /api/dev-feedback/delete`
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
     `requireMentionInChannel`（一行一個 `頻道ID=true|false`）直接編輯，存檔後**立即生效**並寫回 `config.json`。
@@ -774,7 +778,7 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
 
-模型能用的工具就是下面這些（2026-10-31 以 `src/mcp-discord.js` 與 preset 現況為準）。
+模型能用的工具就是下面這些（2026-11-01 以 `src/mcp-discord.js` 與 preset 現況為準）。
 `dc-chat` 的 `dc-tool-restrict` 會藏掉 DSH 其他內建工具（讀寫檔、shell 等）。
 `mcp__discord__*` 與 `mcp__slang__*` 的 `token` 由 DSH 外掛 `dc-session-token` 自動帶入
 （模型看不到令牌，也不用填）；下面只列其他參數：
@@ -860,6 +864,16 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 - `mcp__discord__search_notes`（`query`／`days` 可省略）：查這個頻道的筆記；`query` 的每個詞都要出現，
   `days` 只看最近幾天。回傳的編號給 `forget_note` 用
 - `mcp__discord__forget_note`（`number`）：刪掉這個頻道第 `number` 條筆記（舊→新的編號）
+- `mcp__discord__submit_feedback`（`reason`、`need`、`expected`）：把「覺得自己缺某個能力／工具」或「對回覆方式、規則、功能的建議」
+  送給開發者，各欄最多 500 字。一輪最多 1 筆；同一個頻道／私聊 24 小時最多 5 筆，全部加起來最多 20 筆。
+  所有頻道 24 小時內 `need` 相同的內容不會重複記，會回既有那筆的 id（不限同一個頻道）。
+  內容只存在 `state/discord-dev-feedback.json`，控制台「回饋」分頁看得到；不會回到頻道，也不會出現在進度訊息。
+  橋接會自動附上當時的 session、頻道／伺服器、觸發者與觸發訊息 id，方便回追上下文。敏感資訊閘門照樣適用
+- `mcp__discord__list_feedback`（沒有其他參數）：查自己在**所有頻道／私聊**最近送過的 20 筆回饋（新→舊，含 id 與來源），
+  私聊來源只顯示「私聊」、不顯示對方名字。送新的之前先看有沒有提過；這是全域清單，開發者要看的就是同一份。
+  工具說明要求它不要在頻道貼出清單
+- `mcp__discord__edit_feedback`（`id`、`reason`、`need`、`expected`）：改自己送過的一筆回饋，`id` 用 `list_feedback` 的，
+  **不限頻道**；一輪最多 2 筆。改過會記 `updatedAt`，控制台標「已編輯」；從別的頻道改的會一併顯示來源
 - `mcp__slang__lookup_slang`（`term`）：查黑話詞庫；`term` 也可以是一小句，只要包含那個詞就查得到。
   回每個詞的狀態（候選／已確認／已拒絕）、出現次數、意思與用法；沒收錄就回沒有
 - `mcp__slang__record_slang`（`term`、`meaning`，`usage`／`examples` 可省略）：收成候選。已經有同一個詞就回「已收錄過」，
@@ -922,7 +936,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
 `POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
-`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 

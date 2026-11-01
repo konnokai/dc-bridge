@@ -126,6 +126,7 @@
     <button role="tab" id="tabbtn-triggers" aria-controls="tab-triggers" data-tab="triggers">對話</button>
     <button role="tab" id="tabbtn-memory" aria-controls="tab-memory" data-tab="memory">記憶</button>
     <button role="tab" id="tabbtn-sessions" aria-controls="tab-sessions" data-tab="sessions">會話</button>
+    <button role="tab" id="tabbtn-dev-feedback" aria-controls="tab-dev-feedback" data-tab="dev-feedback">回饋</button>
     <button role="tab" id="tabbtn-settings" aria-controls="tab-settings" data-tab="settings">設定</button>
     <button role="tab" id="tabbtn-logs" aria-controls="tab-logs" data-tab="logs">日誌</button>
   </nav>
@@ -172,6 +173,20 @@
     <div class="row" style="margin-top:10px">
       <button id="usage-reset" class="ghost danger">清空帳本</button>
       <span id="usage-msg" class="msg"></span>
+    </div>
+  </section>
+  </div>
+
+  <div class="tab-panel" role="tabpanel" id="tab-dev-feedback" aria-labelledby="tabbtn-dev-feedback" hidden>
+  <section class="card">
+    <h2>功能申請與意見回饋 <span id="dev-feedback-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 submit_feedback 送出的意見，只存在本機 state/discord-dev-feedback.json，不會出現在頻道。時間下面的連結會開到觸發那一輪的訊息；session 是當時的 DSH 會話。</p>
+    <div class="table-wrap">
+      <table style="min-width:960px">
+        <colgroup><col style="width:13%"><col style="width:18%"><col><col><col><col style="width:64px"></colgroup>
+        <thead><tr><th>時間</th><th>頻道</th><th>原因</th><th>需求</th><th>預期結果</th><th></th></tr></thead>
+        <tbody id="dev-feedback-rows"></tbody>
+      </table>
     </div>
   </section>
   </div>
@@ -381,6 +396,7 @@
     if (focus) target.focus();
     if (location.hash !== '#' + target.dataset.tab) history.replaceState(null, '', '#' + target.dataset.tab);
     if (target.dataset.tab === 'triggers') void refreshTriggers();
+    if (target.dataset.tab === 'dev-feedback') void refreshDevFeedback();
   }
   document.getElementById('tabs').addEventListener('click', (event) => {
     const button = event.target.closest('[role="tab"]');
@@ -1014,6 +1030,39 @@
     )) : [el('tr', {}, el('td', { colSpan: 3, className: 'muted' }, '還沒有記住任何人。'))]));
   }
 
+  function renderDevFeedback(data) {
+    const rows = data?.items ?? [];
+    $('dev-feedback-count').textContent = `（${rows.length} 筆）`;
+    $('dev-feedback-rows').replaceChildren(...(rows.length ? rows.map((item) => {
+      const at = Date.parse(item.at);
+      const links = (item.messageIds ?? []).map((id, index) => el('a', {
+        href: `https://discord.com/channels/${item.guildId || '@me'}/${item.channelId}/${id}`,
+        target: '_blank',
+        rel: 'noopener',
+        textContent: `訊息 ${index + 1}`,
+      }));
+      const triggers = (item.users ?? []).map((user) => user.name || user.userId).filter(Boolean);
+      return el('tr', {},
+        el('td', {},
+          el('div', {}, Number.isFinite(at) ? new Date(at).toLocaleString('zh-TW', { hour12: false }) : item.at),
+          el('div', { className: 'muted', style: 'font-size:11px' }, fmtAgo(at)),
+          ...(item.updatedAt ? [el('div', { className: 'muted', style: 'font-size:11px' },
+            `已編輯 ${fmtAgo(Date.parse(item.updatedAt))}${item.updatedBy && item.updatedBy !== item.key ? `（由 ${item.updatedByLabel || item.updatedBy}）` : ''}`)] : []),
+          ...(links.length ? [el('div', { className: 'row', style: 'gap:6px;font-size:11px' }, ...links)] : []),
+        ),
+        el('td', {},
+          el('strong', {}, item.label || item.key),
+          el('div', { className: 'muted', style: 'font-size:11px' }, triggers.length ? `觸發：${triggers.join('、')}` : '觸發：自動參與'),
+          el('div', { className: 'muted mono', style: 'font-size:11px' }, item.sessionId || '—'),
+        ),
+        el('td', { style: 'white-space:pre-wrap' }, item.reason),
+        el('td', { style: 'white-space:pre-wrap' }, item.need),
+        el('td', { style: 'white-space:pre-wrap' }, item.expected),
+        el('td', {}, el('button', { className: 'danger', dataset: { devFeedbackId: item.id }, textContent: '刪除' })),
+      );
+    }) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有人送過回饋。'))]));
+  }
+
   function renderNotes(data) {
     const rows = data?.notes ?? [];
     $('notes-count').textContent = data?.enabled
@@ -1107,12 +1156,19 @@
     } catch { /* 5 秒後的 refresh 會再試 */ }
   }
 
+  async function refreshDevFeedback() {
+    try {
+      renderDevFeedback(await api('/api/dev-feedback'));
+    } catch { /* 5 秒後的 refresh 會再試 */ }
+  }
+
   async function refresh() {
     const triggersPromise = !$('tab-triggers').hidden ? api('/api/triggers') : Promise.resolve(null);
+    const devFeedbackPromise = !$('tab-dev-feedback').hidden ? api('/api/dev-feedback') : Promise.resolve(null);
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
-      api('/api/notes'), api('/api/codex-usage'),
+      api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise,
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -1127,6 +1183,7 @@
     if (results[8].status === 'fulfilled' && results[8].value) renderTriggers(results[8].value);
     if (results[9].status === 'fulfilled') renderNotes(results[9].value);
     if (results[10].status === 'fulfilled') renderCodexQuota(results[10].value);
+    if (results[11].status === 'fulfilled' && results[11].value) renderDevFeedback(results[11].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -1339,6 +1396,22 @@
     button.disabled = true;
     try {
       await api('/api/notes/delete', { method: 'POST', body: JSON.stringify({ id: button.dataset.noteId }) });
+      await refresh();
+    } catch (error) {
+      alert('刪除失敗：' + error.message);
+      await refresh();
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('dev-feedback-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-dev-feedback-id]');
+    if (!button) return;
+    if (!confirm('刪掉這筆回饋？')) return;
+    button.disabled = true;
+    try {
+      await api('/api/dev-feedback/delete', { method: 'POST', body: JSON.stringify({ id: button.dataset.devFeedbackId }) });
       await refresh();
     } catch (error) {
       alert('刪除失敗：' + error.message);

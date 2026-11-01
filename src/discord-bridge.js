@@ -58,6 +58,20 @@ import { createQuietState, formatQuietUntil, isQuietBatchSkipped, QUIET_MAX_MINU
 import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import {
+  DEV_FEEDBACK_EDITS_PER_TURN,
+  DEV_FEEDBACK_WRITES_PER_TURN,
+  deleteDevFeedbackById,
+  devFeedbackOverview,
+  formatDevFeedbackList,
+  loadDevFeedbackFile,
+  recentDevFeedback,
+  recordDevFeedback,
+  saveDevFeedbackFile,
+  updateDevFeedback,
+  validateDevFeedbackFields,
+  validateDevFeedbackSubmit,
+} from './core/discord-dev-feedback.mjs';
+import {
   NOTE_DAYS_DEFAULT,
   NOTE_DAYS_MAX,
   NOTE_MAX_CHARS,
@@ -170,6 +184,7 @@ const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
+const DEV_FEEDBACK_FILE = path.join(STATE_DIR, 'discord-dev-feedback.json');
 const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
 const CODEX_RESET_FILE = path.join(STATE_DIR, 'discord-codex-reset.json');
 const EMOJI_USAGE_FILE = path.join(STATE_DIR, 'discord-emoji-usage.json');
@@ -437,6 +452,33 @@ async function main() {
     }
   }
 
+  // 開發回饋：模型用 submit_feedback 送出的意見，只有控制台看得到。
+  const devFeedbackLoaded = loadDevFeedbackFile(DEV_FEEDBACK_FILE);
+  const devFeedbackStore = devFeedbackLoaded.store;
+  if (devFeedbackLoaded.warning) log(`⚠️ 開發回饋：${devFeedbackLoaded.warning}`);
+  let devFeedbackDirty = false;
+  let devFeedbackSaveTimer = null;
+
+  function markDevFeedbackDirty() {
+    devFeedbackDirty = true;
+    if (devFeedbackSaveTimer) return;
+    devFeedbackSaveTimer = setTimeout(() => {
+      devFeedbackSaveTimer = null;
+      flushDevFeedback();
+    }, 2000);
+    devFeedbackSaveTimer.unref?.();
+  }
+
+  function flushDevFeedback() {
+    if (!devFeedbackDirty) return;
+    try {
+      saveDevFeedbackFile(DEV_FEEDBACK_FILE, devFeedbackStore);
+      devFeedbackDirty = false;
+    } catch (error) {
+      log(`開發回饋存檔失敗：${error?.message ?? error}`);
+    }
+  }
+
   // system prompt 重載的交接摘要：舊會話產生、新會話的第一則 prompt 用一次，用量很小所以直接同步存檔。
   const reloadLoaded = loadReloadFile(RELOAD_FILE);
   const reloadStore = reloadLoaded.store;
@@ -502,6 +544,8 @@ async function main() {
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
   const notesShown = new Map(); // key -> Map<noteId, { at, shownAt }>：這個會話帶過哪些頻道筆記
   const noteWrites = new Map(); // key -> 這一輪寫了幾條頻道筆記
+  const devFeedbackWrites = new Map(); // key -> 這一輪送了幾筆開發回饋
+  const devFeedbackEdits = new Map(); // key -> 這一輪改了幾個開發回饋
   const slangWrites = new Map(); // key -> 這一輪自己收錄了幾次黑話／標籤
   const slangShown = new Map(); // key -> Map：這個會話帶過的黑話（逐條）和頻道風格區塊
   const emojiShown = new Map(); // key -> Map：這個會話帶過的【常用表情】
@@ -541,6 +585,7 @@ async function main() {
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushDevFeedback(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
   });
@@ -712,6 +757,9 @@ async function main() {
   // 模型要對哪一則訊息按 ❌ 用：跟著批次排隊，回合開始時取出，避免拿到別批的訊息。
   const pendingDirectMessages = new Map(); // key -> {{userId,id}[]}[]（已投遞、回合還沒開始）
   const turnDirectMessages = new Map(); // key -> 目前這個回合直接叫 bot 的訊息
+  // 自由參與的回合沒有「直接叫 bot」的訊息，退而記這批最後一則，回饋才追得回上下文。
+  const pendingLastMessages = new Map(); // key -> string[]（已投遞、回合還沒開始）
+  const turnLastMessage = new Map(); // key -> 目前這個回合最後一則訊息 id
   const emojiDir = cfg.discord.emoji.dir ? path.resolve(ROOT, cfg.discord.emoji.dir) : path.join(STATE_DIR, 'discord-emoji');
   let emojiCatalogs = loadCatalogs(emojiDir);
   let emojiLoadedAt = Date.now();
@@ -958,6 +1006,8 @@ async function main() {
     memoryWrites.delete(key);
     notesShown.delete(key);
     noteWrites.delete(key);
+    devFeedbackWrites.delete(key);
+    devFeedbackEdits.delete(key);
     slangWrites.delete(key);
     slangShown.delete(key);
     emojiShown.delete(key);
@@ -971,6 +1021,8 @@ async function main() {
     turnDirect.delete(key);
     pendingDirectMessages.delete(key);
     turnDirectMessages.delete(key);
+    pendingLastMessages.delete(key);
+    turnLastMessage.delete(key);
     const entry = pending.get(key);
     if (entry) {
       clearTimeout(entry.timer);
@@ -1586,6 +1638,18 @@ async function main() {
   }
 
   let gifCooldownUntil = 0;
+
+  /** 回饋記錄的來源標籤：頻道帶 #名稱 · 伺服器；私聊帶使用者名稱（只給控制台看）。 */
+  function feedbackLabelFor(key, channel) {
+    const id = key.slice(key.indexOf(':') + 1);
+    const user = key.startsWith('dm:') ? (channel?.recipient ?? client.users.cache.get(id)) : null;
+    return sessionLabelFor(key, {
+      channelName: channel?.name,
+      guildName: channel?.guild?.name,
+      userName: user?.displayName || user?.username,
+    });
+  }
+
   const agentHandlers = {
     // 每次回報（含 poll 續命）後存檔；存檔失敗只寫 log，不能讓回報變成 5xx。
     imageJob: async (body) => {
@@ -2122,6 +2186,78 @@ async function main() {
       log(`MCP 刪頻道筆記 ${key}（第 ${number} 條「${flat(removed.text, 60)}」，剩 ${left.length} 條）`);
       return { text: left.length ? `已刪除「${flat(removed.text, 60)}」。剩下的筆記：\n${formatNoteList(left)}` : `已刪除「${flat(removed.text, 60)}」，這個頻道沒有筆記了。` };
     },
+    // 開發回饋：模型覺得缺能力或有意見時送給開發者。內容只進控制台，不回到頻道。
+    async 'dev-feedback'(body) {
+      const { sessionId, key, channel } = await agentSender.resolve(body.token);
+      const result = validateDevFeedbackSubmit(devFeedbackStore, {
+        key,
+        reason: body.reason,
+        need: body.need,
+        expected: body.expected,
+        usedThisTurn: devFeedbackWrites.get(key) ?? 0,
+      });
+      if (result.duplicate) {
+        return { text: `你已經提過同一件事（${result.duplicate.id}）。要補充或修正就用 edit_feedback 改那筆，不要重複送。` };
+      }
+      if (result.error) throw toolError(result.error, result.status);
+      const { reason, need, expected } = result.fields;
+      agentSender.checkSensitive(sessionId, [reason, need, expected].join('\n'));
+      const entry = recordDevFeedback(devFeedbackStore, {
+        key,
+        sessionId,
+        guildId: channel.guildId ?? '',
+        channelId: channel.id,
+        label: feedbackLabelFor(key, channel),
+        // 這一輪直接叫 bot 的訊息；自由參與或回訪的回合退回這批最後一則。
+        messageIds: (() => {
+          const direct = (turnDirectMessages.get(key) ?? []).map((item) => item.id);
+          if (direct.length) return direct;
+          const last = turnLastMessage.get(key);
+          return last ? [last] : [];
+        })(),
+        users: turnUsers.get(key) ?? [],
+        reason,
+        need,
+        expected,
+      });
+      if (!entry) throw toolError('記不進去：內容不完整', 400);
+      devFeedbackWrites.set(key, (devFeedbackWrites.get(key) ?? 0) + 1);
+      markDevFeedbackDirty();
+      log(`MCP 開發回饋 ${key}（${entry.id}）`);
+      return { text: `已記錄（${entry.id}），開發者會在控制台看到。同一件事之後用 edit_feedback 更新，不要重複送；照常回覆使用者，不要在頻道提起這件事。` };
+    },
+    // 模型送新回饋前先看自己在所有頻道／私聊提過什麼，避免重複。
+    async 'dev-feedback-list'(body) {
+      await agentSender.resolve(body.token);
+      const text = formatDevFeedbackList(recentDevFeedback(devFeedbackStore));
+      return { text: text || '你還沒有送過回饋。' };
+    },
+    async 'dev-feedback-edit'(body) {
+      const { sessionId, key, channel } = await agentSender.resolve(body.token);
+      const used = devFeedbackEdits.get(key) ?? 0;
+      if (used >= DEV_FEEDBACK_EDITS_PER_TURN) {
+        throw toolError(`一輪最多改 ${DEV_FEEDBACK_EDITS_PER_TURN} 筆回饋，下一輪再改`, 429);
+      }
+      const id = textArg(body.id, 40);
+      if (!id) throw toolError('id 是空的：先用 list_feedback 看清單', 400);
+      const checked = validateDevFeedbackFields({ reason: body.reason, need: body.need, expected: body.expected });
+      if (checked.error) throw toolError(checked.error, checked.status);
+      const { reason, need, expected } = checked.fields;
+      agentSender.checkSensitive(sessionId, [reason, need, expected].join('\n'));
+      const entry = updateDevFeedback(devFeedbackStore, {
+        id,
+        key,
+        label: feedbackLabelFor(key, channel),
+        reason,
+        need,
+        expected,
+      });
+      if (!entry) throw toolError('找不到這筆回饋：先用 list_feedback 看清單，id 照抄', 404);
+      devFeedbackEdits.set(key, used + 1);
+      markDevFeedbackDirty();
+      log(`MCP 改開發回饋 ${key}（${entry.id}）`);
+      return { text: `已更新（${entry.id}），開發者會在控制台看到。` };
+    },
     // 模型自己查詞／收錄。收錄只建立候選，管理員確認後才會注入；已經有的只回報，不改內容。
     async 'slang-lookup'(body) {
       const { channel } = await agentSender.resolve(body.token);
@@ -2606,6 +2742,8 @@ async function main() {
       agentSender.startTurn(key);
       memoryWrites.delete(key);
       noteWrites.delete(key);
+      devFeedbackWrites.delete(key);
+      devFeedbackEdits.delete(key);
       slangWrites.delete(key);
       ttftTimeouts.delete(key);
     }
@@ -2670,6 +2808,8 @@ async function main() {
       turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
       const queuedMessages = pendingDirectMessages.get(key);
       turnDirectMessages.set(key, queuedMessages?.length ? queuedMessages.shift() : []);
+      const queuedLast = pendingLastMessages.get(key);
+      turnLastMessage.set(key, queuedLast?.length ? (queuedLast.shift()?.id ?? '') : '');
       turnTriggerRecorded.delete(key);
       // 只有橋接自己排進去的批次才等第一個 token；自動壓縮的 /compact 不算。
       if (event.type === 'turn/start' && hadQueued) armTtftTimer(key, frame.sessionId, turn);
@@ -2698,6 +2838,7 @@ async function main() {
     turnDirect.delete(key);
     turnUsers.delete(key);
     turnDirectMessages.delete(key);
+    turnLastMessage.delete(key);
     turnTriggerRecorded.delete(key);
 
     const reason = ended.reason ?? {};
@@ -2825,6 +2966,8 @@ async function main() {
         turnUsers.clear();
         pendingDirectMessages.clear();
         turnDirectMessages.clear();
+        pendingLastMessages.clear();
+        turnLastMessage.clear();
         turnTriggerRecorded.clear();
         clearAllTtftTimers();
         // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
@@ -3219,6 +3362,11 @@ async function main() {
     const queuedMessages = pendingDirectMessages.get(key) ?? [];
     queuedMessages.push(directMessages);
     pendingDirectMessages.set(key, queuedMessages);
+    const lastMessageId = job.entries.at(-1)?.id ?? '';
+    const queuedLast = pendingLastMessages.get(key) ?? [];
+    const lastEntry = { id: lastMessageId };
+    queuedLast.push(lastEntry);
+    pendingLastMessages.set(key, queuedLast);
     const unqueue = () => {
       const index = queued.lastIndexOf(job.direct);
       if (index >= 0) queued.splice(index, 1);
@@ -3226,6 +3374,8 @@ async function main() {
       if (userIndex >= 0) queuedUsers.splice(userIndex, 1);
       const messageIndex = queuedMessages.lastIndexOf(directMessages);
       if (messageIndex >= 0) queuedMessages.splice(messageIndex, 1);
+      const lastIndex = queuedLast.lastIndexOf(lastEntry);
+      if (lastIndex >= 0) queuedLast.splice(lastIndex, 1);
     };
     let accepted;
     try {
@@ -4506,6 +4656,12 @@ async function main() {
             if (removed) markNotesDirty();
             return removed;
           },
+          devFeedback: () => ({ items: devFeedbackOverview(devFeedbackStore) }),
+          deleteDevFeedback: (id) => {
+            const removed = deleteDevFeedbackById(devFeedbackStore, id);
+            if (removed) markDevFeedbackDirty();
+            return removed;
+          },
           // 控制台的逃生門：模型設錯或設太久時，管理員可以直接解除。
           ignoreRemove: (userId) => {
             const id = String(userId ?? '');
@@ -4602,6 +4758,7 @@ async function main() {
     log(`收到 ${signal}，結束中…`);
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushDevFeedback(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }

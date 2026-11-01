@@ -121,7 +121,7 @@ const DISCORD_TOOL_NAMES = [
   'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
-  'note_event', 'search_notes', 'forget_note',
+  'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
 const VISIBLE_TOOLS = /send_message|send_image|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
@@ -197,7 +197,7 @@ console.log('## 1. 設定收斂');
     ok(call('mcp__discord__search_gifs', { query: 'shocked cat' }) === '🎞️ 找 GIF：shocked cat', '找 GIF 顯示關鍵字');
     ok(call('generate_image', {}) === '🎨 畫圖', '生圖在進度訊息裡顯示畫圖');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
-    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup']);
+    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup', 'mcp__discord__submit_feedback', 'mcp__discord__list_feedback', 'mcp__discord__edit_feedback']);
     ok(others.every((name) => silent.has(name) || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
     ok(SLANG_TOOL_NAMES.every((name) => describeToolCall(name, '{}') === null), '黑話工具不列進度（背景筆記）');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
@@ -2692,6 +2692,9 @@ console.log('## 7e. Discord MCP 發送工具');
       note_event: ['/note', { text: '週五晚上約好一起打牌' }],
       search_notes: ['/notes-search', { query: '週五' }],
       forget_note: ['/note-forget', { number: 1 }],
+      submit_feedback: ['/dev-feedback', { reason: '缺少表格', need: '表格工具', expected: '能排版' }],
+      list_feedback: ['/dev-feedback-list', {}],
+      edit_feedback: ['/dev-feedback-edit', { id: 'df_test', reason: '缺少表格', need: '表格工具', expected: '能排版' }],
     };
     for (const [name, [route, args]] of Object.entries(routes)) {
       const before = received.length;
@@ -2700,6 +2703,14 @@ console.log('## 7e. Discord MCP 發送工具');
     }
     ok(received.find((entry) => entry.url === '/view')?.channel === '123456789012345678',
       'view_message 把 channel 原樣傳給橋接');
+    // 500 個看得到的字加零寬：MCP 的 zod 不能先擋掉，真正的 500 字上限在橋接清理後才判斷。
+    const longReason = `${'字'.repeat(500)}${'\u200b'.repeat(600)}`;
+    const longResult = await client.callTool({
+      name: 'submit_feedback',
+      arguments: { token: 't', reason: longReason, need: '需求', expected: '預期' },
+    });
+    ok(longResult.isError !== true && received.at(-1)?.reason === longReason,
+      'submit_feedback 的長度上限留給橋接清掉零寬後再判斷');
     const searched = await client.callTool({ name: 'search_emojis', arguments: { token: 't' } });
     ok(String(searched.content?.[0]?.text) === '來自 /emojis', '唯讀工具把橋接回的 text 原樣交給模型');
     const userResult = await client.callTool({ name: 'user_info', arguments: { token: 't', message: '#k7f3ab' } });
@@ -2716,6 +2727,14 @@ console.log('## 7e. Discord MCP 發送工具');
     const pollTool = tools.find((t) => t.name === 'create_poll');
     ok(['question', 'answers'].every((name) => pollTool.inputSchema?.required?.includes(name))
       && !pollTool.inputSchema?.required?.includes('hours'), 'create_poll：question / answers 必填，hours 可省略');
+    const feedbackTool = tools.find((t) => t.name === 'submit_feedback');
+    ok(['reason', 'need', 'expected'].every((name) => feedbackTool.inputSchema?.required?.includes(name))
+      && !feedbackTool.inputSchema?.required?.includes('token'), 'submit_feedback：reason / need / expected 必填，token 由外掛帶入');
+    const editFeedbackTool = tools.find((t) => t.name === 'edit_feedback');
+    ok(['id', 'reason', 'need', 'expected'].every((name) => editFeedbackTool.inputSchema?.required?.includes(name))
+      && !editFeedbackTool.inputSchema?.required?.includes('token'), 'edit_feedback：id / reason / need / expected 必填');
+    const listFeedbackTool = tools.find((t) => t.name === 'list_feedback');
+    ok(!(listFeedbackTool.inputSchema?.required ?? []).includes('token'), 'list_feedback 不需要 token 以外的參數');
     const remembered = await client.callTool({ name: 'remember_user', arguments: { token: 't', message: '#k7f3ab', name: '小明', fact: '喜歡貓' } });
     ok(String(remembered.content?.[0]?.text) === '來自 /remember', '記憶工具把橋接回的最新清單交給模型');
     const rememberTool = tools.find((t) => t.name === 'remember_user');
@@ -3113,6 +3132,14 @@ console.log('## 9. 控制台');
       memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
       notes: () => ({ enabled: true, notes: [{ id: 'n1', text: '週五打球' }] }),
       deleteNote: (id) => id === 'n1',
+      devFeedback: () => ({
+        items: [{
+          id: 'df1', at: new Date().toISOString(), key: 'ch:1', label: '#閒聊 · 伺服器',
+          sessionId: 's1', guildId: '2', channelId: '3', messageIds: ['4'],
+          reason: '缺少表格', need: '表格工具', expected: '能排版',
+        }],
+      }),
+      deleteDevFeedback: (id) => id === 'df1',
       ignoreRemove: (userId) => userId === USER,
       triggers: () => ({
         todayUsers: 1,
@@ -3188,6 +3215,17 @@ console.log('## 9. 控制台');
   ok(noteMissing.status === 404, '不存在的筆記回 404');
   const noteNoId = await fetch(`${base}/api/notes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({}) });
   ok(noteNoId.status === 400, '缺少筆記 id 回 400');
+  ok((await fetch(`${base}/api/dev-feedback`)).status === 401, '沒有 token 讀不到開發回饋');
+  const feedbackResponse = await fetch(`${base}/api/dev-feedback`, { headers: authed });
+  const feedbackBody = await feedbackResponse.json();
+  ok(feedbackResponse.status === 200 && feedbackBody.items[0].id === 'df1'
+    && feedbackBody.items[0].messageIds[0] === '4', '開發回饋端點回 handler 的結果');
+  const feedbackDelete = await fetch(`${base}/api/dev-feedback/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: 'df1' }) });
+  ok(feedbackDelete.status === 200 && (await feedbackDelete.json()).ok === true, '刪回饋端點會呼叫 handler');
+  const feedbackMissing = await fetch(`${base}/api/dev-feedback/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: 'nope' }) });
+  ok(feedbackMissing.status === 404, '不存在的回饋回 404');
+  const feedbackNoId = await fetch(`${base}/api/dev-feedback/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({}) });
+  ok(feedbackNoId.status === 400, '缺少回饋 id 回 400');
   const ignoreRemove = await fetch(`${base}/api/ignore/remove`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ userId: USER }) });
   ok(ignoreRemove.status === 200 && (await ignoreRemove.json()).ok === true, '解除不理端點會呼叫 handler');
   const ignoreMissing = await fetch(`${base}/api/ignore/remove`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ userId: '999999999999999999' }) });

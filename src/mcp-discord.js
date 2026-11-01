@@ -407,4 +407,40 @@ tool(
   (result) => String(result.text ?? ''),
 );
 
+// zod 的 max 只是防爆量；真正的 500 字上限由橋接清掉控制字元後才判斷（否則 500 字加零寬會被誤擋）。
+tool(
+  'submit_feedback',
+  '把你覺得缺少的能力，或對這個 bot 的建議，送給開發者。用在兩種情況：你發現自己沒有某個工具／能力而做不到，或你覺得回覆方式、規則、功能可以更好。送之前先用 list_feedback 看所有頻道有沒有提過；同一件事用 edit_feedback 更新，不要重複送。開發者只會在自己的控制台看到；那句「做不到」仍要照常回覆使用者，不要在頻道提起你送了回饋。',
+  {
+    token: sessionToken,
+    reason: z.string().max(2000).describe('為什麼需要：你遇到的狀況或問題（最多 500 字）'),
+    need: z.string().max(2000).describe('你希望新增或改善什麼能力（最多 500 字）'),
+    expected: z.string().max(2000).describe('做到什麼程度就算有幫助（最多 500 字）'),
+  },
+  '/dev-feedback',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'list_feedback',
+  '查你在所有頻道／私聊以前送過的功能申請與意見回饋（最新的先列，含 id 與來源）。送新的回饋前先用這個看有沒有提過；同一件事用 edit_feedback 改，不要重複送。這是給你判斷重複用的，不要在頻道貼出清單。',
+  { token: sessionToken },
+  '/dev-feedback-list',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'edit_feedback',
+  '改你之前送過的一筆意見回饋（id 用 list_feedback 看到的，不限頻道）。同一件事要補充或修正時用，不要重新送一筆。',
+  {
+    token: sessionToken,
+    id: z.string().max(40).describe('要改的那筆 id（list_feedback 回傳的，照抄）'),
+    reason: z.string().max(2000).describe('為什麼需要：你遇到的狀況或問題（最多 500 字）'),
+    need: z.string().max(2000).describe('你希望新增或改善什麼能力（最多 500 字）'),
+    expected: z.string().max(2000).describe('做到什麼程度就算有幫助（最多 500 字）'),
+  },
+  '/dev-feedback-edit',
+  (result) => String(result.text ?? ''),
+);
+
 await server.connect(new StdioServerTransport());

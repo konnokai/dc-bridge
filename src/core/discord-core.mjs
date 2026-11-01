@@ -432,6 +432,8 @@ const PROGRESS_SILENT = new Set([
   'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
+  // 給開發者的意見不該在頻道留下任何痕跡。
+  'mcp__discord__submit_feedback', 'mcp__discord__list_feedback', 'mcp__discord__edit_feedback',
   'mcp__slang__lookup_slang', 'mcp__slang__record_slang', 'mcp__slang__record_channel_tag',
 ]);
 const PROGRESS_LABELS = {

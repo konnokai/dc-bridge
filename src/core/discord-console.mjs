@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, notes, deleteNote, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, notes, deleteNote, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -153,6 +153,21 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         }
         const removed = handlers.deleteNote(id);
         sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這條筆記' });
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/dev-feedback') {
+        sendJson(res, 200, handlers.devFeedback());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/dev-feedback/delete') {
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        if (!id) {
+          sendJson(res, 400, { error: '缺少回饋 id' });
+          return;
+        }
+        const removed = handlers.deleteDevFeedback(id);
+        sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這筆回饋' });
         return;
       }
       if (req.method === 'POST' && url.pathname === '/api/ignore/remove') {
