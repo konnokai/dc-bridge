@@ -352,6 +352,14 @@ export function triggerUsers(entries) {
 }
 
 /**
+ * 生圖參考圖的標記：`[圖 #k7f3ab/1]`。`ref` 是那則訊息的 #編號，`index` 從 1 起算。
+ * 模型要拿這張當參考圖時，`generate_image` 的 `inputImage` 就填 `ref:#k7f3ab/1`。
+ */
+export function imageRefTag(ref, index) {
+  return `[圖 #${ref}/${index}]`;
+}
+
+/**
  * 一批訊息 → prompt 裡的【新訊息】區塊。
  * 頻道：每行 `暱稱：內容`，叫 bot 的加 ★；私聊：只有內文（DSH 會話本身就是一對一）。
  *

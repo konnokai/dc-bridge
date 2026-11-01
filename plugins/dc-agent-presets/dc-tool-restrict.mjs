@@ -165,18 +165,22 @@ export function apply(ctx, config = {}) {
       const args = exec?.arguments ?? {}
       const ref = args.inputImage
       if (ref !== undefined && ref !== null && ref !== '') {
-        // 只放行短代號（self、gpt、大肥魚…），多個角色用逗號串起來；路徑一定含 / \ : 或 ..
-        // 上限跟 dc-draw-image 的 MAX_REFERENCES 一致，外掛沒載入時也要擋。
+        // 只放行短代號（self、gpt、大肥魚…）與群友貼的圖（ref:#編號/張數）；多個用逗號串起來。
+        // 路徑一定含 / \ : 或 ..。上限跟 dc-draw-image 一致，外掛沒載入時也要擋。
         const refs = typeof ref === 'string' ? ref.split(/[,，]/).map((part) => part.trim()).filter(Boolean) : []
-        if (refs.length === 0) {
-          return 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑'
-        }
-        if (refs.length > 4) {
-          return 'generate_image 的 inputImage 一次最多 4 個角色'
-        }
+        const hint = 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen）或 ref:#編號/張數，不要填路徑'
+        if (refs.length === 0) return hint
+        if (refs.length > 4) return 'generate_image 的 inputImage 一次最多 4 個參考（角色代號或群友的圖）'
+        let userRefs = 0
         for (const item of refs) {
+          if (/^ref:/i.test(item)) {
+            userRefs += 1
+            if (userRefs > 2) return 'generate_image 一次最多 2 張群友貼的圖'
+            if (!/^ref:#?[0-9a-z]{4,12}(?:\/[1-9]\d?)?$/i.test(item)) return hint
+            continue
+          }
           if (item.length > 60 || /[\\/:：／＼]/.test(item) || item.includes('..') || /\.[a-z0-9]{2,5}$/i.test(item)) {
-            return 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑'
+            return hint
           }
         }
       }

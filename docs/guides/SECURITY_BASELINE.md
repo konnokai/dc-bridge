@@ -53,7 +53,8 @@ Discord 的 `dc-chat` 多了一个 `generate_image`，但它**不是**把 `dsh-g
 
 - `plugins/dc-agent-presets/dc-draw-image.mjs` 注册一个同名的 **scoped** `generate_image`，盖掉 profile 里的全局版本。
 - scoped 工具调用 Codex 时用 `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（没有 write 规则；`image_gen` 的存图走 `LOCAL_FS`，不需要 profile 写入权）；同时加 `--disable shell_tool --disable unified_exec --disable view_image`。工作目录是 `state/discord-imagegen-work`，不是 DSH 的安装目录。
-- 模型只能传角色代号（`self`、`gpt`…）；`outputDir` 由外挂固定到 `state/discord-images`，`inputImage` 只换成 `assets/ai-chan-sheets` 里的三视图。
+- 模型只能传角色代号（`self`、`gpt`…）、或 `ref:#编号/张数`（用户贴在频道里的附件）；`outputDir` 由外挂固定到 `state/discord-images`。
+- `/imageRef` 用 `x-agent-token` + `sessionId` 认身分：`sessionId` 必须还是这个频道的活动会话，`#编号` 只查得到本频道登记过的消息；别的服务器、私聊、已删除的消息一律拿不到。图片字节经 `fetchDiscordMedia`（白名单 host、大小上限）与 `prepareMediaBlock`（缩图）后才回传，插件写成单次生图专用的暂存档，工作结束就删。
 - prompt 里出现 URL、绝对路径、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明显的指令字样时直接拒绝。
 - 残存风险：`/mnt` 由 permission profile 拒绝，`shell/exec` 与 `view_image` 已关闭；其他本机路径仍是唯读（`jun` 账号自己的资料，用户接受这个范围）。image_gen 本身仍会调用外部模型，prompt 过滤挡不住所有注入；要再收紧就在独立 OS 账号/容器里跑 Codex，只挂载参考图与空输出目录。
 

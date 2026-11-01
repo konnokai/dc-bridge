@@ -88,6 +88,15 @@ export const CHARACTERS = manifest.characters
 /** 產圖固定放這裡；send_image 只認這個目錄裡的檔名。 */
 export const IMAGE_DIR = path.resolve(path.dirname(MODULE_FILE), '../../state/discord-images')
 
+/** 群友貼的參考圖只存在一次生圖的暫存目錄，工作結束就刪；測試用 DC_IMAGE_REF_DIR 換位置。 */
+export const REF_DIR = process.env.DC_IMAGE_REF_DIR
+  ? path.resolve(process.env.DC_IMAGE_REF_DIR)
+  : path.resolve(path.dirname(MODULE_FILE), '../../state/discord-imagegen-refs')
+const REF_TIMEOUT_MS = 30_000
+const REF_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
+// DSH 重啟會帶走還沒刪掉的暫存目錄；載入時清一次，平常每個工作結束也清。
+const REF_KEEP_MS = 6 * 60 * 60_000
+
 // 橋接每 5 分鐘把 Codex 額度快照寫進 state/；額度太低時這裡直接拒絕，不再開 Codex。
 // 快照過期或不存在（橋接沒跑）就放行，避免額度其實已重置卻一直擋著。
 const QUOTA_FILE = path.join(path.dirname(IMAGE_DIR), 'discord-codex-quota.json')
@@ -183,7 +192,11 @@ const PROMPT_MAX = 4000
 const KEEP_IMAGES = 100
 // 一張圖最多帶幾張設定圖；每張都是大圖，帶太多會拖慢生圖也吃 context。
 const MAX_REFERENCES = 4
+// 群友自己貼的圖最多 2 張：再多就會蓋掉角色設定圖的份量。
+const MAX_USER_REFERENCES = 2
 const REF_SEPARATOR = /[,，]/
+// 群友貼的圖：ref:#k7f3ab/1。實際格式由橋接的 parseDrawRef 驗，這裡只認字首。
+const REF_TOKEN = /^ref:(.+)$/i
 
 /** 模型用逗號把角色代號串起來（`self,claude`）；單一角色也走這裡。 */
 function splitReferences(value) {
@@ -198,19 +211,33 @@ function splitResolvedReferences(value) {
   return value.split(',').map((ref) => ref.trim()).filter(Boolean)
 }
 
-/** 圖生圖的模型不知道附圖是什麼；用英文講清楚每一張是誰，畫出來才不會走形。 */
-function referenceNote(characters) {
-  if (characters.length === 1) {
-    return `\n\nThe attached image is the canonical character sheet for ${characters[0].promptName}. `
-      + 'Use it only as a design reference; do not reproduce the sheet layout or its multiple views. '
-      + 'Draw a single new illustration. Keep the character\'s face, hair, outfit, colors, and distinctive accessories consistent with it. '
-      + 'If the prompt describes the appearance differently, follow the sheet.'
+/**
+ * 圖生圖的模型不知道附圖是什麼；用英文講清楚每一張是誰，畫出來才不會走形。
+ * plan 的順序就是 -i 的順序：角色設定圖與群友自己的圖可以混用。
+ */
+function referenceNote(plan) {
+  const characters = plan.filter((entry) => entry.kind === 'character').map((entry) => entry.character)
+  if (characters.length === plan.length) {
+    if (characters.length === 1) {
+      return `\n\nThe attached image is the canonical character sheet for ${characters[0].promptName}. `
+        + 'Use it only as a design reference; do not reproduce the sheet layout or its multiple views. '
+        + 'Draw a single new illustration. Keep the character\'s face, hair, outfit, colors, and distinctive accessories consistent with it. '
+        + 'If the prompt describes the appearance differently, follow the sheet.'
+    }
+    const sheets = characters.map((character, index) => `image ${index + 1} = ${character.promptName}`).join('; ')
+    return `\n\nThe attached images are canonical character sheets: ${sheets}. `
+      + 'Use them only as design references; do not reproduce the sheet layout or its multiple views. '
+      + 'Draw a single new illustration. Keep each character\'s face, hair, outfit, colors, and distinctive accessories consistent with its own sheet. '
+      + 'If the prompt describes any character differently, follow that character\'s sheet.'
   }
-  const sheets = characters.map((character, index) => `image ${index + 1} = ${character.promptName}`).join('; ')
-  return `\n\nThe attached images are canonical character sheets: ${sheets}. `
-    + 'Use them only as design references; do not reproduce the sheet layout or its multiple views. '
-    + 'Draw a single new illustration. Keep each character\'s face, hair, outfit, colors, and distinctive accessories consistent with its own sheet. '
-    + 'If the prompt describes any character differently, follow that character\'s sheet.'
+  // 群友的圖：每張一行寫清楚保留什麼、忽略什麼，再要求不要把兩個人的特徵混在一起。
+  const lines = plan.map((entry, index) => (entry.kind === 'character'
+    ? `image ${index + 1} = ${entry.character.promptName}: canonical character sheet; keep that character's face, hair, outfit, colors, and distinctive accessories consistent with it, and do not reproduce the sheet layout.`
+    : `image ${index + 1} = the picture the user supplied: keep its subject's identity, face, hair, outfit, and pose; ignore its background, lighting, and photo style.`))
+  return `\n\nThe attached images are references, one line each:\n${lines.join('\n')}\n`
+    + 'These are separate subjects: do not merge their features or swap their clothes or hair. '
+    + 'Draw them together in one scene unless the prompt says otherwise. '
+    + 'If the prompt describes an appearance differently, follow the matching reference image.'
 }
 
 /** 只留最近幾張，避免每次畫圖都往 state/ 疊一個幾 MB 的檔。 */
@@ -224,6 +251,67 @@ function pruneImages() {
       fs.rmSync(path.join(IMAGE_DIR, file), { force: true })
     }
   } catch {}
+}
+
+/** 橋接端點檔每次重讀：橋接重啟後埠會變。 */
+function readAgentEndpoint() {
+  try { return JSON.parse(fs.readFileSync(AGENT_ENDPOINT_FILE, 'utf8')) } catch { return null }
+}
+
+/** 這次生圖專用的暫存目錄；群友的圖只放在這裡，跑完就刪。 */
+function createRefDir() {
+  const dir = path.join(REF_DIR, `job-${randomUUID()}`)
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  return dir
+}
+
+/** DSH 重啟或工作沒收尾時會留下暫存目錄；超過 REF_KEEP_MS 就刪。 */
+function pruneRefs() {
+  try {
+    const now = Date.now()
+    for (const name of fs.readdirSync(REF_DIR)) {
+      const dir = path.join(REF_DIR, name)
+      if (now - fs.statSync(dir).mtimeMs > REF_KEEP_MS) fs.rmSync(dir, { recursive: true, force: true })
+    }
+  } catch {}
+}
+pruneRefs()
+
+// 暫存檔的形狀：job-<uuid>/ref-<uuid>.<ext>。只認這個形狀，REF_DIR 根目錄或別層的檔案都不算。
+const REF_FILE = /^job-[0-9a-f-]{36}[\\/]ref-[0-9a-f-]{36}\.(?:png|jpg|webp)$/
+
+/** 暫存檔屬於哪個工作目錄；不是這次生圖的暫存檔就回 null。 */
+function refDirOf(file) {
+  const rel = path.relative(REF_DIR, file)
+  if (!REF_FILE.test(rel)) return null
+  return path.join(REF_DIR, rel.split(path.sep)[0])
+}
+
+/**
+ * 群友貼的圖：工具呼叫當下就向橋接要，寫成這次工作的暫存檔。
+ * 不能在排隊時才抓：生圖 queue 可能排幾分鐘，原訊息那時可能已經被刪了。
+ */
+async function fetchUserReference(raw, dir, sessionId) {
+  const endpoint = readAgentEndpoint()
+  if (!endpoint?.url || !endpoint?.token) throw new Error('讀不到橋接端點，拿不到群友貼的圖：回報管理員')
+  let res
+  try {
+    res = await fetch(`${endpoint.url}/imageRef`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-agent-token': endpoint.token },
+      body: JSON.stringify({ sessionId, ref: raw }),
+      signal: AbortSignal.timeout(REF_TIMEOUT_MS),
+    })
+  } catch (error) {
+    throw new Error(`連不上橋接，拿不到群友貼的圖：${error?.message ?? error}`)
+  }
+  let body = null
+  try { body = await res.json() } catch { body = null }
+  if (!res.ok) throw new Error(body?.error || `拿不到群友貼的圖（HTTP ${res.status}）`)
+  if (!body?.data) throw new Error('橋接沒有回傳參考圖')
+  const file = path.join(dir, `ref-${randomUUID()}.${REF_EXT[body.mimeType] ?? 'jpg'}`)
+  fs.writeFileSync(file, Buffer.from(body.data, 'base64'), { mode: 0o600 })
+  return file
 }
 
 // Codex 的引擎用「$CODEX_HOME/generated_images 前後快照」找新圖；兩個頻道同時
@@ -280,14 +368,12 @@ function releaseJob(sessionId, controller) {
  */
 async function reportImageJob(payload, { quiet = false } = {}) {
   const logError = (message) => { if (!quiet) console.error(`[dc-draw-image] ${message}`) }
-  let endpoint
-  try {
-    endpoint = JSON.parse(fs.readFileSync(AGENT_ENDPOINT_FILE, 'utf8'))
-  } catch (error) {
-    logError(`讀不到橋接端點（${AGENT_ENDPOINT_FILE}）：${error?.message ?? error}`)
+  const endpoint = readAgentEndpoint()
+  if (!endpoint) {
+    logError(`讀不到橋接端點（${AGENT_ENDPOINT_FILE}）`)
     return { body: null, retry: true }
   }
-  if (!endpoint?.url || !endpoint?.token) {
+  if (!endpoint.url || !endpoint.token) {
     logError('橋接端點檔缺少 url/token：本次生圖不通知頻道')
     return { body: null, retry: true }
   }
@@ -317,7 +403,7 @@ async function reportImageJob(payload, { quiet = false } = {}) {
  * 完成或失敗都回報橋接，由橋接排進同一個會話的閘門；1~3 分鐘的生成不會卡住其他訊息。
  * queue 仍是一條：Codex 的 generated_images 共用，兩個行程同時畫會撿到對方的圖。
  */
-async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputImages, codexBin, controller }) {
+async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputImages, refDirs = [], codexBin, controller }) {
   const signal = controller?.signal
   let dest = null
   let text
@@ -382,7 +468,9 @@ async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputIma
   } finally {
     if (pollTimer) clearInterval(pollTimer)
     pollTimer = null
+    for (const dir of refDirs) fs.rmSync(dir, { recursive: true, force: true })
     pruneImages()
+    pruneRefs()
     releaseJob(sessionId, controller)
   }
   const payload = {
@@ -424,40 +512,56 @@ export function apply(ctx) {
 
     const rawRef = args.inputImage
     const refs = splitReferences(rawRef)
-    if (rawRef !== undefined && rawRef !== null && rawRef !== '' && refs.length === 0) {
-      throw new Error('generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑')
-    }
-    if (refs.length > MAX_REFERENCES) {
-      throw new Error(`generate_image 一次最多帶 ${MAX_REFERENCES} 個角色`)
-    }
-    const characters = refs.map((ref) => {
-      if (manifestError) {
-        throw new Error(`角色設定圖清單讀不到（${MANIFEST_FILE}）：${manifestError.message}。確認 assets/ai-chan-sheets/characters.json`)
-      }
-      if (/[\\/:：／＼]/.test(ref) || ref.includes('..')) {
-        throw new Error('generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen），不要填路徑')
-      }
-      const character = resolveCharacter(ref)
-      if (!character) {
-        throw new Error(`不認得角色「${ref}」。可以用：${CHARACTERS.map((c) => c.id).join('、')}，或直接打中文名`)
-      }
-      return character
-    })
-
-    const nextArgs = { prompt, outputDir: IMAGE_DIR }
-    if (characters.length > 0) {
-      nextArgs.inputImage = characters.map((character) => characterImage(character)).join(',')
-      nextArgs.prompt += referenceNote(characters)
-    }
-    nextArgs.prompt += '\n\nUse only the attached input images when any are provided. Never pass referenced_image_paths or read any other local file.'
-    exec.arguments = nextArgs
-    const written = exec.arguments
-    if (written.outputDir !== IMAGE_DIR || (characters.length > 0 && written.inputImage !== nextArgs.inputImage)) {
-      throw new Error('鎖定 generate_image 參數失敗（DSH 改了 tools/execute 的規則）：回報管理員')
+    const hint = 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen）或 ref:#編號/張數，不要填路徑'
+    if (rawRef !== undefined && rawRef !== null && rawRef !== '' && refs.length === 0) throw new Error(hint)
+    if (refs.length > MAX_REFERENCES) throw new Error(`generate_image 一次最多帶 ${MAX_REFERENCES} 張參考圖`)
+    const sessionId = exec.agent?.id
+    if (refs.some((ref) => REF_TOKEN.test(ref)) && !sessionId) {
+      throw new Error('generate_image 需要會話身分（DSH 沒給 agent.id）：回報管理員')
     }
 
+    let refDir = null
     try {
+      const plan = []
+      for (const ref of refs) {
+        const userRef = REF_TOKEN.exec(ref)
+        if (userRef) {
+          if (plan.filter((entry) => entry.kind === 'user').length >= MAX_USER_REFERENCES) {
+            throw new Error(`generate_image 一次最多 ${MAX_USER_REFERENCES} 張群友貼的圖`)
+          }
+          refDir ??= createRefDir()
+          plan.push({ kind: 'user', path: await fetchUserReference(userRef[1], refDir, sessionId) })
+          continue
+        }
+        if (manifestError) {
+          throw new Error(`角色設定圖清單讀不到（${MANIFEST_FILE}）：${manifestError.message}。確認 assets/ai-chan-sheets/characters.json`)
+        }
+        if (/[\\/:：／＼]/.test(ref) || ref.includes('..')) throw new Error(hint)
+        const character = resolveCharacter(ref)
+        if (!character) {
+          throw new Error(`不認得角色「${ref}」。可以用：${CHARACTERS.map((c) => c.id).join('、')}，或直接打中文名`)
+        }
+        plan.push({ kind: 'character', character })
+      }
+
+      const nextArgs = { prompt, outputDir: IMAGE_DIR }
+      if (plan.length > 0) {
+        nextArgs.inputImage = plan
+          .map((entry) => (entry.kind === 'user' ? entry.path : characterImage(entry.character)))
+          .join(',')
+        nextArgs.prompt += referenceNote(plan)
+      }
+      nextArgs.prompt += '\n\nUse only the attached input images when any are provided. Never pass referenced_image_paths or read any other local file.'
+      exec.arguments = nextArgs
+      const written = exec.arguments
+      if (written.outputDir !== IMAGE_DIR || (plan.length > 0 && written.inputImage !== nextArgs.inputImage)) {
+        throw new Error('鎖定 generate_image 參數失敗（DSH 改了 tools/execute 的規則）：回報管理員')
+      }
       return await next()
+    } catch (error) {
+      // 工作沒開始就不會有人來收尾，暫存檔自己刪。
+      if (refDir) fs.rmSync(refDir, { recursive: true, force: true })
+      throw error
     } finally {
       pruneImages()
     }
@@ -471,7 +575,8 @@ export function apply(ctx) {
       'Start an image generation job from a text description, or use a reference image, with the local Codex image_gen tool. '
       + 'Returns immediately; the image arrives later in a follow-up message, then send it with send_image. '
       + 'The tool runs with shell and file writes disabled; '
-      + 'inputImage is a character code (self, gpt, qwen, ...), comma-separated codes for multiple characters, or omitted.',
+      + 'inputImage is a character code (self, gpt, qwen, ...), a user image reference (ref:#messageId/1), '
+      + 'several of them comma-separated, or omitted.',
     parameters: {
       type: 'object',
       properties: {
@@ -485,7 +590,7 @@ export function apply(ctx) {
         },
         inputImage: {
           type: 'string',
-          description: 'Character code: self, gpt, qwen, ... or a Chinese character name. For multiple characters, separate codes with commas (for example "self,claude"), up to 4. Omit for a generic image.',
+          description: 'Character code (self, gpt, qwen, ... or a Chinese character name), or ref:#messageId/n for the nth image the user attached. Separate several with commas, for example "self,claude" or "self,ref:#k7f3ab/1"; up to 4 total and at most 2 user images. Omit for a generic image.',
         },
       },
       required: ['prompt'],
@@ -514,19 +619,27 @@ export function apply(ctx) {
       if (!codexBin) throw new Error('找不到 codex CLI：先安裝並登入 Codex')
 
       const refs = splitResolvedReferences(args?.inputImage)
-      if (refs.length > MAX_REFERENCES) throw new Error(`inputImage 一次最多 ${MAX_REFERENCES} 個角色`)
-      const assetsRoot = refs.length > 0 ? fs.realpathSync(ASSETS_DIR) : null
+      if (refs.length > MAX_REFERENCES) throw new Error(`inputImage 一次最多 ${MAX_REFERENCES} 張參考圖`)
       const inputImages = refs.map((ref) => {
         const full = path.resolve(ref)
-        if (!ALLOWED_IMAGES.has(full)) throw new Error('inputImage 只能是 assets/ai-chan-sheets 裡的角色設定圖')
+        // 先比對白名單再碰檔案系統：被繞過 middleware 時，任意路徑連 realpath 都不跑。
+        if (!ALLOWED_IMAGES.has(full) && !refDirOf(full)) {
+          throw new Error('inputImage 只能是角色設定圖或這次生圖的群友參考圖')
+        }
         let real
         try { real = fs.realpathSync(full) } catch { throw new Error(`inputImage 不存在：${full}`) }
-        const rel = path.relative(assetsRoot, real)
-        if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('inputImage 只能是 assets/ai-chan-sheets 裡的角色設定圖')
         if (!fs.statSync(real).isFile()) throw new Error(`inputImage 不是檔案：${full}`)
-        return real
+        if (ALLOWED_IMAGES.has(full) || ALLOWED_IMAGES.has(real)) {
+          const rel = path.relative(fs.realpathSync(ASSETS_DIR), real)
+          if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('inputImage 只能是 assets/ai-chan-sheets 裡的角色設定圖')
+          return real
+        }
+        // 群友的圖只認這次生圖的暫存目錄；路徑由外掛自己寫，模型選不到別的檔案。
+        if (refDirOf(real)) return real
+        throw new Error('inputImage 只能是角色設定圖或這次生圖的群友參考圖')
       })
       const inputImage = inputImages[0] ?? null
+      const refDirs = [...new Set(inputImages.map((file) => refDirOf(file)).filter(Boolean))]
 
       fs.mkdirSync(IMAGE_DIR, { recursive: true })
       fs.mkdirSync(WORK_DIR, { recursive: true })
@@ -541,7 +654,7 @@ export function apply(ctx) {
         releaseJob(sessionId, controller)
         throw new Error('橋接沒有受理這次生圖（沒開或會話已結束），先不畫圖：回報管理員')
       }
-      void runGenerationJob({ sessionId, jobId, prompt: args.prompt, inputImage, inputImages, codexBin, controller })
+      void runGenerationJob({ sessionId, jobId, prompt: args.prompt, inputImage, inputImages, refDirs, codexBin, controller })
       return {
         status: 'started',
         message: '生圖已在背景開始，約 1~3 分鐘。先用 send_message 跟頻道說一聲，然後結束這一輪；'
