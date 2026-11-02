@@ -216,7 +216,7 @@ console.log('## 1. 設定收斂');
     ok(many.split('\n').length === 6 && many.includes('步驟 19') && !many.includes('步驟 13\n'), '只留最後 6 步');
     ok(formatProgress([]) === '', '沒有步驟就是空字串');
     ok(/^-# \S/.test(COMPACT_NOTICE) && !COMPACT_NOTICE.includes('\n'), '壓縮提示是一行 -# 小字');
-    ok(COMPACT_NOTICE.includes('壓縮'), '壓縮提示講明在壓縮');
+    ok(COMPACT_NOTICE.includes('白飯') && COMPACT_NOTICE.includes('減肥'), '壓縮提示用白飯梗');
   }
   {
     const links = adminLinks({
