@@ -51,6 +51,14 @@ export function isQuietBatchSkipped({ direct, quietUntil, system = false } = {})
   return !system && !direct && Boolean(quietUntil);
 }
 
+/**
+ * 安靜期間的送出閘門：文字與貼圖都擋，只放行帶檔案的送圖。
+ * 反應走另一條 handler，不受影響；模型要恢復說話就先把 minutes 設 0。
+ */
+export function quietSendBlocked({ quietUntil, file } = {}) {
+  return Boolean(quietUntil) && !String(file ?? '').trim();
+}
+
 /** 安靜到幾點（bridge 主機時區，跟【現在】一致）。 */
 export function formatQuietUntil(until) {
   const date = new Date(until);

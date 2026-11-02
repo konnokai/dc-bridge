@@ -16,6 +16,7 @@
 import path from 'node:path';
 import { safeFetch } from './safe-fetch.js';
 import { fetchVerdict } from './core/fetch-verdict.mjs';
+import { normalizeWebFetchUrl } from './core/web-content.mjs';
 import { webSearch } from './web-search.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -93,12 +94,13 @@ server.tool(
 
 server.tool(
   'web_fetch',
-  '只读抓取 HTTPS（443 端口）网页正文，返回纯文本/HTML 前 50000 字符。禁止访问内网/本机地址，不执行任何本地操作。',
+  '只读抓取 HTTPS（443 端口）网页正文，返回标题、说明与可见文字。Google Docs／Slides／Sheets 会自动改写成公开 export；只拿到登录页或只有标题时会明说。禁止访问内网/本机地址，不执行任何本地操作。',
   { url: z.string().describe('要抓取的 https URL') },
   async ({ url }) => {
     try {
-      const result = await safeFetch(url, 50000, WEB_FETCH_OPTS);
-      const verdict = fetchVerdict(result);
+      const target = normalizeWebFetchUrl(url);
+      const result = await safeFetch(target.url, 50000, WEB_FETCH_OPTS);
+      const verdict = fetchVerdict(result, { expectText: target.expectText });
       const text = verdict.isError ? verdict.text : untrustedData(verdict.text, 0);
       return { content: [{ type: 'text', text }], isError: verdict.isError };
     } catch (error) {

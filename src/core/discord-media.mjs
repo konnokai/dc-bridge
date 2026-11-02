@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeImageForModel, normalizeVideoForModel, normalizeVideoUrlForModel, sniffImage, sniffVideo } from '../media-normalize.js';
-import { messageParts } from './discord-context.mjs';
+import { componentParts, embedIsSensitive, messageParts, visibleAttachments } from './discord-context.mjs';
 
 /** 允許抓圖的 host（精確比對，子網域不算）。 */
 // images-ext-*：Discord 替連結預覽代抓的外部圖片。原站由 Discord 去抓，橋接只連 Discord 的主機。
@@ -352,13 +352,35 @@ export function stickerImages(stickers) {
  */
 export function embedImages(embeds) {
   return (embeds ?? []).flatMap((embed) => {
-    const image = [embed?.image, embed?.thumbnail].find((candidate) => candidate?.proxyURL);
-    if (!image) return [];
+    const data = embed?.data ?? embed;
+    if (embedIsSensitive(data)) return [];
+
+    // component embed 的文字與圖片都在 components；有 media gallery 就優先用它，
+    // 只有 thumbnail 時才退而求其次（FB 的 40×40 頭像不該排在貼文照片前面）。
+    const componentMedia = componentParts(data?.components).media
+      .filter((item) => item.url && (item.kind !== 'file' || /^(image|video)\//.test(item.contentType)));
+    const gallery = componentMedia.filter((item) => item.kind === 'gallery');
+    const chosen = gallery.length ? gallery : componentMedia.filter((item) => item.kind !== 'gallery');
+    if (chosen.length) {
+      return chosen.map((item) => ({
+        name: safeName(item.name),
+        // 圖片一律交給下載後 sniff；只有影片保留 Discord 宣告的類型。
+        contentType: item.contentType?.startsWith('video/') ? item.contentType : 'image/png',
+        url: item.url,
+        description: item.description,
+        spoiler: item.spoiler,
+      }));
+    }
+
+    const image = [data?.image, data?.thumbnail]
+      .find((candidate) => candidate?.proxy_url || candidate?.proxyURL);
+    const url = image?.proxy_url ?? image?.proxyURL;
+    if (!url) return [];
     let name = 'embed';
     try {
-      name = new URL(image.proxyURL).pathname.split('/').filter(Boolean).pop() ?? name;
+      name = new URL(url).pathname.split('/').filter(Boolean).pop() ?? name;
     } catch { /* 壞網址留給 collectMediaAttachments 說明 */ }
-    return [{ name: safeName(name), contentType: 'image/png', url: image.proxyURL }];
+    return [{ name: safeName(name), contentType: 'image/png', url }];
   });
 }
 
@@ -377,12 +399,46 @@ export function describeSkipped(skipped) {
 export function viewMediaItems({ target, replied = null, fixMessages = [] } = {}) {
   const parts = messageParts(target);
   const repliedParts = messageParts(replied);
-  return [
-    ...parts.attachments,
-    ...repliedParts.attachments,
-    ...stickerImages(parts.stickers),
+  const componentImages = (entry) => {
+    const media = componentParts(entry?.components).media
+      .filter((item) => item.url && (item.kind !== 'file' || /^(image|video)\//.test(item.contentType)));
+    const gallery = media.filter((item) => item.kind === 'gallery');
+    return (gallery.length ? gallery : media.filter((item) => item.kind !== 'gallery'))
+      .map((item) => ({
+        name: safeName(item.name),
+        // 圖片一律交給下載後 sniff；Discord 宣告 avif 這類格式時才不會被 MIME 白名單擋掉。
+        contentType: item.contentType?.startsWith('video/') ? item.contentType : 'image/png',
+        url: item.url,
+        description: item.description,
+        spoiler: item.spoiler,
+      }));
+  };
+  const items = [
+    ...visibleAttachments(target, parts),
+    ...componentImages(parts),
     ...embedImages(parts.embeds),
+    ...stickerImages(parts.stickers),
+    ...visibleAttachments(replied, repliedParts),
+    ...componentImages(repliedParts),
     ...embedImages(repliedParts.embeds),
-    ...fixMessages.flatMap((message) => embedImages(message.embeds)),
+    ...fixMessages.flatMap((message) => {
+      const fixParts = messageParts(message);
+      return [
+        ...visibleAttachments(message, fixParts),
+        ...componentImages(fixParts),
+        ...embedImages(fixParts.embeds),
+      ];
+    }),
   ];
+  // 同一個 pathname 可能同時是附件（cdn）與 component media（proxy host）；只送一次，保留第一個。
+  const seen = new Set();
+  const kept = [];
+  for (const item of items) {
+    let key = item.url;
+    try { key = new URL(item.url).pathname; } catch { /* 壞網址留給 collectMediaAttachments 說明 */ }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(item);
+  }
+  return kept;
 }

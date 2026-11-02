@@ -363,7 +363,7 @@ export function imageRefTag(ref, index) {
  * 一批訊息 → prompt 裡的【新訊息】區塊。
  * 頻道：每行 `暱稱：內容`，叫 bot 的加 ★；私聊：只有內文（DSH 會話本身就是一對一）。
  *
- * @param entries { author, text, direct, isOwner?, ref?, quote?, replyName?, imageTags?, hasImage? }[]
+ * @param entries { author, text, direct, isOwner?, ref?, quote?, preview?, replyName?, imageTags?, hasImage? }[]
  */
 export function formatBatch(entries, { guild }) {
   const lines = entries.map((entry) => {
@@ -372,7 +372,8 @@ export function formatBatch(entries, { guild }) {
     // 內文保留換行：程式碼、清單壓成一行模型就看不懂了。續行縮排，
     // 群友才不能用換行在行首偽造一則「★【管理員】」。
     const text = defang(entry.text).trim().replace(/\n/g, guild ? '\n  ' : '\n');
-    const body = [text, media, defang(entry.quote).replace(/\n/g, ' ')].filter(Boolean).join(' ');
+    const preview = entry.preview ? `[連結預覽：${defang(entry.preview)}]` : '';
+    const body = [text, media, preview, defang(entry.quote).replace(/\n/g, ' ')].filter(Boolean).join(' ');
     // 頻道裡只有叫 bot 的那則才標管理員：管理員跟朋友聊天時也掛著標籤，模型會以為是在對它說話。
     const owner = entry.isOwner && (entry.direct || !guild) ? '【管理員】' : '';
     const ref = entry.ref ? `#${entry.ref} ` : '';

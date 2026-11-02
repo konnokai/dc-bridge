@@ -61,6 +61,7 @@ Discord 不 import `src/bridge.js`。
 | `web-search.js` | 聯網搜尋 |
 | `safe-fetch.js` | 有 SSRF 防護的抓取 |
 | `core/fetch-verdict.mjs` | 抓取結果判斷（驗證頁／HTTP 錯誤） |
+| `core/web-content.mjs` | Google export 改寫、HTML 標題／og／正文抽取 |
 | `sensitive.js` | 敏感詞 |
 | `media-normalize.js` | 圖片正規化 |
 | `token-ledger.js` | token 帳本 |

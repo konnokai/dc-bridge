@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Lessons
+
+- 改這個 repo 的功能時，QQ 端只是實作參考，不是同步維護對象；不要為了 QQ 相容或 QQ 測試而限制 Discord 的改動，除非使用者明講。
+
 ## 部署到 Discord 測試伺服器
 
 伺服器：`jun@192.168.98.21`（SSH MCP 的 `main-server-test-account`）。

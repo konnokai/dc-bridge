@@ -175,7 +175,7 @@ export function devFeedbackOverview(store) {
     .map((item) => ({ ...item, messageIds: [...(item.messageIds ?? [])] }));
 }
 
-/** 全部頻道／私聊最近送過的回饋（新→舊）：模型送新的之前先看有沒有提過。 */
+/** 全部頻道／私聊最近送過的回饋（新→舊）：要補充或修正舊的那筆時用來拿 id。 */
 export function recentDevFeedback(store, { limit = 20 } = {}) {
   return (store?.items ?? [])
     .slice()

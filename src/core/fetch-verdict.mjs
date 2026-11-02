@@ -5,6 +5,7 @@
 // 這裡把「被擋住」「其他錯誤」和「正常內容」分開，讓工具回 isError 而不是一大段 HTML。
 // 只做純判斷，測試用假回應，不打真網站。
 // 訊息用簡體：這個 MCP 是 Discord 與 QQ 共用的，檔案其他字串也是簡體。
+import { extractHtmlPreview, isHtml } from './web-content.mjs';
 
 // Cloudflare 的 JavaScript Detections 會把 challenge-platform 的 script 塞進**正常頁面**，
 // 所以不能只憑這個字樣判定；只認驗證頁獨有的標記與標題。
@@ -22,9 +23,10 @@ export function isChallengePage(body) {
 
 /**
  * @param result safeFetch 的回傳 { url, statusCode, truncated, body }
+ * @param options.expectText 這個網址原本要求純文字（例如 Google export）
  * @returns {{ isError: boolean, text: string }}
  */
-export function fetchVerdict(result) {
+export function fetchVerdict(result, { expectText = false } = {}) {
   const status = Number(result?.statusCode);
   if (isChallengePage(result?.body)) {
     return {
@@ -42,5 +44,26 @@ export function fetchVerdict(result) {
     const hint = status === 404 ? '页面不存在或已删除。' : '网站没有回正常内容，直接说打不开。';
     return { isError: true, text: `抓取失败：HTTP ${status}。${hint}` };
   }
-  return { isError: false, text: JSON.stringify(result, null, 2) };
+
+  const body = String(result?.body ?? '');
+  const base = { url: result?.url ?? '', statusCode: status, truncated: Boolean(result?.truncated) };
+  if (expectText && isHtml(body)) {
+    return {
+      isError: true,
+      text: `只拿到登录页或 HTML，没有正文（HTTP ${status || '未知'}）。私人文件或需要登录的链接，直接说打不开。`,
+    };
+  }
+  if (!body.trim()) {
+    return { isError: false, text: JSON.stringify({ ...base, text: '', note: '没有正文' }, null, 2) };
+  }
+  if (!isHtml(body)) {
+    return { isError: false, text: JSON.stringify({ ...base, text: body }, null, 2) };
+  }
+  const preview = extractHtmlPreview(body);
+  const summary = {
+    ...base,
+    ...preview,
+    ...(preview.text ? {} : { note: '只有标题，没有正文' }),
+  };
+  return { isError: false, text: JSON.stringify(summary, null, 2) };
 }

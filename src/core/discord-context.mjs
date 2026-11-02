@@ -14,7 +14,9 @@ const clean = (value) => String(value ?? '')
 
 const cut = (value, max) => (value.length > max ? `${value.slice(0, max)}…` : value);
 
-const values = (collection) => [...(collection?.values?.() ?? [])];
+const values = (collection) => (Array.isArray(collection)
+  ? collection
+  : [...(collection?.values?.() ?? [])]);
 
 // 模型看得到的媒體（圖片或影片）。沒有 contentType 時看副檔名；PDF、zip 不算，
 // 不然 [圖片] 會標在模型其實看不到的附件上。
@@ -44,9 +46,135 @@ export function messageParts(message) {
     text: [content, forwarded].filter(Boolean).join(' '),
     attachments,
     embeds: list.flatMap((entry) => values(entry?.embeds)),
+    components: list.flatMap((entry) => values(entry?.components)),
     stickers: list.flatMap((entry) => values(entry?.stickers)),
     hasImage: attachments.some(isMediaAttachment),
   };
+}
+
+// Discord 的 component embed 與 Components V2 訊息把文字、圖片、按鈕放在 components 裡。
+// 這裡只收模型看得到的內容，不碰 custom_id 這類互動資料；未知型別若還有子元件就繼續遞迴。
+const COMPONENT_TEXT_MAX = 1200;
+const COMPONENT_MEDIA_MAX = 20;
+const COMPONENT_LINK_MAX = 5;
+
+const componentName = (media, fallback) => {
+  const id = String(media?.id ?? '').trim();
+  if (id) return id.slice(0, 80);
+  try {
+    return new URL(String(media?.proxy_url ?? media?.proxyURL ?? media?.url ?? '')).pathname
+      .split('/').filter(Boolean).pop()?.slice(0, 80) || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+/**
+ * 把 component 陣列拆成模型要的文字、連結按鈕與媒體。
+ * discord.js 的 message.components 是 class 實例（toJSON 才是原始格式），
+ * component embed 的 embed.data.components 已經是原始 snake_case，兩種都要收。
+ */
+export function componentParts(components) {
+  const result = { texts: [], links: [], media: [], files: [] };
+  let textChars = 0;
+
+  const addText = (value) => {
+    const text = clean(value);
+    if (!text || textChars >= COMPONENT_TEXT_MAX) return;
+    const kept = text.slice(0, COMPONENT_TEXT_MAX - textChars);
+    result.texts.push(kept.length < text.length ? `${kept}…` : kept);
+    textChars += kept.length;
+  };
+
+  const addMedia = (media, { kind, description = '', spoiler = false } = {}) => {
+    if (result.media.length >= COMPONENT_MEDIA_MAX) return;
+    const url = String(media?.proxy_url ?? media?.proxyURL ?? media?.url ?? '').trim();
+    if (!url) return;
+    result.media.push({
+      name: componentName(media, `${kind || 'component'}.png`),
+      url,
+      contentType: String(media?.content_type ?? media?.contentType ?? ''),
+      description: clean(description),
+      spoiler: Boolean(spoiler),
+      kind,
+    });
+  };
+
+  const walk = (list, depth = 0) => {
+    if (depth > 6) return;
+    for (const raw of values(list)) {
+      const component = raw?.toJSON?.() ?? raw;
+      if (!component || typeof component !== 'object') continue;
+      const type = Number(component.type);
+      if (type === 10) {
+        addText(component.content);
+        continue;
+      }
+      if (type === 2) {
+        if (component.style === 5 && component.url && result.links.length < COMPONENT_LINK_MAX) {
+          result.links.push({
+            label: clean(component.label ?? component.emoji?.name ?? '') || '連結',
+            url: String(component.url).slice(0, 500),
+          });
+        }
+        continue;
+      }
+      if (type === 11) {
+        addMedia(component.media, {
+          kind: 'thumbnail',
+          description: component.description,
+          spoiler: component.spoiler,
+        });
+        continue;
+      }
+      if (type === 12) {
+        for (const item of values(component.items)) {
+          addMedia(item?.media, {
+            kind: 'gallery',
+            description: item?.description,
+            spoiler: item?.spoiler,
+          });
+        }
+        continue;
+      }
+      if (type === 13) {
+        const file = component.file ?? {};
+        const name = clean(component.name ?? file.name ?? componentName(file, '檔案')) || '檔案';
+        result.files.push({
+          name,
+          size: Number(component.size ?? file.size) || 0,
+          attachmentId: String(file.attachment_id ?? file.attachmentId ?? ''),
+          contentType: String(file.content_type ?? file.contentType ?? ''),
+        });
+        addMedia(file, { kind: 'file', spoiler: component.spoiler });
+        continue;
+      }
+      if (Array.isArray(component.components)) walk(component.components, depth + 1);
+      if (component.accessory) walk([component.accessory], depth + 1);
+    }
+  };
+
+  walk(components);
+  return result;
+}
+
+// Components V2 的附件預設不顯示，只有 File component 指到的才算看得到。
+export function visibleAttachments(message, parts = messageParts(message)) {
+  const entries = [message, ...values(message?.messageSnapshots)];
+  const componentsV2 = entries.some((entry) => Number(entry?.flags ?? 0) & (1 << 15));
+  if (!componentsV2) return parts.attachments;
+  const files = entries.flatMap((entry) => componentParts(entry?.components).files);
+  return parts.attachments.filter((attachment) => files.some((file) => (
+    file.attachmentId === attachment.id || file.name === attachment.name
+  )));
+}
+
+// Embed flags：Discord 內容掃描標記的敏感媒體，不把圖餵給模型。
+const SENSITIVE_EMBED_FLAGS = (1 << 4) | (1 << 6) | (1 << 7);
+
+export function embedIsSensitive(embed) {
+  const flags = Number((embed?.data ?? embed)?.flags ?? 0);
+  return (flags & SENSITIVE_EMBED_FLAGS) !== 0;
 }
 
 // 新會話第一批且有 ★：模型剛重置、還沒有自己的發言紀錄，給它一個看話題的提醒。

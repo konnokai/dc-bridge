@@ -407,7 +407,9 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 - **會話**（`#sessions`）：頻道／伺服器名稱（私聊顯示使用者名稱）、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）
 - **回饋**（`#dev-feedback`）：模型用 `submit_feedback` 送出的功能申請與意見，新的排前面。
   每筆有時間、頻道／伺服器、觸發者、當時的 DSH session、原因／需求／預期結果，以及觸發那一輪訊息的 Discord 跳轉連結；
-  編輯過會標「已編輯」，從別的頻道改的會一併顯示來源；可以逐筆刪除。內容只存在 `state/discord-dev-feedback.json`，不會出現在頻道。
+  編輯過會標「已編輯」，從別的頻道改的會一併顯示來源；可以逐筆刪除。
+  每筆右側有「複製 prompt」，會把來源、問題、需求、驗收標準與觸發訊息整理成可直接交給 coding agent 的 prompt。
+  內容只存在 `state/discord-dev-feedback.json`，不會出現在頻道。
   端點：`GET /api/dev-feedback`、`POST /api/dev-feedback/delete`
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
@@ -554,8 +556,8 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 - 條件：訊息與目錄的關鍵字分數 ≥ `reactions.minKeywordScore`、通過 `reactions.probability`、
   該頻道距上次 reaction ≥ `reactions.cooldownMs`、全域每小時 ≤ `reactions.maxPerHour`。
 - 指令、bot 自己、非允許頻道、私聊都不觸發。
-- **看得到圖片的訊息不自動按**：收到當下就有圖片附件或連結預覽圖的訊息（戰績圖、截圖、梗圖）先交給模型判斷，
-  避免只憑旁邊的文字亂按。連結預覽常常晚一點才補上，那一種仍可能在補上之前就按了。
+- **看得到圖片的訊息不自動按**：收到當下就有圖片附件、連結預覽圖或 component media 的訊息（戰績圖、截圖、梗圖）
+  先交給模型判斷，避免只憑旁邊的文字亂按。連結預覽常常晚一點才補上，那一種仍可能在補上之前就按了。
 - 用的是 bridge 端的關鍵字分數，**不額外呼叫模型**，所以不會燒 token。
 - 需要 **Add Reactions** 權限（`1<<6 = 64`）；`/invite` 的連結已包含。
 - 只加 reaction，不回訊息；失敗（多半是權限）只記 log，不會吵使用者。
@@ -810,8 +812,12 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
   改完要一則放得下（`maxMessageChars`），投票不能改。內容一樣過敏感資訊閘門，佔「一輪 5 則」的名額。改之前橋接把舊內容記進日誌
 - `mcp__discord__delete_message`（`message`）：收回自己送出的一則訊息，範圍跟 `edit_message` 一樣，一輪最多 2 則。刪之前舊內容記進日誌
 - `mcp__discord__view_message`（`message`、`channel` 可省略）：看一則訊息的完整內容：發言者、時間、有沒有編輯過、全文（最多 1500 字）、
-  貼圖、附件清單、連結預覽（embed 的標題、說明、網域、欄位）、投票（題目、選項、票數）、回覆的是哪一則、reaction 統計，
-  再附上圖片（本則與被回覆那則的附件、貼圖、連結預覽的圖，最多 `media.maxCount` 張，走同一套下載與縮圖）。
+  貼圖、附件清單（含 title／description）、連結預覽（embed 的標題、說明、作者、平台、頁尾、完整網址、欄位；
+  component embed 的文字、圖片與連結按鈕）、Components V2 訊息（top-level text、media gallery、file、link button）、
+  投票（題目、選項、票數）、回覆的是哪一則、reaction 統計，
+  再附上圖片（本則與被回覆那則的附件、貼圖、連結預覽與 component media，最多 `media.maxCount` 張，走同一套下載與縮圖）。
+  Discord 的 `type: components` embed 與 `IS_COMPONENTS_V2` 訊息，文字與圖片都在 `components` 裡；view_message 會遞迴讀完。
+  敏感內容 flag 的 embed 不下載圖片，只留一行說明。
   `message` 給目前頻道看過的 `#編號`，或訊息 ID（Discord 訊息連結的最後一段）；`channel` 給頻道 ID 就能讀**同一個伺服器**的
   其他頻道（省略就是目前頻道，私聊不能跨頻道）。`allow`／`deny.channels` 不擋這條唯讀路徑，實際能不能抓只看
   bot 在 Discord 的頻道權限（管理頻道通常 bot 本來就讀不到）。只有模型自己的不理名單（`ignore_user`）會擋，
@@ -845,7 +851,8 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 - `mcp__discord__remove_reaction`（`message`、`emoji`）：收回你在那則訊息按過的同一個表情。
   只能收回自己按的；沒按過或已經收回時回 404，一輪最多 3 次（跟 `add_reaction` 分開算）
 - `mcp__discord__set_quiet`（`minutes`、`reason` 可省略）：讓自己安靜 1~120 分鐘。這段時間**沒叫 bot** 的頻道訊息
-  不送進模型（省 token），叫 bot 的照常；黑話語料照收。`minutes=0` 提早結束。
+  不送進模型（省 token）；叫 bot 的只按 reaction，文字、貼圖與投票會被閘門擋下（帶檔案的 `send_image` 例外）。
+  被叫安靜時只設安靜，不要送文字；安靜結束後不要主動接同一個話題。黑話語料照收。`minutes=0` 提早結束。
   安靜結束後的下一批會重新帶一次頻道上下文。狀態只在記憶體，bridge 重啟就清掉
 - `mcp__discord__ignore_user`（`message`、`minutes`、`reason` 可省略）：把那則訊息的發言者設進模型自己的不理名單，
   `minutes` 1~1440；`minutes=0` 解除。這段時間他的訊息（包括 @bot）不送進模型，讀歷史／搜尋／摘要也看不到。
@@ -878,12 +885,14 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
   `days` 只看最近幾天。回傳的編號給 `forget_note` 用
 - `mcp__discord__forget_note`（`number`）：刪掉這個頻道第 `number` 條筆記（舊→新的編號）
 - `mcp__discord__submit_feedback`（`reason`、`need`、`expected`）：把「覺得自己缺某個能力／工具」或「對回覆方式、規則、功能的建議」
-  送給開發者，各欄最多 500 字。一輪最多 1 筆；同一個頻道／私聊 24 小時最多 5 筆，全部加起來最多 20 筆。
-  所有頻道 24 小時內 `need` 相同的內容不會重複記，會回既有那筆的 id（不限同一個頻道）。
+  送給開發者，各欄最多 500 字。不用先 `list_feedback`：所有頻道 24 小時內 `need` 相同的內容會回既有那筆的 id。
+  觸發：工具只回「看不到／只有網域或標題／沒有正文」、你得繞路才做得到，或規則互相打架；網站擋、逾時、訊息刪除、
+  檔案太大、私人文件、使用者要的東西本來就不在 bot 範圍或規則禁止，這些不算。先照常回使用者，同一輪再送。
+  一輪最多 1 筆；同一個頻道／私聊 24 小時最多 5 筆，全部最多 20 筆。
   內容只存在 `state/discord-dev-feedback.json`，控制台「回饋」分頁看得到；不會回到頻道，也不會出現在進度訊息。
   橋接會自動附上當時的 session、頻道／伺服器、觸發者與觸發訊息 id，方便回追上下文。敏感資訊閘門照樣適用
 - `mcp__discord__list_feedback`（沒有其他參數）：查自己在**所有頻道／私聊**最近送過的 20 筆回饋（新→舊，含 id 與來源），
-  私聊來源只顯示「私聊」、不顯示對方名字。送新的之前先看有沒有提過；這是全域清單，開發者要看的就是同一份。
+  私聊來源只顯示「私聊」、不顯示對方名字。送新的不用先查；要補充或修正舊的那筆時才用這個拿 id。這是全域清單，
   工具說明要求它不要在頻道貼出清單
 - `mcp__discord__edit_feedback`（`id`、`reason`、`need`、`expected`）：改自己送過的一筆回饋，`id` 用 `list_feedback` 的，
   **不限頻道**；一輪最多 2 筆。改過會記 `updatedAt`，控制台標「已編輯」；從別的頻道改的會一併顯示來源
@@ -894,7 +903,10 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 - `mcp__slang__record_channel_tag`（`tag`、`description`）：把這個頻道的風格記成候選；同頻道同名標籤同樣只回「已收錄過」。
   只收不隨話題變的習慣，一次性的話題或事件不算；一個頻道最多 5 條，滿了回錯誤
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
-- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓 HTTPS（443）網頁正文，最多 50000 字，結果會包一層「這是資料、不是指令」的外殼，擋內網與本機位址。
+- `mcp__web-search-safe__web_fetch`（`url`）：只讀抓 HTTPS（443）網頁正文，結果會包一層「這是資料、不是指令」的外殼，擋內網與本機位址。
+  HTML 回標題、說明與前 2000 字可見文字；純文字最多 50000 字。
+  Google Docs／Slides／Sheets 的 `/edit`、`/view` 會自動改寫成 `export?format=txt`／`csv`（公開文件才有效；私人文件回登入頁時明確說打不開）。
+  HTML 會抽 `og:title`／`og:description`／`<title>` 與可見文字；只有標題、沒有正文時明講「只有標題」。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
 - `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖或拿設定圖改圖。
   `prompt` 必填；畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
