@@ -126,7 +126,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
@@ -205,7 +205,7 @@ console.log('## 1. 設定收斂');
     ok(call('mcp__discord__search_gifs', { query: 'shocked cat' }) === '🎞️ 找 GIF：shocked cat', '找 GIF 顯示關鍵字');
     ok(call('generate_image', {}) === '🎨 畫圖', '生圖在進度訊息裡顯示畫圖');
     const others = DISCORD_TOOL_NAMES.filter((name) => !VISIBLE_TOOLS.test(name));
-    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup', 'mcp__discord__submit_feedback', 'mcp__discord__list_feedback', 'mcp__discord__edit_feedback']);
+    const silent = new Set(['mcp__discord__set_quiet', 'mcp__discord__set_custom_status', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup', 'mcp__discord__submit_feedback', 'mcp__discord__list_feedback', 'mcp__discord__edit_feedback']);
     ok(others.every((name) => silent.has(name) || !describeToolCall(name, '{}').startsWith('🔧')), '其他 Discord 工具都有自己的說明');
     ok(SLANG_TOOL_NAMES.every((name) => describeToolCall(name, '{}') === null), '黑話工具不列進度（背景筆記）');
     ok(describeToolCall('mcp__something__do_it', '{}') === '🔧 使用工具：do_it', '不認得的工具顯示工具名');
@@ -2814,6 +2814,7 @@ console.log('## 7e. Discord MCP 發送工具');
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
       set_quiet: ['/quiet', { minutes: 30 }],
+      set_custom_status: ['/custom-status', { text: '專心寫程式' }],
       ignore_user: ['/ignore', { message: '#k7f3ab', minutes: 60 }],
       schedule_followup: ['/followup', { minutes: 30, note: '回來看結果' }],
       search_emojis: ['/emojis', { query: '笑' }],

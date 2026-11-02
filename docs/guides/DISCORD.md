@@ -859,6 +859,9 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
   不送進模型（省 token）；叫 bot 的只按 reaction，文字、貼圖與投票會被閘門擋下（帶檔案的 `send_image` 例外）。
   被叫安靜時只設安靜，不要送文字；安靜結束後不要主動接同一個話題。黑話語料照收。`minutes=0` 提早結束。
   安靜結束後的下一批會重新帶一次頻道上下文。狀態只在記憶體，bridge 重啟就清掉
+- `mcp__discord__set_custom_status`（`text`）：改 bot 在成員列表顯示的自訂狀態（custom status），
+  最多 128 字；`text` 空字串＝清除。狀態存在 `state/discord-custom-status.json`，bridge 重啟或重新連線後會重新套用。
+  全 bot 共用一份、跨伺服器顯示；不要放群友的名字、私事或私聊內容。兩次修改至少間隔 60 秒，文字過敏感資訊閘門
 - `mcp__discord__ignore_user`（`message`、`minutes`、`reason` 可省略）：把那則訊息的發言者設進模型自己的不理名單，
   `minutes` 1~1440；`minutes=0` 解除。這段時間他的訊息（包括 @bot）不送進模型，讀歷史／搜尋／摘要也看不到。
   管理員不能設；控制台「會話」分頁看得到。跟 `deny.users`、`deny.self` 分開（見「模型自己不理的人」）
@@ -967,7 +970,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
 `POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
-`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
@@ -1099,7 +1102,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 25 個，唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 29 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。

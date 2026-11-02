@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ButtonStyle, ChannelType, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
+import { ActivityType, ButtonStyle, ChannelType, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   COMPACT_NOTICE,
@@ -55,6 +55,7 @@ import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, sca
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
+import { loadStatusFile, parseStatusText, saveStatusFile } from './core/discord-status.mjs';
 import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import {
@@ -184,6 +185,7 @@ const SESSIONS_FILE = path.join(STATE_DIR, 'discord-sessions.json');
 const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
 const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
+const CUSTOM_STATUS_FILE = path.join(STATE_DIR, 'discord-custom-status.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const DEV_FEEDBACK_FILE = path.join(STATE_DIR, 'discord-dev-feedback.json');
@@ -537,6 +539,17 @@ async function main() {
       log(`不理名單存檔失敗：${error?.message ?? error}`);
       return false;
     }
+  }
+
+  // 模型自己設定的自訂狀態：跨伺服器顯示，重啟與重新連線後都要重新套用。
+  let customStatus = loadStatusFile(CUSTOM_STATUS_FILE);
+  let lastStatusAt = 0;
+  const STATUS_COOLDOWN_MS = 60_000;
+
+  function applyCustomStatus(text) {
+    client.user.setPresence({
+      activities: text ? [{ type: ActivityType.Custom, name: 'Custom Status', state: text }] : [],
+    });
   }
 
   // 同一個人在同一個頻道 10 分鐘內被拒絕第 2 次就改按 ❌，不再送同一句。
@@ -1792,6 +1805,30 @@ async function main() {
       primedKeys.delete(key);
       log(`MCP 結束安靜 ${key}`);
       return { key, text: '已結束安靜，下一批會重新帶頻道上下文。' };
+    },
+    async 'custom-status'(body) {
+      const { sessionId, key } = await agentSender.resolve(body.token);
+      let text;
+      try {
+        text = parseStatusText(body.text);
+      } catch (error) {
+        throw toolError(error?.message ?? error, 400);
+      }
+      if (text) agentSender.checkSensitive(sessionId, text);
+      const waitMs = STATUS_COOLDOWN_MS - (Date.now() - lastStatusAt);
+      if (waitMs > 0) throw toolError(`自訂狀態剛改過，再等 ${Math.ceil(waitMs / 1000)} 秒`, 429);
+      const previous = customStatus;
+      try {
+        saveStatusFile(CUSTOM_STATUS_FILE, text);
+      } catch (error) {
+        log(`自訂狀態存檔失敗：${error?.message ?? error}`);
+        throw toolError('自訂狀態存檔失敗，沒有生效', 500);
+      }
+      customStatus = text;
+      applyCustomStatus(text);
+      lastStatusAt = Date.now();
+      log(`MCP 自訂狀態 ${key}：${text ? `「${text}」` : '清除'}${previous ? `（原「${previous}」）` : ''}`);
+      return { key, text: text ? `已把自訂狀態設成「${text}」` : '已清除自訂狀態' };
     },
     // 模型自己設的黑名單：跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開。
     async ignore(body) {
@@ -4536,6 +4573,16 @@ async function main() {
   });
   client.on(Events.Error, (error) => log(`Discord 客戶端錯誤：${error?.message ?? error}`));
   client.on(Events.Warn, (warning) => log(`Discord 警告：${warning}`));
+
+  // 自訂狀態：每次 READY（含重新 IDENTIFY）都要重新套用，ClientReady 一個程序只觸發一次。
+  client.on(Events.ShardReady, () => {
+    if (!customStatus) return;
+    try {
+      applyCustomStatus(customStatus);
+    } catch (error) {
+      log(`套用自訂狀態失敗：${error?.message ?? error}`);
+    }
+  });
 
   client.once(Events.ClientReady, (ready) => {
     log(`已登入：${ready.user.tag}（${ready.user.id}）`);
