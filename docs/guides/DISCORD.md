@@ -87,7 +87,7 @@ pm2 logs dc-bridge
 | `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `requireMentionInChannel` | 單頻道覆寫：`{ "頻道ID": true }` = 該頻道只能 @bot；`false` = 該頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。值必須是 JSON boolean（`"false"` 字串會被拒絕）。討論串用自己的 id，**不繼承**母頻道的覆寫（跟 `allow.channels` 一樣）；私聊不受影響。沒開 `messageContentIntent` 時一律要 @bot。控制台「設定」可以用 `頻道ID=true` 一行一個編輯 |
-| `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 3000（500~30000） |
+| `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 5000（500~30000） |
 | `batch.maxWaitMs` | 一批從第一則算起最多等多久，預設 15000（1000~120000）；訊息一直進來也不會無限延後 |
 | `batch.maxMessages` | 一批最多幾則，滿了立刻送出，預設 20（1~50） |
 | `messageContentIntent` | 是否申請 Message Content 特權意圖，預設 `true`。設 `false` 時會強制 `requireMentionInGuild: true`（不然收不到內容） |

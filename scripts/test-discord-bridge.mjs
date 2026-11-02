@@ -266,7 +266,7 @@ console.log('## 1. 設定收斂');
   ok(normalizeDiscordConfig({}).console.port === 3110, 'console.port 預設 3110');
   throws(() => normalizeDiscordConfig({ console: { host: 'bad host' } }), /不是合法/, 'console.host 有空白要拋錯');
 
-  ok(cfg.batch.debounceMs === 3000 && cfg.batch.maxWaitMs === 15_000 && cfg.batch.maxMessages === 20, '批次預設值');
+  ok(cfg.batch.debounceMs === 5000 && cfg.batch.maxWaitMs === 15_000 && cfg.batch.maxMessages === 20, '批次預設值');
   const batch = normalizeDiscordConfig({ batch: { debounceMs: 1, maxWaitMs: 1, maxMessages: 999 } }).batch;
   ok(batch.debounceMs === 500 && batch.maxWaitMs === 1000 && batch.maxMessages === 50, '批次數字欄位收斂');
 }

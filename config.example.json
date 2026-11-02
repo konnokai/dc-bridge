@@ -56,7 +56,7 @@
       "maxChars": 3000
     },
     "batch": {
-      "debounceMs": 3000,
+      "debounceMs": 5000,
       "maxWaitMs": 15000,
       "maxMessages": 20
     },

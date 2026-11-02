@@ -148,7 +148,7 @@ export function normalizeDiscordConfig(raw) {
     },
     batch: {
       // 同一會話的訊息先等一下再合成一批送出，一批只開一個模型回合。
-      debounceMs: clamp(src.batch?.debounceMs, 3000, 500, 30_000),
+      debounceMs: clamp(src.batch?.debounceMs, 5000, 500, 30_000),
       maxWaitMs: clamp(src.batch?.maxWaitMs, 15_000, 1000, 120_000),
       maxMessages: clamp(src.batch?.maxMessages, 20, 1, 50),
     },
