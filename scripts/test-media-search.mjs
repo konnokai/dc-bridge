@@ -355,6 +355,7 @@ await test('resolveSearchApiKey 的优先级：config > env > DSH 凭据', async
 });
 
 await test('mapDeepSeekResponse：去重、去 #N 锚点、引用摘要', async () => {
+  const apiKey = 'sk-secret-fixture-key';
   const response = {
     content: [
       { type: 'thinking', thinking: '...' },
@@ -363,17 +364,18 @@ await test('mapDeepSeekResponse：去重、去 #N 锚点、引用摘要', async 
         content: [
           { type: 'web_search_result', title: '鲸鱼娘', url: 'https://example.com/a#1', page_age: '2026-10-01' },
           { type: 'web_search_result', title: '重复', url: 'https://example.com/a#2' },
-          { type: 'web_search_result', title: '鲸鱼娘（二）', url: 'https://example.com/b' }
+          { type: 'web_search_result', title: `鲸鱼娘（二）${apiKey}`, url: 'https://example.com/b' }
         ]
       },
-      { type: 'text', text: '答案', citations: [{ url: 'https://example.com/b', cited_text: '这是引用片段' }] }
+      { type: 'text', text: '答案', citations: [{ url: 'https://example.com/b', cited_text: `这是引用片段 ${apiKey}` }] }
     ]
   };
-  const results = mapDeepSeekResponse(response, 8);
+  const results = mapDeepSeekResponse(response, 8, apiKey);
   assert.equal(results.length, 2, '同一 URL 必须去重');
   assert.equal(results[0].url, 'https://example.com/a', '必须去掉 #1 锚点');
   assert.equal(results[0].publishedAt, '2026-10-01');
-  assert.equal(results[1].snippet, '这是引用片段');
+  assert.equal(results[1].snippet, '这是引用片段 [REDACTED]', '引用摘要里的 key 必须遮掉');
+  assert.ok(!JSON.stringify(results).includes(apiKey), '结果里不能出现完整 key');
   assert.throws(() => mapDeepSeekResponse({ content: [{ type: 'text', text: '没有结果块' }] }), /web_search_tool_result/);
 });
 

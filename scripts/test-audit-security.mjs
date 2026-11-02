@@ -15,6 +15,7 @@ dns.promises.lookup = async (host) => {
   if (host === 'public.test') return [{ address: '93.184.216.34', family: 4 }];
   if (host === 'mixed.test') return [{ address: '93.184.216.34', family: 4 }, { address: '::1', family: 6 }];
   if (host === 'expanded.test') return [{ address: '0:0:0:0:0:ffff:7f00:1', family: 6 }];
+  if (host === 'fakeip.test') return [{ address: '198.18.0.5', family: 4 }];
   // 双栈主机：IPv6 在前（真实 DNS 的常见顺序），用于验证「IPv4 优先 + 失败切换」。
   if (host === 'dual.test') return [
     { address: '2606:4700:4700::1111', family: 6 },
@@ -86,6 +87,7 @@ test('IPv6 canonicalization cannot turn a private address into public', () => {
     '0:0:0:0:0:0:0:1', '0:0:0:0:0:ffff:7f00:1',
     '::ffff:127.0.0.1', 'fd00::8.8.8.8', 'fe80::8.8.8.8',
     '64:ff9b::7f00:1', '64:ff9b:1:a00::808:808', 'not-an-ip',
+    '168.63.129.16',
   ]) assert.equal(isPrivateIp(value), true, value);
   for (const value of ['8.8.8.8', '2606:4700:4700::1111', '::ffff:8.8.8.8']) {
     assert.equal(isPrivateIp(value), false, value);
@@ -99,6 +101,12 @@ test('URLs and every DNS result are validated before opening a connection', asyn
     'http://[::ffff:127.0.0.1]/', 'http://localhost./', 'http://host.local./',
     'http://mixed.test/', 'http://expanded.test/',
   ]) await assert.rejects(validateFetchUrl(url));
+  assert.equal(transport.requests.length, 0);
+});
+
+test('fake-ip DNS results are rejected with an actionable message', async (t) => {
+  const transport = mockTransport(t, []);
+  await assert.rejects(validateFetchUrl('https://fakeip.test/'), /fake-ip/);
   assert.equal(transport.requests.length, 0);
 });
 

@@ -24,6 +24,7 @@ import {
   SLANG_STATUS
 } from '../src/slang-learner.js';
 import { CN_HOLIDAYS, CN_HOLIDAYS_2027, DEFAULT_PRICE_TABLE, isPeakAt } from '../src/model-prices.js';
+import { hasPermissionGrant, hasPermissiveTrustee } from '../src/state-acl.mjs';
 
 let failed = 0;
 function assert(cond, label) {
@@ -121,6 +122,23 @@ assert(CN_HOLIDAYS.includes('2027-01-01'), '内置表包含 2027 元旦');
 assert(isPeakAt(Date.parse('2027-02-08T10:00:00+08:00')) === false, '2027 春节（周一）10:00 判为空闲时段');
 assert(isPeakAt(Date.parse('2027-03-01T10:00:00+08:00')) === true, '2027 普通周一 10:00 仍为高峰时段');
 assert(DEFAULT_PRICE_TABLE.holidays.includes('2027-10-01'), '默认价目表用的是跨年份的节假日表');
+
+// ── 7. ACL 回讀：空 DACL / 只有完整性標籤不算已授權 ──────────────────────
+const aclOut = [
+  'D:\\demo\\state BUILTIN\\Administrators:(OI)(CI)(F)',
+  '                 NT AUTHORITY\\SYSTEM:(OI)(CI)(F)',
+  '                 DESKTOP\\user:(OI)(CI)(F)',
+  '',
+  'Successfully processed 1 files; Failed processing 0 files',
+].join('\n');
+assert(hasPermissionGrant(aclOut), '有實際 ACE 才算有授權');
+assert(!hasPermissionGrant('D:\\demo\\state\n\nSuccessfully processed 1 files; Failed processing 0 files'),
+  '空 DACL（只有處理結果）不算已授權');
+assert(!hasPermissionGrant('D:\\demo\\state user:(IO)(F)'),
+  '(IO) 只對子項生效，不能證明目前路徑自己有權限');
+assert(hasPermissiveTrustee('Everyone:(R)') && hasPermissiveTrustee('S-1-5-11:(R)'),
+  '寬鬆主體不只看名稱，也認 SID 寫法');
+assert(!hasPermissiveTrustee('DESKTOP\\user:(OI)(CI)(F)'), '只有目前使用者的授權不算寬鬆');
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
