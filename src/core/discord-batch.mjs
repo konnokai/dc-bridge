@@ -380,7 +380,9 @@ export function formatBatch(entries, { guild }) {
     const replyTo = entry.replyName ? `↪回覆 ${clean(defang(entry.replyName)) || '未知'}` : '';
     if (!guild) return `${ref}${owner}${replyTo ? `${replyTo}：` : ''}${body}`;
     const reply = replyTo ? ` ${replyTo}` : '';
-    return `${ref}${entry.direct ? '★' : ''}${owner}${clean(defang(entry.author)) || '未知'}${reply}：${body}`;
+    // 已退出的人 @ 你或回覆你時，這則照正常流程進來；寫清楚，免得模型照 ⊘ 規則跳過。
+    const mutedNote = entry.direct && entry.muted ? '（他本人在叫你，可以回）' : '';
+    return `${ref}${entry.direct ? '★' : ''}${owner}${clean(defang(entry.author)) || '未知'}${mutedNote}${reply}：${body}`;
   });
   if (!guild) return lines.join('\n');
   return `【新訊息】（★ = 在叫你：@你或回覆你；#編號 用來指定要回覆、查看或按 reaction 的訊息）\n${lines.join('\n')}`;

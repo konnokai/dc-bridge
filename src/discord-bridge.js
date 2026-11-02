@@ -50,7 +50,7 @@ import {
   viewChannelId,
   viewMessageTarget,
 } from './core/discord-core.mjs';
-import { OPENING_HINT, componentParts, embedIsSensitive, formatQuote, formatRecentContext, formatTimeContext, linkPaths, messageParts, parseHistoryDate, referencedMessage, visibleAttachments } from './core/discord-context.mjs';
+import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, visibleAttachments } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
@@ -3281,6 +3281,8 @@ async function main() {
         text: entry.text,
         rawText: entry.rawText ?? entry.text,
         direct: entry.direct,
+        // 已退出的人 @ 你／回覆你時照常進批次，讓 formatBatch 標「可以回」。
+        muted: cfg.discord.deny.self.includes(String(entry.userId)),
         isOwner: entry.isOwner,
         ref: entryRef,
         quote,
@@ -3417,6 +3419,11 @@ async function main() {
 
     // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
     const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
+    // 名單每批重算：模型會把舊 prompt 或壓縮摘要裡的 ⊘ 當成現在，這一行負責校正。
+    // 只列這個伺服器的成員，名字取法跟【最近頻道訊息】一致，模型才對得上。
+    const blacklistStatus = guild
+      ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild))
+      : '';
     const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
     const time = [
       formatTimeContext({ messageAt: job.entries[0].at }),
@@ -3424,7 +3431,7 @@ async function main() {
       formatActivityLine(activity.stats(key)),
     ].filter(Boolean).join('\n');
     return {
-      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, blacklistStatus, batch, time].filter(Boolean).join('\n'),
       images,
       feedbackEntries,
     };

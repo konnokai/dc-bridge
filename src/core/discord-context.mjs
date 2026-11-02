@@ -5,7 +5,7 @@
 // 取資料用 Discord 的 channel.messages.fetch（Read Message History 權限），
 // 不需要 Message Content 特權意圖，也不用自己維護 ring buffer。
 import { describeAge } from '../model-view.js';
-import { defang } from './discord-batch.mjs';
+import { defang, visibleName } from './discord-batch.mjs';
 
 const clean = (value) => String(value ?? '')
   .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -294,6 +294,33 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
     used += line.length + 1;
   }
   if (lines.length === 0) return '';
-  const legend = lines.some((line) => line.includes('⊘')) ? '（⊘ = 已退出，只看不回）' : '';
+  const legend = lines.some((line) => line.includes('⊘')) ? '（⊘ = 已退出，只看不回；跨批的舊 ⊘ 看【黑名單現況】）' : '';
   return `【最近頻道訊息】${legend}\n${lines.join('\n')}`;
+}
+
+/**
+ * 每一批都重算的黑名單現況。
+ * 模型會把舊 prompt 與壓縮摘要裡的 ⊘ 當成現在，這一行是唯一可信的當下名單。
+ */
+export function formatBlacklistStatus(names, { max = 20 } = {}) {
+  const list = [...new Set((names ?? []).map((name) => clean(defang(name))).filter(Boolean))];
+  if (list.length === 0) {
+    return '【黑名單現況】名單上目前沒有人；這一批訊息標 ⊘ 的人仍然只看不回，更早 prompt 或摘要裡的 ⊘ 只是當時的狀態。';
+  }
+  const shown = list.slice(0, max).map((name) => `「${name}」`).join('、');
+  const more = list.length > max ? `…等 ${list.length} 人` : '';
+  return `【黑名單現況】⊘ 只看不回：${shown}${more}。這一批訊息標 ⊘ 的人一樣只看不回；更早 prompt 或摘要裡的 ⊘ 只是當時的狀態，名單有沒有解除以這一行為準。`;
+}
+
+/**
+ * 這批 prompt 要列的黑名單名稱：只認這個伺服器的成員，取法跟作者名稱一致（伺服器暱稱優先）。
+ * 快取沒有成員就跳過：不印 id，免得模型把 id 當成另一個人，或把別伺服器的人列進來。
+ */
+export function guildBlacklistNames(ids, guild) {
+  return (ids ?? []).flatMap((id) => {
+    const member = guild?.members?.cache?.get?.(String(id));
+    if (!member) return [];
+    const name = visibleName(member.displayName, member.user?.displayName, member.user?.username);
+    return name ? [name] : [];
+  });
 }
