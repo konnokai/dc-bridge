@@ -212,6 +212,17 @@ tool(
 );
 
 tool(
+  'set_custom_status',
+  '改你自己在 Discord 成員列表顯示的自訂狀態（custom status）。想讓大家知道你在做什麼、心情、作息時用；不要拿它代替回話，也不要放群友的名字、私事或私聊內容。text 留空 = 清除；兩次修改至少隔 60 秒。',
+  {
+    token: sessionToken,
+    text: z.string().max(128).describe('成員列表顯示的一句話，最多 128 字；空字串 = 清除'),
+  },
+  '/custom-status',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
   'schedule_followup',
   '排一個之後的「回訪」：時間到了 bridge 會給你一個提示，你再決定要不要說話（不是預先寫好直接送出）。用在「我等一下回來看結果」「晚點再確認」這種；做不到的事不要拿它敷衍。',
   {

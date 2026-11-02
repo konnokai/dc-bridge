@@ -430,7 +430,7 @@ const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
   'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
-  'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup',
+  'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__set_custom_status', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   // 給開發者的意見不該在頻道留下任何痕跡。
   'mcp__discord__submit_feedback', 'mcp__discord__list_feedback', 'mcp__discord__edit_feedback',
