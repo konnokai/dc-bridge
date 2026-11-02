@@ -7,7 +7,7 @@
 
 - 日期：2026-11-02
 - 上游：`upstream/main` @ `b80fa51`（自上次基準 27 個 commit）
-- 本機：`main` @ `91605ad`
+- 本機：`main` @ `e5f7334`（空合併 `upstream/main` 後，見下面「清掉 GitHub 的 behind」）
 - 下次只看這之後的新東西：
 
 ```bash
