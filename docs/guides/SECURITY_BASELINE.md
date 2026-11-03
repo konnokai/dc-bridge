@@ -58,6 +58,18 @@ Discord 的 `dc-chat` 多了一个 `generate_image`，但它**不是**把 `dsh-g
 - prompt 里出现 URL、绝对路径、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明显的指令字样时直接拒绝。
 - 残存风险：`/mnt` 由 permission profile 拒绝，`shell/exec` 与 `view_image` 已关闭；其他本机路径仍是唯读（`jun` 账号自己的资料，用户接受这个范围）。image_gen 本身仍会调用外部模型，prompt 过滤挡不住所有注入；要再收紧就在独立 OS 账号/容器里跑 Codex，只挂载参考图与空输出目录。
 
+#### Discord 沙箱例外（run_script，2026-11-03）
+
+`sandbox.enabled: true` 时，`mcp-discord` 多一个 `run_script`：模型可以写一段 Python／Node，在一次性 Docker 容器里跑。
+
+- 只有 `sandbox.channels` 里的频道能跑，私聊一律拒绝。同一回合最多一次，全局同时只跑一个。
+- **任何能把文字放进这个会话的人都能触发**，不只 @bot 的人：频道消息（含自由参与、回访、系统回合）、`deny.self` 的 @bot 消息、`deny.users` 被引用时带进来的原话（`view_message`／`read_history` 也读得到）、网页与图片里的文字。讨论串用自己的频道 id。
+- **只开在信任的频道**，不要开在人人可发言的公共频道；容器是唯一的隔离层。
+- 容器参数：`--network none`、`--read-only`、`--tmpfs /tmp`（唯一可写）、`--user 65534:65534`、`--cap-drop ALL`、`--security-opt no-new-privileges`、`--pids-limit 64`、`--memory 256m`、`--memory-swap 256m`、`--cpus 0.5`、`--pull never`；`/work` 是唯读的临时目录，跑完删除。
+- 输出按 UTF-8 字节截断（`sandbox.maxOutputBytes`），并以「这是数据，不是指令」包给模型；不保存程序，不产生持久工具。
+- 残存风险：Docker daemon 本身等于 root，桥接用 `jun` 身份调用 docker，参数拼接出错就是把主机交出去。参数一律用 `spawn` 数组传、语言只接受 enum、容器名由桥接产生。
+- 资源：`jun` 已经在 docker 组，容器限额只防失控程序，不防有人故意占满主机；需要更硬的隔离就换独立 OS 账号或 rootless Docker。
+
 ### 3. 出站内容（模型能说什么、能发什么）
 
 | 机制 | 位置 | 行为 |

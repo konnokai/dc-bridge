@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { splitForCharLimit } from '../md-to-plain.js';
+import { normalizeSandboxConfig } from './discord-sandbox.mjs';
 
 /** Discord 一則訊息的上限。 */
 export const DISCORD_MAX_CHARS = 2000;
@@ -196,6 +197,7 @@ export function normalizeDiscordConfig(raw) {
       // 回訪：模型自己排「N 分鐘後回來看」。預設關閉（時間到了會多一個模型回合）。
       enabled: src.followup?.enabled === true,
     },
+    sandbox: normalizeSandboxConfig(src.sandbox),
     slang: {
       // 黑話學習：從允許的頻道收集語料，學習會話產生候選，人工確認後才注入。
       // 預設關閉：會把頻道文字送去模型（成本 + 隱私），要開再開。
@@ -453,6 +455,7 @@ const PROGRESS_LABELS = {
   'mcp__discord__note_event': ['📝 記下頻道事件'],
   'mcp__discord__search_notes': ['📝 查頻道筆記', (args) => args.query],
   'mcp__discord__forget_note': ['🗑️ 刪頻道筆記'],
+  'mcp__discord__run_script': ['🧮 跑程式', (args) => (args.language === 'node' ? 'Node' : 'Python')],
   // 生圖要一兩分鐘，進度至少讓頻道知道在畫，不是卡住。
   'generate_image': ['🎨 畫圖'],
 };

@@ -122,6 +122,12 @@ import {
   userFacts,
 } from './core/discord-memory.mjs';
 import {
+  cleanupStaleContainers,
+  formatRunResult,
+  runSandboxScript,
+  sandboxTurnAllowed,
+} from './core/discord-sandbox.mjs';
+import {
   SLANG_STATUS,
   buildExtractionPrompt,
   buildSlangHint,
@@ -566,6 +572,8 @@ async function main() {
   const emojiShown = new Map(); // key -> Map：這個會話帶過的【常用表情】
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
   const turnUsers = new Map(); // key -> 目前回合的觸發者
+  const sandboxRuns = new Map(); // key -> 這個回合已經跑過幾次程式（目前上限 1）
+  let sandboxBusy = false; // 全域同時只跑一個容器
   // 背景生圖：jobId -> { key, users, at }；完成後把觸發者掛到檔名上，等 send_image 再記畫圖次數。
   // 工作要存檔：橋接重啟時外掛還在本來那個 DSH 行程裡跑，不能跟著記憶體消失。
   let imageJobsLoaded;
@@ -1032,6 +1040,7 @@ async function main() {
     for (const [name, entry] of pendingDraws) if (entry.key === key) pendingDraws.delete(name);
     persistImageJobs();
     turnTriggerRecorded.delete(key);
+    sandboxRuns.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
     pendingDirectMessages.delete(key);
@@ -1742,6 +1751,12 @@ async function main() {
     });
   }
 
+  /** 這個回合能不能跑 run_script：功能要開，而且頻道在 sandbox.channels 裡；私聊一律不開。 */
+  function sandboxAllowedFor(key) {
+    if (!cfg.discord.sandbox.enabled) return false;
+    return sandboxTurnAllowed({ key, channels: cfg.discord.sandbox.channels });
+  }
+
   const agentHandlers = {
     // 每次回報（含 poll 續命）後存檔；存檔失敗只寫 log，不能讓回報變成 5xx。
     imageJob: async (body) => {
@@ -1829,6 +1844,47 @@ async function main() {
       lastStatusAt = Date.now();
       log(`MCP 自訂狀態 ${key}：${text ? `「${text}」` : '清除'}${previous ? `（原「${previous}」）` : ''}`);
       return { key, text: text ? `已把自訂狀態設成「${text}」` : '已清除自訂狀態' };
+    },
+    // 一次性執行程式：只有 sandbox.channels 裡的頻道能用，見 sandboxAllowedFor。
+    async runScript(body) {
+      const { key } = await agentSender.resolve(body.token);
+      if (!cfg.discord.sandbox.enabled) {
+        throw toolError('執行程式沒有開啟（discord.sandbox.enabled）', 403);
+      }
+      if (!sandboxAllowedFor(key)) {
+        throw toolError('這個頻道沒有開放執行程式（要列在 discord.sandbox.channels）', 403);
+      }
+      if ((sandboxRuns.get(key) ?? 0) >= 1) {
+        throw toolError('這個回合已經跑過程式，下一輪再試', 429);
+      }
+      if (sandboxBusy) throw toolError('現在有別的程式在跑，稍後再試', 409);
+      const language = body.language === 'node' ? 'node' : body.language === 'python' ? 'python' : null;
+      if (!language) throw toolError('language 只能是 python 或 node', 400);
+      const code = typeof body.code === 'string' ? body.code : '';
+      if (!code.trim()) throw toolError('code 是空的', 400);
+      // 先驗證再記次數：太大的程式不該吃掉這一回合唯一的一次。
+      if (Buffer.byteLength(code, 'utf8') > cfg.discord.sandbox.maxCodeBytes) {
+        throw toolError(`code 超過 ${cfg.discord.sandbox.maxCodeBytes} bytes`, 400);
+      }
+      sandboxRuns.set(key, (sandboxRuns.get(key) ?? 0) + 1);
+      sandboxBusy = true;
+      try {
+        const result = await runSandboxScript({
+          code,
+          language,
+          stdin: typeof body.stdin === 'string' ? body.stdin : '',
+          config: cfg.discord.sandbox,
+          log,
+        });
+        log(`沙箱執行 ${key}（${language}，exit ${result.exitCode ?? '?'}，${result.durationMs}ms`
+          + `${result.timedOut ? '，逾時' : ''}${result.truncated ? '，截斷' : ''}）`);
+        return {
+          key,
+          text: formatRunResult(result, { maxChars: Math.max(8000, cfg.discord.sandbox.maxOutputBytes) }),
+        };
+      } finally {
+        sandboxBusy = false;
+      }
     },
     // 模型自己設的黑名單：跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開。
     async ignore(body) {
@@ -2964,6 +3020,7 @@ async function main() {
       turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
       const queuedMessages = pendingDirectMessages.get(key);
       turnDirectMessages.set(key, queuedMessages?.length ? queuedMessages.shift() : []);
+      sandboxRuns.delete(key);
       const queuedLast = pendingLastMessages.get(key);
       turnLastMessage.set(key, queuedLast?.length ? (queuedLast.shift()?.id ?? '') : '');
       turnTriggerRecorded.delete(key);
@@ -2993,6 +3050,7 @@ async function main() {
     const direct = turnDirect.get(key) ?? defaultDirect(key);
     turnDirect.delete(key);
     turnUsers.delete(key);
+    sandboxRuns.delete(key);
     turnDirectMessages.delete(key);
     turnLastMessage.delete(key);
     turnTriggerRecorded.delete(key);
@@ -3395,6 +3453,17 @@ async function main() {
         maxChars: cfg.discord.memory.maxChars,
         shown: memoryShown.get(key),
         refreshMs: MEMORY_REFRESH_MS,
+        // 互動次數：回過他幾回合、最後一次多久前。沒有記憶的人也會多這一句。
+        relationOf: (userId) => {
+          const stats = triggerStore.users?.[userId];
+          if (!stats || !stats.count) return null;
+          const days = stats.lastAt > 0 ? Math.floor((Date.now() - stats.lastAt) / 86_400_000) : null;
+          return {
+            text: `你回過他 ${stats.count} 回合`
+              + `${days === null ? '' : `，最後一次 ${days < 1 ? '今天' : `${days} 天前`}`}`,
+            at: stats.lastAt || Date.now(),
+          };
+        },
       });
     }
 
@@ -4608,6 +4677,10 @@ async function main() {
   // ── 智能體發送 API（MCP） ────────────────────────────────────────────────
   // 只綁 127.0.0.1 的隨機埠，端點寫在 state/discord-agent.json 給 MCP server 讀。
   // 啟動失敗就讓它失敗：沒有發送端點，模型就完全無法回話，比直接掛掉更難查。
+  if (cfg.discord.sandbox.enabled) {
+    // 上次橋接被砍掉時，容器可能還留著；背景清掉，不能讓 docker 卡住拖慢聊天。
+    void cleanupStaleContainers({ log });
+  }
   agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: agentHandlers, log });
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
   // 外掛失聯（DSH 重啟、當掉、連不上）：不會再有 poll 或 done，等 2 分鐘就收掉並告訴頻道。
@@ -4649,6 +4722,7 @@ async function main() {
       deny: cfg.discord.deny,
       ownerIds: cfg.discord.ownerIds,
       media: cfg.discord.media,
+      sandbox: cfg.discord.sandbox,
       requireMentionInGuild: cfg.discord.requireMentionInGuild,
       requireMentionInChannel: cfg.discord.requireMentionInChannel,
       // 唯讀：改這些要重啟橋接或重生 preset
@@ -4661,8 +4735,8 @@ async function main() {
   }
 
   async function updateConfig(patch) {
-    // 只接受白名單、黑名單、ownerIds、media、requireMentionInGuild／InChannel；其餘欄位一律沿用目前值。
-    // 整份候選設定都過一次 normalizeDiscordConfig：ID 格式、數字範圍都在那裡擋。
+    // 只接受白名單、黑名單、ownerIds、media、sandbox、requireMentionInGuild／InChannel；
+    // 其餘欄位一律沿用目前值。整份候選設定都過一次 normalizeDiscordConfig：ID 格式、數字範圍都在那裡擋。
     const next = normalizeDiscordConfig({
       ...cfg.discord,
       allow: patch?.allow ?? cfg.discord.allow,
@@ -4670,6 +4744,16 @@ async function main() {
       ownerIds: patch?.ownerIds ?? cfg.discord.ownerIds,
       // media 逐欄合併：表單只送數字欄位，不要把 enabled 之類的開關蓋回預設值。
       media: { ...cfg.discord.media, ...(patch?.media ?? {}) },
+      // 控制台只編 enabled 與 channels；image、逾時、上限要改 config.json。
+      sandbox: {
+        ...cfg.discord.sandbox,
+        enabled: typeof patch?.sandbox?.enabled === 'boolean'
+          ? patch.sandbox.enabled
+          : cfg.discord.sandbox.enabled,
+        channels: Array.isArray(patch?.sandbox?.channels)
+          ? patch.sandbox.channels
+          : cfg.discord.sandbox.channels,
+      },
       // 只認真的 boolean：normalize 用 `!== false`，字串 "false" 會被當成 true。
       requireMentionInGuild: typeof patch?.requireMentionInGuild === 'boolean'
         ? patch.requireMentionInGuild
@@ -4686,6 +4770,7 @@ async function main() {
       deny: next.deny,
       ownerIds: next.ownerIds,
       media: next.media,
+      sandbox: next.sandbox,
       requireMentionInGuild: next.requireMentionInGuild,
       requireMentionInChannel: next.requireMentionInChannel,
     };
@@ -4705,12 +4790,13 @@ async function main() {
     cfg.discord.deny = next.deny;
     cfg.discord.ownerIds = next.ownerIds;
     cfg.discord.media = next.media;
+    cfg.discord.sandbox = next.sandbox;
     cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
     cfg.discord.requireMentionInChannel = next.requireMentionInChannel;
     ownerIds.clear();
     for (const id of next.ownerIds) ownerIds.add(id);
 
-    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}`);
+    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
     return editableConfig();
   }
 

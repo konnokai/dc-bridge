@@ -225,6 +225,24 @@
   </section>
 
   <section class="card">
+    <h2>執行程式（沙箱）</h2>
+    <form id="sandbox-form" class="grid">
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="sandbox-enabled" type="checkbox" style="width:auto;margin:0">
+        sandbox.enabled：開放 run_script（一次性 Docker 容器，沒有網路、沒有主機檔案）
+      </label>
+      <label style="grid-column:1/-1">sandbox.channels（一行一個頻道 ID；只有這些頻道能跑，私聊一律不行）
+        <textarea id="sandbox-channels" placeholder="123456789012345678"></textarea>
+      </label>
+      <div class="row" style="grid-column:1/-1">
+        <button type="submit">儲存</button>
+        <span id="sandbox-msg" class="msg"></span>
+      </div>
+    </form>
+    <p class="muted" style="margin:10px 0 0">要先在橋接主機 pull image（<code>python:3.12-alpine</code>／<code>node:24-alpine</code>）。只有這裡列出的頻道能跑；任何能在那個頻道講話的人，只要說服模型就能跑程式。image、逾時與輸出上限請改 <code>config.json</code>。</p>
+  </section>
+
+  <section class="card">
     <h2>邀請機器人 <span class="muted">（管理員）</span></h2>
     <p class="muted" style="margin:0 0 10px">連結已包含目前所有功能的權限。貼給要邀請 bot 的人，或在 Discord 開啟。</p>
     <div class="row" style="margin-bottom:8px">
@@ -1196,6 +1214,9 @@
     $('media-max-long-edge').value = c.media.maxLongEdge;
     $('media-max-count').value = c.media.maxCount;
     $('media-timeout').value = c.media.timeoutMs;
+    const sandbox = c.sandbox ?? {};
+    $('sandbox-enabled').checked = sandbox.enabled === true;
+    $('sandbox-channels').value = join(sandbox.channels);
     $('require-mention').checked = c.requireMentionInGuild || !c.messageContentIntent;
     $('require-mention').disabled = !c.messageContentIntent;
     $('require-mention-note').hidden = c.messageContentIntent;
@@ -1547,6 +1568,30 @@
       msg.textContent = '已儲存（立即生效）';
       msg.className = 'msg ok';
       await refresh();
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  $('sandbox-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const msg = $('sandbox-msg');
+    msg.textContent = '儲存中…';
+    msg.className = 'msg';
+    try {
+      const result = await api('/api/config', {
+        method: 'POST',
+        body: JSON.stringify({
+          sandbox: {
+            enabled: $('sandbox-enabled').checked,
+            channels: lines($('sandbox-channels').value),
+          },
+        }),
+      });
+      fillConfig(result.config);
+      msg.textContent = '已儲存（立即生效）';
+      msg.className = 'msg ok';
     } catch (error) {
       msg.textContent = error.message;
       msg.className = 'msg err';

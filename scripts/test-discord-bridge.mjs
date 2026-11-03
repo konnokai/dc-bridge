@@ -127,7 +127,7 @@ const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
   'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
-  'search_emojis', 'search_stickers', 'search_gifs', 'read_history', 'search_history', 'view_message',
+  'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
 ].map((name) => `mcp__discord__${name}`);
@@ -249,6 +249,12 @@ console.log('## 1. 設定收斂');
     && slang.injectMax === 30 && slang.maxChars === 200 && slang.maxCandidates === 10
     && slang.maxConfirmed === 10 && slang.timeoutMs === 15_000, '黑話數字欄位收斂');
   ok(slang.learnerPreset === 'dc-learner', '空的 learnerPreset 回預設');
+
+  ok(cfg.sandbox.enabled === false && cfg.sandbox.channels.length === 0, '沙箱預設關閉');
+  const sandbox = normalizeDiscordConfig({ sandbox: { enabled: true, channels: [CHANNEL], timeoutMs: 1 } }).sandbox;
+  ok(sandbox.enabled === true && sandbox.channels[0] === CHANNEL, '沙箱可開、頻道保留');
+  ok(sandbox.timeoutMs === 5000, '沙箱逾時下限收斂到 5 秒');
+  throws(() => normalizeDiscordConfig({ sandbox: { channels: [12345] } }), /字串/, '沙箱頻道數字要拒絕（JSON 已掉精度）');
 
   ok(normalizeDiscordConfig({ maxMessageChars: 99999 }).maxMessageChars === 2000, 'maxMessageChars 上限收斂到 2000');
   ok(normalizeDiscordConfig({ maxMessageChars: 1 }).maxMessageChars === 200, 'maxMessageChars 下限收斂到 200');
@@ -2786,6 +2792,10 @@ console.log('## 7e. Discord MCP 發送工具');
     ok(sendTool.inputSchema?.required?.includes('content')
       && !sendTool.inputSchema?.required?.includes('token')
       && !sendTool.inputSchema?.required?.includes('reply_to'), 'send_message：content 必填，token 與 reply_to 可省略');
+    const runTool = tools.find((t) => t.name === 'run_script');
+    ok(runTool.inputSchema?.required?.includes('language')
+      && runTool.inputSchema?.required?.includes('code')
+      && !runTool.inputSchema?.required?.includes('token'), 'run_script：language 與 code 必填，token 由外掛帶入');
     const sendImageTool = tools.find((t) => t.name === 'send_image');
     ok(sendImageTool.inputSchema?.required?.includes('file')
       && !sendImageTool.inputSchema?.required?.includes('token')

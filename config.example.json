@@ -97,6 +97,15 @@
     "followup": {
       "enabled": false
     },
+    "sandbox": {
+      "enabled": false,
+      "channels": [],
+      "pythonImage": "python:3.12-alpine",
+      "nodeImage": "node:24-alpine",
+      "timeoutMs": 20000,
+      "maxOutputBytes": 8192,
+      "maxCodeBytes": 16384
+    },
     "slang": {
       "enabled": false,
       "extractMinMessages": 20,

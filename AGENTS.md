@@ -59,6 +59,13 @@ git reset --hard origin/main
 **不要跑 `git clean`**：那些未追蹤檔（含 `config.json` 與 `state/`）會被刪掉。
 repo 若轉為 private，要另外放 deploy key。
 
+要用 `run_script` 的話，先拉沙箱 image（沒有要用就跳過）：
+
+```bash
+docker pull python:3.12-alpine
+docker pull node:24-alpine
+```
+
 伺服器的 node 與 pm2 不在非互動 shell 的 PATH，手動下指令時要先
 `export PATH="$HOME/.nvm/versions/node/v26.12.1/bin:$PATH"`。
 

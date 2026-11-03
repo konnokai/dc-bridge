@@ -127,6 +127,26 @@ console.log('## 4. 注入區塊');
     users: [{ userId: '999999999999999999', name: '話多' }], maxChars: 300, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
   });
   ok(capped.length <= 400 && capped.includes('話多'), 'maxChars 真的截斷');
+
+  const related = formatMemoryBlock(store, {
+    users: [{ userId: USER, name: '小明' }, { userId: '888888888888888888', name: '新朋友' }],
+    maxChars: 800, shown: new Map(), now: NOW, refreshMs: 30 * MIN,
+    relationOf: (id) => (id === USER
+      ? { text: '你回過他 37 回合，最後一次 2 天前', at: NOW - 2 * DAY }
+      : { text: '你回過他 1 回合，最後一次 今天', at: NOW }),
+  });
+  ok(related.includes('小明：1. 在準備考試（今天）；2. 喜歡貓（今天）；3. 養了一隻橘貓（今天）；你回過他 37 回合，最後一次 2 天前'),
+    '記憶後面接互動次數');
+  ok(related.includes('新朋友：你回過他 1 回合，最後一次 今天'), '沒有記憶的人也會有互動那句話');
+  const shownRelated = new Map();
+  const relationOpts = {
+    users: [{ userId: '888888888888888888', name: '新朋友' }],
+    maxChars: 800, shown: shownRelated, now: NOW, refreshMs: 30 * MIN,
+    relationOf: () => ({ text: '你回過他 1 回合，最後一次 今天', at: NOW }),
+  };
+  ok(formatMemoryBlock(store, relationOpts).includes('新朋友'), '只有互動的人第一次會帶');
+  ok(formatMemoryBlock(store, { ...relationOpts, now: NOW + MIN }) === '', '30 分鐘內不重複帶');
+  ok(formatMemoryBlock(store, { ...relationOpts, now: NOW + 31 * MIN }).includes('新朋友'), '超過 30 分鐘再帶一次');
 }
 
 console.log('## 4b. 推測過期');

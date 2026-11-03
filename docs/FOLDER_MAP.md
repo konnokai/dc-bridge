@@ -26,6 +26,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-context.mjs` | 頻道上下文 |
 | `core/discord-activity.mjs` | 發言頻率 |
 | `core/discord-quiet.mjs` | 安靜模式 |
+| `core/discord-sandbox.mjs` | `run_script` 的 Docker 沙箱（參數、逾時、輸出上限、殘留清理） |
 | `core/discord-ignore.mjs` | 模型自己的不理名單（帶到期時間）與重複拒絕偵測 |
 | `core/discord-feedback.mjs` | 自己訊息收到的 reaction |
 | `core/discord-dev-feedback.mjs` | 模型送給開發者的功能申請與意見（控制台「回饋」分頁） |
