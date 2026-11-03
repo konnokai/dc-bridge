@@ -261,7 +261,7 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 
 - 每批的【現在】後面會多一行發言頻率：「你最近 10 分鐘送了 N 則；這段時間頻道共 M 則」。
   M 少於 3 時不顯示，免得「頻道共 1 則」變噪音。
-- 模型上一次送出的訊息收到 reaction 時，下一批 prompt 開頭會出現 `【你的訊息收到的反應】#編號 😂×2、:kekw:×1`。
+- 模型上一次送出的訊息收到 reaction 時，下一批 prompt 開頭會出現 `【你的訊息收到的反應】#編號 😂×2、:kekw:×1`（只記表情和次數，不帶按的人）。
   只出現一次，reaction 本身不會觸發模型回合。需要 `GuildMessageReactions`、`DirectMessageReactions` intent
   （非特權，程式啟動時申請）和 `Message`、`Reaction` partial。
 
