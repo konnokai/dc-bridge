@@ -50,7 +50,7 @@ import {
   viewChannelId,
   viewMessageTarget,
 } from './core/discord-core.mjs';
-import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, visibleAttachments } from './core/discord-context.mjs';
+import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
@@ -1898,6 +1898,7 @@ async function main() {
       if (!Number.isInteger(minutes) || minutes < 0 || minutes > IGNORE_MAX_MINUTES) {
         throw toolError(`minutes 要在 0~${IGNORE_MAX_MINUTES} 之間（0 = 解除不理）`, 400);
       }
+      await warmMemberCache(target.guild, [target]);
       const name = authorName(target);
       const previous = ignoreStore.users?.[author.id] ?? null;
       if (minutes === 0) {
@@ -2032,6 +2033,7 @@ async function main() {
           ...(date ? { after: date.id } : {}),
         });
         const messages = [...fetched.values()].sort(bySnowflake);
+        await warmMemberCache(channel.guild, messages);
         const lines = [];
         let used = 0;
         // date 從指定時間往後讀；before 從最新往回裝，超過字數上限就停。
@@ -2070,6 +2072,7 @@ async function main() {
           oldestFirst: Boolean(date),
         });
         if (!messages.length) return { text: `${scope}沒有找到（共 ${total} 則符合）。${note}` };
+        await warmMemberCache(channel.guild, messages);
         const lines = messages.map((message) => historyLine(key, message));
         return { text: `${scope}找到 ${messages.length} 則，共 ${total} 則符合（舊→新）：\n${lines.join('\n')}${note}` };
       }
@@ -2094,6 +2097,7 @@ async function main() {
       });
       const scanScope = date ? `從 ${date.text} 起 ${scanned} 則` : `最近 ${scanned} 則`;
       if (!found.length) return { text: `${scanScope}裡沒有找到。${note}` };
+      await warmMemberCache(channel.guild, found);
       const lines = found.map((message) => historyLine(key, message));
       return { text: `${scanScope}裡找到 ${found.length} 則（舊→新）：\n${lines.join('\n')}${note}` };
     }),
@@ -2104,6 +2108,7 @@ async function main() {
       const target = await fetchViewMessage(key, source, channel, body.message);
       // 唯讀不受 deny.users／deny.self 限制，只有模型自己的不理名單會擋。
       if (ignoredUser(target.author?.id)) throw toolError('這個人在你的不理名單，他的訊息不讀', 403);
+      await warmMemberCache(source.guild, [target]);
       const targetParts = messageParts(target);
       const self = target.author?.id === client.user.id ? '（你）' : '';
       // 別的頻道不登記 #編號：編號表綁這個會話，之後 reply_to 會抓錯頻道。
@@ -2118,6 +2123,7 @@ async function main() {
       try {
         // 引用是群友貼進來的公開內容，少了它就看不懂在回什麼；模型自己不理的人例外。
         const replied = await referencedMessage(target);
+        if (replied) await warmMemberCache(source.guild, [replied]);
         if (replied && !ignoredUser(replied.author?.id)) {
           repliedMessage = replied;
           const mark = isSilentMessage(cfg.discord, replied, client.user.id) ? '⊘' : '';
@@ -3356,6 +3362,8 @@ async function main() {
       let quote = '';
       try {
         const referenced = await referencedMessage(entry.message);
+        // 引用是 REST 抓的，重啟後一樣要補成員才拿得到伺服器暱稱。
+        if (referenced) await warmMemberCache(job.channel?.guild, [referenced]);
         // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它模型看不懂在回什麼。
         // 模型自己不理的人例外：他的話不進來，只留回覆對象的名字。
         if (referenced && !ignoredUser(referenced.author?.id)
@@ -3411,6 +3419,9 @@ async function main() {
           && !cfg.discord.deny.users.includes(String(entry.author?.id ?? ''))
           && !ignoredUser(entry.author?.id)
           && (entry.author?.bot || !isSkippedMessage(entry.content, client.user.id)));
+        // 歷史訊息是用 REST 抓的，不帶 member；重啟後成員快取是空的，
+        // 名稱會掉回全域名稱。先補抓，之後 authorName 才拿得到伺服器暱稱。
+        await warmMemberCache(job.channel?.guild, history);
         // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）；退出的人不收。
         for (const entry of history) {
           if (!entry.author?.bot && entry.content && !cfg.discord.deny.self.includes(String(entry.author.id))) {
@@ -4156,11 +4167,14 @@ async function main() {
         try {
           const fetched = await channel.messages.fetch({ limit: SUMMARY_MAX_MESSAGES, cache: false });
           const since = Date.now() - 24 * 60 * 60 * 1000;
-          const messages = [...fetched.values()]
+          const transcript = [...fetched.values()]
             .filter((message) => message.createdTimestamp >= since)
             .filter((message) => !isDeniedUser(cfg.discord, message.author?.id))
             .filter((message) => !ignoredUser(message.author?.id))
-            .filter((message) => message.author?.bot || !isSkippedMessage(message.content, client.user.id))
+            .filter((message) => message.author?.bot || !isSkippedMessage(message.content, client.user.id));
+          // 摘要是 REST 抓的，重啟後補成員才不會把同一個人寫成兩個名字；只補抓真的會進摘要的人。
+          await warmMemberCache(channel.guild, transcript);
+          const messages = transcript
             .map((message) => ({
               at: message.createdTimestamp,
               author: `${authorName(message)}${message.author?.id === client.user.id ? '（你）' : ''}`,

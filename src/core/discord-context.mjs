@@ -194,6 +194,31 @@ export function formatQuote({ ref, author, content, hasImage, silent = false } =
   return `[引用 ${ref ? `#${ref} ` : ''}${who}：${text}]`;
 }
 
+const absentMembers = new Set(); // `${guildId}:${userId}`：查不到的人，這個程序活著期間不再重試
+
+/**
+ * 補抓歷史訊息缺的成員，讓 `message.member` 之後查得到伺服器暱稱。
+ *
+ * bot 沒有 `GuildMembers` 意圖，成員快取只在有人說話時才有資料；重啟後讀歷史，
+ * REST 抓回來的訊息不帶 `member`，名稱就會掉回全域名稱，跟頻道顯示的不一樣。
+ * 一人抓一次，抓回來就進快取；離開伺服器的人查不到，交給呼叫端退回顯示名稱。
+ */
+export async function warmMemberCache(guild, messages) {
+  if (!guild?.members?.fetch) return;
+  const missing = new Map();
+  for (const message of messages ?? []) {
+    const id = message?.author?.id;
+    if (!id || message.author.bot || message.webhookId || message.member) continue;
+    const key = `${guild.id}:${id}`;
+    if (!absentMembers.has(key)) missing.set(key, id);
+  }
+  await Promise.all([...missing].map(([key, id]) => guild.members.fetch(id).catch((error) => {
+    // 只有 Discord 明確說「沒有這個人」才記住；網路錯誤、5xx 下一批還要能重試。
+    if (error?.code === 10007 || error?.code === 10013) absentMembers.add(key);
+    return null;
+  })));
+}
+
 /**
  * 這則回覆的是哪一則。快取裡有就直接用；快取沒有就抓那一則（一次 API 呼叫）。
  * 引用是群友自己帶進對話的內容，少了它模型看不懂在回什麼，所以沒叫 bot 也要拿。
