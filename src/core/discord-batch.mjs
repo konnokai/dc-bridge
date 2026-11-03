@@ -385,5 +385,11 @@ export function formatBatch(entries, { guild }) {
     return `${ref}${entry.direct ? '★' : ''}${owner}${clean(defang(entry.author)) || '未知'}${mutedNote}${reply}：${body}`;
   });
   if (!guild) return lines.join('\n');
-  return `【新訊息】（★ = 在叫你：@你或回覆你；#編號 用來指定要回覆、查看或按 reaction 的訊息）\n${lines.join('\n')}`;
+  // 沒 ★ 的批次也要說清楚：只寫「★ = 在叫你」時，模型會自己補出一個 ★，
+  // 把別人互相回覆的閒聊當成在叫它（實際遇過）。只寫橋接確定的事實，
+  // 「叫名字」、「話題提到你」算不算在叫它，交給 persona 判斷。
+  const legend = entries.some((entry) => entry.direct)
+    ? '★ = 在叫你：@你或回覆你；'
+    : '這批沒有 ★（沒有人 @你或回覆你）；';
+  return `【新訊息】（${legend}#編號 用來指定要回覆、查看或按 reaction 的訊息）\n${lines.join('\n')}`;
 }
