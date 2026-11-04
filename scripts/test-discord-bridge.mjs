@@ -102,6 +102,7 @@ import {
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
 import { createBatcher, createTurnGate, formatBatch, imageRefTag, repliedName, resolveMentions, visibleName } from '../src/core/discord-batch.mjs';
+import { createUrgentTyping } from '../src/core/discord-typing.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
@@ -273,7 +274,7 @@ console.log('## 1. 設定收斂');
   ok(normalizeDiscordConfig({}).console.port === 3110, 'console.port 預設 3110');
   throws(() => normalizeDiscordConfig({ console: { host: 'bad host' } }), /不是合法/, 'console.host 有空白要拋錯');
 
-  ok(cfg.batch.debounceMs === 5000 && cfg.batch.maxWaitMs === 15_000 && cfg.batch.maxMessages === 20, '批次預設值');
+  ok(cfg.batch.debounceMs === 20_000 && cfg.batch.maxWaitMs === 30_000 && cfg.batch.maxMessages === 20, '批次預設值');
   const batch = normalizeDiscordConfig({ batch: { debounceMs: 1, maxWaitMs: 1, maxMessages: 999 } }).batch;
   ok(batch.debounceMs === 500 && batch.maxWaitMs === 1000 && batch.maxMessages === 50, '批次數字欄位收斂');
 }
@@ -2404,6 +2405,170 @@ console.log('## 7d3. 批次');
   batcher.flush('ch:4');
   ok(flushed.some((f) => f.key === 'ch:4' && f.items.join() === '98'), 'flush 立刻送出（指令要排在前面）');
 
+  // 有人 @ 的那批改用 4 秒的短等待：@ 前面與後面補的句子都留在同一批。
+  const urgentFlushed = [];
+  const urgentBatcher = createBatcher({
+    debounceMs: 20_000,
+    maxWaitMs: 30_000,
+    maxMessages: 50,
+    onFlush: (key, items) => urgentFlushed.push({ key, items: items.map((i) => i.id) }),
+    now: () => clock,
+    setTimer: (fn, ms) => { const t = { fn, at: clock + ms, live: true }; timers.push(t); return t; },
+    clearTimer: (t) => { if (t) t.live = false; },
+  });
+
+  urgentBatcher.add('ch:5', { id: 200 });
+  advance(3000);
+  urgentBatcher.add('ch:5', { id: 201 });
+  urgentBatcher.add('ch:5', { id: 202, urgent: true });
+  advance(3999);
+  ok(urgentFlushed.length === 0, '@ 之後還是等 urgentMs（預設 4 秒），不是立刻送');
+  advance(1);
+  ok(urgentFlushed[0]?.items.join() === '200,201,202', '@ 前面等待中的訊息一起送');
+
+  urgentBatcher.add('ch:5', { id: 203, urgent: true });
+  advance(2000);
+  urgentBatcher.add('ch:5', { id: 204 });
+  advance(3999);
+  ok(urgentFlushed.length === 1, '@ 之後補的句子還在同一批，不提早送');
+  advance(1);
+  ok(urgentFlushed[1]?.items.join() === '203,204', '@ 之後補的句子一起送');
+
+  urgentBatcher.add('ch:5', { id: 205 });
+  advance(19_999);
+  ok(urgentFlushed.length === 2, '送完之後的新一批不殘留 urgent，要等滿 debounce');
+  advance(1);
+  ok(urgentFlushed[2]?.items.join() === '205', '新一批等滿 debounce 才送');
+
+  // 只 @ 不說話（emptyDirect）不算 urgent；同一個人接著補的那則要把整批升成 urgent。
+  const upgradeFlushed = [];
+  const upgradeBatcher = createBatcher({
+    debounceMs: 20_000,
+    maxWaitMs: 30_000,
+    maxMessages: 50,
+    onFlush: (key, items) => upgradeFlushed.push({ key, items: items.map((i) => i.id) }),
+    now: () => clock,
+    setTimer: (fn, ms) => { const t = { fn, at: clock + ms, live: true }; timers.push(t); return t; },
+    clearTimer: (t) => { if (t) t.live = false; },
+  });
+
+  upgradeBatcher.add('ch:10', { id: 600, userId: 'u7', guildId: 'g1', direct: true });
+  advance(3000);
+  upgradeBatcher.add('ch:10', { id: 601, userId: 'u7', guildId: 'g1' });
+  advance(3999);
+  ok(upgradeFlushed.length === 0, '補句後改用 urgentMs');
+  advance(1);
+  ok(upgradeFlushed[0]?.items.join() === '600,601', '同一個人補句就把整批升成 urgent');
+
+  upgradeBatcher.add('ch:11', { id: 602, userId: 'u8', guildId: 'g1', direct: true });
+  upgradeBatcher.add('ch:11', { id: 603, userId: 'u9', guildId: 'g1' });
+  advance(4000);
+  ok(upgradeFlushed.length === 1, '別人補話不會讓這批變 urgent');
+  upgradeBatcher.drop('ch:11');
+
+  upgradeBatcher.add('dm:1', { id: 604, userId: 'u10', direct: true });
+  upgradeBatcher.add('dm:1', { id: 605, userId: 'u10', direct: true });
+  advance(4000);
+  ok(upgradeFlushed.length === 1, '私聊不會因為第二則就升 urgent');
+  upgradeBatcher.drop('dm:1');
+
+  // 打字延長：只認這批裡的人在打；urgent 批次只認叫 bot 的人；送出訊息就清掉。
+  const typingFlushed = [];
+  const typingBatcher = createBatcher({
+    debounceMs: 20_000,
+    maxWaitMs: 30_000,
+    maxMessages: 50,
+    typingMs: 10_000,
+    onFlush: (key, items) => typingFlushed.push({ key, items: items.map((i) => i.id) }),
+    now: () => clock,
+    setTimer: (fn, ms) => { const t = { fn, at: clock + ms, live: true }; timers.push(t); return t; },
+    clearTimer: (t) => { if (t) t.live = false; },
+  });
+
+  typingBatcher.add('ch:7', { id: 400, userId: 'u1' });
+  advance(15_000);
+  ok(typingBatcher.extend('ch:7', 'u1') === true, '這批裡的人在打字就延長');
+  advance(9999);
+  ok(typingFlushed.length === 0, '打字窗口內不送');
+  advance(1);
+  ok(typingFlushed[0]?.items.join() === '400', '打字窗口結束才送');
+
+  typingBatcher.add('ch:7', { id: 401, userId: 'u1' });
+  ok(typingBatcher.extend('ch:7', 'u2') === false, '不在這批裡的人打字不延長');
+  typingBatcher.add('ch:7', { id: 402, userId: 'u3', direct: true, urgent: true });
+  ok(typingBatcher.extend('ch:7', 'u1') === false, 'urgent 批次不認旁人的打字');
+  ok(typingBatcher.extend('ch:7', 'u3') === true, 'urgent 批次認叫 bot 的人的打字');
+  advance(9999);
+  ok(typingFlushed.length === 1, '前面那批送完，這批還沒到');
+  advance(1);
+  ok(typingFlushed[1]?.items.join() === '401,402', 'urgent 批次的打字窗口結束才送');
+
+  typingBatcher.add('ch:8', { id: 403, userId: 'u5', direct: true, urgent: true });
+  advance(1000);
+  typingBatcher.extend('ch:8', 'u5');
+  advance(1000);
+  typingBatcher.add('ch:8', { id: 404, userId: 'u5' });
+  advance(3999);
+  ok(typingFlushed.length === 2, '送出訊息就清掉打字狀態，不白等一個窗口');
+  advance(1);
+  ok(typingFlushed[2]?.items.join() === '403,404', '清掉之後照 urgent 的 4 秒送');
+
+  const capFlushed = [];
+  const capBatcher = createBatcher({
+    debounceMs: 20_000,
+    maxWaitMs: 30_000,
+    maxMessages: 50,
+    typingMs: 60_000,
+    onFlush: (key, items) => capFlushed.push(items.map((i) => i.id).join()),
+    now: () => clock,
+    setTimer: (fn, ms) => { const t = { fn, at: clock + ms, live: true }; timers.push(t); return t; },
+    clearTimer: (t) => { if (t) t.live = false; },
+  });
+  capBatcher.add('ch:9', { id: 500, userId: 'u6' });
+  capBatcher.extend('ch:9', 'u6');
+  advance(29_999);
+  ok(capFlushed.length === 0, '打字不能把批次留過頭');
+  advance(1);
+  ok(capFlushed[0] === '500', '打字最多延到 maxWaitMs');
+
+  // @ 模式頻道：叫過 bot 的人還在打字時，補句（沒 @）也收。
+  console.log('## 7d4. @ 模式的補句窗口');
+  {
+    let watchClock = 0;
+    const watch = createUrgentTyping({ authorMs: 60_000, typingMs: 10_000, now: () => watchClock });
+
+    ok(watch.takeFollowUp('ch:1', 'u1') === false, '沒叫過 bot 的人沒有補句窗口');
+    watch.sawAuthor('ch:1', 'u1');
+    ok(watch.takeFollowUp('ch:1', 'u1') === true, '叫過 bot 的 60 秒內，沒 @ 的訊息算補句');
+    ok(watch.takeFollowUp('ch:1', 'u1') === true, '窗口內可以連收多則');
+    ok(watch.takeFollowUp('ch:1', 'u2') === false, '別人沒有窗口');
+    ok(watch.takeFollowUp('ch:2', 'u1') === false, '別的會話不算');
+
+    watchClock += 55_000;
+    ok(watch.sawTyping('ch:1', 'u1') === true, '窗口內打字就延長');
+    watchClock += 9_999;
+    ok(watch.takeFollowUp('ch:1', 'u1') === true, '打字把窗口延到 10 秒後');
+    watchClock += 1;
+    ok(watch.takeFollowUp('ch:1', 'u1') === false, '延長之後還是會過期');
+
+    watchClock += 60_000;
+    ok(watch.sawTyping('ch:1', 'u1') === false, '叫過 bot 太久之後，打字不再開窗口');
+
+    watch.sawAuthor('ch:3', 'u3');
+    watch.drop('ch:3');
+    ok(watch.takeFollowUp('ch:3', 'u3') === false, '/reset 清掉窗口');
+
+    // 連續打字不能無限延長：硬上限是 @ 之後的 2 分鐘。
+    watch.sawAuthor('ch:4', 'u4');
+    const typingAlive = [];
+    for (let i = 0; i < 16; i += 1) {
+      watchClock += 8_000;
+      typingAlive.push(watch.sawTyping('ch:4', 'u4'));
+    }
+    ok(typingAlive[13] === true && typingAlive[14] === false, '持續打字也只能延到 2 分鐘');
+    ok(watch.takeFollowUp('ch:4', 'u4') === false, '硬上限到了就不收補句');
+  }
+
   // 回合閘門：同一會話一次只送一批進 DSH，回合沒結束前新到的批次合成一筆。
   const delivered = [];
   const stuck = [];
@@ -3806,7 +3971,10 @@ console.log('## 10. 引用、上下文、出站閘門');
   // 單頻道覆寫：判斷「要不要 @bot」的地方都要走 requireMentionFor，不能留全域的 requireMentionInGuild()。
   ok(bridgeSource.includes('const defaultDirect = (key) => requireMentionFor(key)'), '回合預設 direct 看單頻道設定');
   ok(bridgeSource.includes('(requireMentionFor(key) || quietAt || !primedKeys.has(key))'), '頻道上下文看單頻道設定');
-  ok(bridgeSource.includes('if (requireMentionFor(key) || isQuietBatchSkipped('), '非 ★ 訊息進不進批次看單頻道設定');
+  ok(bridgeSource.includes('requireMentionFor(key) && !urgentTyping.takeFollowUp(key, message.author.id)'),
+    '非 ★ 訊息進不進批次看單頻道設定（叫過 bot 的人 60 秒內的補句除外）');
+  ok(bridgeSource.includes('if (addressedToBot) urgentTyping.sawAuthor(key, message.author.id)'),
+    '只有叫過 bot 的人才進補句窗口');
   ok(!/requireMentionInGuild\(\) \|\| (quietAt|isQuietBatchSkipped)/.test(bridgeSource)
     && !bridgeSource.includes("key.startsWith('dm:') || requireMentionInGuild()"), '判斷點沒有殘留全域 requireMentionInGuild()');
   ok(bridgeSource.includes('mentionMapChanged') && bridgeSource.includes('primedKeys.clear();')

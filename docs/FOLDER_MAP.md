@@ -23,6 +23,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-core.mjs` | 設定正規化、長文切段、會話映射 |
 | `core/discord-agent.mjs` | token 解析、每輪額度、`send` 守衛 |
 | `core/discord-batch.mjs` | 批次器、回合佇列（含指令排隊與 hold/rebase）與 batch prompt 組裝 |
+| `core/discord-typing.mjs` | @ 模式的補句窗口（叫過 bot 後 60 秒，打字可延長，最多 2 分鐘） |
 | `core/discord-context.mjs` | 頻道上下文 |
 | `core/discord-activity.mjs` | 發言頻率 |
 | `core/discord-quiet.mjs` | 安靜模式 |

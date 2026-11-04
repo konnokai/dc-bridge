@@ -167,6 +167,7 @@ import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
 import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
+import { createUrgentTyping } from './core/discord-typing.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
@@ -217,6 +218,9 @@ const ASK_ABANDONED_TTL_MS = 30 * 60_000; // 連 hardClose 都等不到 turn/end
 const PRIVATE_ASK_HEADER = '【後台提問｜只有管理員看得到，不會公開】直接輸出文字回答，不要呼叫任何工具；這一輪所有 Discord 工具都已封鎖，呼叫只會失敗。這段問答之後不要在公開對話提起。';
 const PRIVATE_RELOAD_HEADER = '【後台整理｜不會公開】直接輸出文字，不要呼叫任何工具；這一輪所有 Discord 工具都已封鎖，呼叫只會失敗。這段整理之後不要在公開對話提起。';
 const TYPING_MAX_MS = 10 * 60 * 1000; // 回合卡住時不要讓「正在輸入」亮一輩子
+const TYPING_WINDOW_MS = 10_000; // 有人打字時把補句窗口往後延這麼久
+const URGENT_FOLLOWUP_MS = 60_000; // 叫過 bot 之後這麼久內，他的補句都算同一次對話
+const URGENT_FOLLOWUP_MAX_MS = 2 * 60_000; // 一直打字最多延到這麼久（從 @ 起算）
 const TURN_RELEASE_MS = 5 * 60 * 1000; // 等不到 turn/end 時，最久把下一批壓這麼久
 const HELD_MAX = 50; // 回合進行中壓住的訊息最多幾則（★ 那幾則不算在內，一定留著）
 const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重啟就沒了）
@@ -1030,6 +1034,7 @@ async function main() {
     if (!preservePending) {
       batcher.drop(key);
       turnGate.drop(key);
+      urgentTyping.drop(key);
     }
     offlineQueue.delete(key);
     offlineHintAt.delete(key);
@@ -2585,6 +2590,7 @@ async function main() {
     debounceMs: cfg.discord.batch.debounceMs,
     maxWaitMs: cfg.discord.batch.maxWaitMs,
     maxMessages: cfg.discord.batch.maxMessages,
+    typingMs: TYPING_WINDOW_MS,
     onFlush: (key, items) => {
       // 加 reaction 時 handleMessage 會 await，後到的訊息可能先進批次；按時間排回來。
       const entries = [...items].sort((a, b) => a.at - b.at);
@@ -2598,6 +2604,13 @@ async function main() {
         epoch: epochOf(key),
       });
     },
+  });
+
+  // @ 模式頻道：叫過 bot 的人 60 秒內，補句（沒 @）也收進批次；打字再延長，最多 2 分鐘。
+  const urgentTyping = createUrgentTyping({
+    authorMs: URGENT_FOLLOWUP_MS,
+    maxMs: URGENT_FOLLOWUP_MAX_MS,
+    typingMs: TYPING_WINDOW_MS,
   });
 
   /** 佇列對不上（漏了 turn/start、重連）時的保守預設：私聊與 @ 模式頻道本來就每批都在叫 bot。 */
@@ -3345,7 +3358,7 @@ async function main() {
       skipped.push(...(entry.media?.skipped ?? []));
       const entryRef = messageRefs.register(key, entry.id);
       // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
-      // 到這裡才讀 message.embeds：批次已經等過 debounce，多半拿到了。沒有就只剩網址。
+      // 到這裡才讀 message.embeds：批次至少等過幾秒（有人 @ 時 4 秒），多半拿到了。沒有就只剩網址。
       // 轉發的預覽圖在快照裡，一起算。
       const attachments = entry.media?.accepted ?? [];
       const items = cfg.discord.media.enabled
@@ -4382,6 +4395,8 @@ async function main() {
     // 有沒有在叫 bot：私聊一律算；頻道看 @ 或回覆。自由參與時沒叫 bot 的訊息也會進批次，
     // 但提問的回答只認叫 bot 的訊息。
     const direct = !guildId || addressedToBot;
+    // @ 模式頻道：記住叫過 bot 的人，他 60 秒內的補句（沒 @）也收。
+    if (addressedToBot) urgentTyping.sawAuthor(key, message.author.id);
 
     // 黑話語料：允許的頻道訊息都收（含沒叫 bot 的），才有足夠樣本。
     if (text) collectSlangSample(message, text);
@@ -4390,7 +4405,9 @@ async function main() {
       // 沒叫 bot：偶爾留一個 reaction。預設模式到此為止；自由參與才送進批次讓模型決定。
       // 安靜期間連自動 reaction 都停，批次也直接丟掉（黑話語料上面已經收過）。
       if (!quietAt && text) await maybeReact(message, key, rawText).catch((error) => log(`表情反應失敗：${error?.message ?? error}`));
-      if (requireMentionFor(key) || isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
+      // @ 模式：叫過 bot 的人 60 秒內，補句照收（不用再 @）；別人照舊丟掉。
+      if (requireMentionFor(key) && !urgentTyping.takeFollowUp(key, message.author.id)) return;
+      if (isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
     }
 
     const stickers = stickerLabel(parts.stickers);
@@ -4438,12 +4455,37 @@ async function main() {
       // 黑話比對用原文：表情描述是目錄產生的字，不該被當成群友講的話。
       rawText: [fullText, stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       direct,
+      // 頻道裡有人 @ 或回覆 bot：這批改用短等待（urgentMs，4 秒），不用等滿 debounce。
+      // 只 @ 不說話的那則不算：他補下一則時整批才升成 urgent（discord-batch.mjs 的 followsDirect）。
+      // 私聊每則都算 direct；跟著 urgent 的話每則各自開回合，反而把分句拆開。
+      urgent: addressedToBot && !emptyDirect,
       isOwner,
       media,
       hasImage: parts.hasImage,
       at: message.createdTimestamp,
     });
     lastActive.set(key, Date.now());
+  }
+
+  /**
+   * 有人在打字：這批裡已經有他的訊息就延長合批（最多 typingMs），
+   * 分句還沒打完就不會被 debounce 或 urgent 的 timer 切掉；@ 模式的補句窗口也一起延。
+   */
+  function handleTyping(typing) {
+    const channel = typing?.channel;
+    const user = typing?.user;
+    if (!channel || !user || user.bot) return;
+    const ids = {
+      guildId: channel.guildId ?? null,
+      channelId: channel.id,
+      parentId: channel.isThread?.() ? channel.parentId : null,
+      userId: user.id,
+    };
+    if (!isConversationAllowed(cfg.discord, ids)) return;
+    const key = conversationKeyFor(ids);
+    batcher.extend(key, user.id);
+    // @ 模式：叫過 bot 的人還在打字，補句窗口再往後延。
+    urgentTyping.sawTyping(key, user.id);
   }
 
   async function handleSlashCommand(interaction) {
@@ -4664,6 +4706,9 @@ async function main() {
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.DirectMessageReactions,
+    // 有人在打字就用來延長合批。不是特權 intent，不用改 Developer Portal。
+    GatewayIntentBits.GuildMessageTyping,
+    GatewayIntentBits.DirectMessageTyping,
   ];
   if (cfg.discord.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
   // Partials.Channel：私聊頻道預設不在快取裡，少了它收不到未快取對象的私聊。
@@ -4672,6 +4717,13 @@ async function main() {
 
   client.on(Events.MessageCreate, (message) => {
     handleMessage(message).catch((error) => log(`處理訊息失敗：${error?.stack ?? error}`));
+  });
+  client.on(Events.TypingStart, (typing) => {
+    try {
+      handleTyping(typing);
+    } catch (error) {
+      log(`處理輸入中失敗：${error?.message ?? error}`);
+    }
   });
   client.on(Events.MessageReactionAdd, (reaction, user) => {
     handleReaction(reaction, user).catch((error) => log(`處理 reaction 失敗：${error?.stack ?? error}`));
