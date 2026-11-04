@@ -203,6 +203,9 @@
       <label style="grid-column:1/-1">requireMentionInChannel（一行一個：頻道ID=true／false。true = 只能 @bot；false = 自由參與；沒列出的頻道跟上面的預設）
         <textarea id="require-mention-channels" placeholder="123456789012345678=true"></textarea>
       </label>
+      <label style="grid-column:1/-1">chattyChannels（一行一個頻道 ID。這些頻道不看 10 分鐘發言比例，沒 @bot 也可以接；需要 messageContentIntent）
+        <textarea id="chatty-channels" placeholder="123456789012345678"></textarea>
+      </label>
       <label>allow.guilds<textarea id="allow-guilds" placeholder="一行一個 ID"></textarea></label>
       <label>allow.channels<textarea id="allow-channels" placeholder="一行一個 ID"></textarea></label>
       <label>allow.users（私聊）<textarea id="allow-users" placeholder="一行一個 ID"></textarea></label>
@@ -1223,6 +1226,7 @@
     $('require-mention-channels').value = Object.entries(c.requireMentionInChannel ?? {})
       .map(([id, on]) => `${id}=${on}`).join('\n');
     $('require-mention-channels').disabled = !c.messageContentIntent;
+    $('chatty-channels').value = join(c.chattyChannels);
   }
 
   async function loadConfig() {
@@ -1562,6 +1566,8 @@
             requireMentionInGuild: $('require-mention').checked,
             requireMentionInChannel: parseMentionChannels($('require-mention-channels').value),
           }),
+          // chattyChannels 不受 messageContentIntent 鎖定：先設定好，開了意圖就生效。
+          chattyChannels: lines($('chatty-channels').value),
         }),
       });
       fillConfig(result.config);

@@ -360,6 +360,26 @@ export function imageRefTag(ref, index) {
 }
 
 /**
+ * chatty 頻道的【參與度】提示：不限制發言頻率，沒 ★ 也可以接。
+ * 正常頻道不帶這一段，persona 的預設判斷原封不動。
+ */
+export const CHATTY_HINT_LINES = [
+  '【參與度】這個頻道是大家來找大肥魚講話的地方，不用客氣。',
+  '- 沒有 ★ 也可以接：叫你名字、聊到你、拿你當梗、接著你剛說的話、有人回你剛貼的圖、問你問題，都算在找你。',
+  '- 不用算發言頻率，也不用怕講太多；想接就接。一兩句就好，不要變長篇，也不要當主持人。',
+  '- 別人在互相聊、你真的插不上話就跳過；跳過幾則沒關係，不用每則都跳。',
+];
+
+/** followup.enabled 才帶這行：工具沒開時叫模型排回訪只會拿到 403。 */
+export const CHATTY_FOLLOWUP_HINT = '- 話題收尾或大家安靜下來時，可以順手用 schedule_followup 排 30~90 分鐘後回來看；回來話題冷了，就自己起一個新的。一天最多排 1~2 次，對方沒接的新話題就放下。';
+
+/** @param chatty 這個頻道在 discord.chattyChannels 裡才回傳內容；followup 要 followup.enabled 才帶開話題提示。 */
+export function formatParticipationHint(chatty = false, { followup = false } = {}) {
+  if (!chatty) return '';
+  return [...CHATTY_HINT_LINES, followup ? CHATTY_FOLLOWUP_HINT : ''].filter(Boolean).join('\n');
+}
+
+/**
  * 一批訊息 → prompt 裡的【新訊息】區塊。
  * 頻道：每行 `暱稱：內容`，叫 bot 的加 ★；私聊：只有內文（DSH 會話本身就是一對一）。
  *

@@ -87,6 +87,7 @@ pm2 logs dc-bridge
 | `allowAllWhenEmpty` | 對應的白名單為空時是否放行，預設 `false`（全擋）。伺服器頻道只看 `guilds` / `channels`，私聊只看 `users` |
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `requireMentionInChannel` | 單頻道覆寫：`{ "頻道ID": true }` = 該頻道只能 @bot；`false` = 該頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。值必須是 JSON boolean（`"false"` 字串會被拒絕）。討論串用自己的 id，**不繼承**母頻道的覆寫（跟 `allow.channels` 一樣）；私聊不受影響。沒開 `messageContentIntent` 時一律要 @bot。控制台「設定」可以用 `頻道ID=true` 一行一個編輯 |
+| `chattyChannels` | 不限制發言頻率的頻道 ID 陣列（控制台「設定」可編輯）。列在這裡的頻道不看「10 分鐘送了幾則」，`【新訊息】` 前會多一段【參與度】：沒 ★ 也可以接，聊到她、拿她當梗、接著她剛說的話都算，插不上話才跳過。也允許她用 `schedule_followup` 自己排回訪開新話題（硬上限每天 2 次）。預設空（全部照一般自由參與規則） |
 | `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 5000（500~30000） |
 | `batch.maxWaitMs` | 一批從第一則算起最多等多久，預設 15000（1000~120000）；訊息一直進來也不會無限延後 |
 | `batch.maxMessages` | 一批最多幾則，滿了立刻送出，預設 20（1~50） |
@@ -131,7 +132,7 @@ pm2 logs dc-bridge
 | `notes.maxChars` | 筆記注入區塊的字數上限，預設 600（100~3000） |
 | `notes.dailySummary.enabled` | 每天自動產生頻道摘要，預設 `false`（另開背景模型會話） |
 | `notes.dailySummary.hour` | 幾點之後才做當天摘要，預設 4（bridge 主機時區，0~23） |
-| `followup.enabled` | 回訪開關，預設 `false`（時間到了會多一個模型回合） |
+| `followup.enabled` | 回訪開關，預設 `false`（時間到了會多一個模型回合）。`chattyChannels` 裡的頻道靠它自己開新話題，關掉就只剩被動接話 |
 | `sandbox.enabled` | 是否開放 `run_script`（一次性在 Docker 容器裡跑模型寫的程式），預設 `false`。橋接主機要有 Docker，image 要先 pull；見「執行程式」 |
 | `sandbox.channels` | 允許執行的頻道 id（字串陣列）。只有這些頻道能跑；預設空（全關） |
 | `sandbox.pythonImage` | Python 用的 image，預設 `python:3.12-alpine` |
@@ -271,6 +272,13 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
   persona 規定只有被叫名字、或對方接著 bot 剛說的同一件事才接；只有連結或圖片不接；跳過時不呼叫工具佔位，只有記憶、筆記工具可以用。有 ★ 的照樣要回。
   - 單頻道可以用 `requireMentionInChannel` 覆寫：`{ "頻道ID": true }` = 這個頻道只能 @bot，
     `false` = 這個頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。
+  - `chattyChannels` 是「這裡是來找 bot 聊天的地方」：不看 10 分鐘發言比例，`【新訊息】` 前會多一段
+    【參與度】。沒 ★ 也可以接：叫她名字、聊到她、拿她當梗、接著她剛說的話、有人回她剛貼的圖、
+    或只是想插一句都算；persona 的「只有兩種才接」和「只會附和就跳過」在這些頻道不適用。
+    ★、⊘、安全邊界照舊。她也可以在話題收尾時自己排 `schedule_followup`（30~90 分鐘後），
+    回來看到話題冷了就直接開一個新的；回訪本身會多一個模型回合，這些頻道每個會話每天最多排 2 次
+    （計數只在記憶體，重啟後重算；日期用 bridge 主機時區）。
+    討論串用自己的 id，**不繼承**母頻道的清單。
   - 只有批次裡有 ★ 時才會亮「正在輸入」，也只有這時才送 `ackMessage`。
   - 提問的回答、非管理員 `/` 的拒絕訊息只認 ★ 的訊息；其餘文字（含 `!xxx`）就是一般聊天。
   - 沒有 ★ 的那批出錯（模型不可用、DSH 拒收、回合被中止）只記日誌，不在頻道貼錯誤訊息。
@@ -429,8 +437,9 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
   端點：`GET /api/dev-feedback`、`POST /api/dev-feedback/delete`
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
-    `requireMentionInChannel`（一行一個 `頻道ID=true|false`）直接編輯，存檔後**立即生效**並寫回 `config.json`。
-    沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）
+    `requireMentionInChannel`（一行一個 `頻道ID=true|false`）/ `chattyChannels`（一行一個頻道 ID）直接編輯，
+    存檔後**立即生效**並寫回 `config.json`。
+    沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）；`chattyChannels` 不鎖，可以先設定好
   - **執行程式（沙箱）**：`sandbox.enabled` 與 `sandbox.channels`（一行一個頻道 ID），存檔後立即生效並寫回
     `config.json`；image、逾時與輸出上限仍在 `config.json`。image 要先在橋接主機 pull；開啟前先看「執行程式」的邊界
   - **表情目錄**：每個伺服器的表情條目數，可手動更新
@@ -776,9 +785,10 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 模型自己排「N 分鐘後回來看」（`schedule_followup`，5~180 分鐘）。時間到了 bridge 送一個只有
 `【回訪】你 N 分鐘前說要回來看：…` 的回合，模型再決定要不要說話；沒有預先寫好、時間到就直接送出的訊息。
 
-- **限制**：一個會話同時最多 2 個、每天 6 個；`/reset` 取消；安靜期間（`set_quiet`）延後到安靜結束。
+- **限制**：一個會話同時最多 2 個、每天 6 個；`chattyChannels` 的會話每天 2 個；`/reset` 取消；安靜期間（`set_quiet`）延後到安靜結束。
 - **不進頻道**：回訪本身不是訊息，模型不說話就什麼都不會出現。
-- **狀態只在記憶體**：bridge 重啟就清掉，所以不支援以天計的提醒。
+- **黑名單**：回訪的 prompt 會先帶【黑名單現況】（伺服器頻道才有），免得模型拿舊對話的名單去 @ 已經退出的人。
+- **狀態只在記憶體**：bridge 重啟就清掉，每天的次數也一起重算，所以不支援以天計的提醒；日期用 bridge 主機時區。
 - **預設關閉**：`followup.enabled` 打開後 `schedule_followup` 才有作用；關著時呼叫會回錯誤，也不會有排程。
 
 ```json

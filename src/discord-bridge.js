@@ -49,6 +49,7 @@ import {
   isSkippedMessage,
   viewChannelId,
   viewMessageTarget,
+  isChattyChannel,
 } from './core/discord-core.mjs';
 import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
@@ -165,7 +166,7 @@ import { fetchStreamUrl, videoLinks } from './core/discord-video-link.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, createTurnGate, defang, formatBatch, imageRefTag, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
@@ -1932,7 +1933,12 @@ async function main() {
       if (!cfg.discord.followup.enabled) {
         throw toolError('回訪沒開（config.json 的 discord.followup.enabled）', 403);
       }
-      const result = followups.add(key, { minutes: body.minutes, note: body.note });
+      const result = followups.add(key, {
+        minutes: body.minutes,
+        note: body.note,
+        // chatty 頻道由機器人自己開話題；每日 2 次就夠，免得沒人接還一直回來。
+        maxPerDay: key.startsWith('ch:') && isChattyChannel(cfg.discord, key.slice(3)) ? 2 : undefined,
+      });
       if (result.error) throw toolError(result.error, /^(minutes|note)/.test(result.error) ? 400 : 429);
       log(`MCP 排回訪 ${key}（${result.entry.minutes} 分鐘後：${flat(result.entry.note, 60)}）`);
       return { text: `已排定 ${result.entry.minutes} 分鐘後回訪。時間到了會給你一個提示，要不要說話由你決定；這個會話目前還排著 ${followups.pending(key)} 個。` };
@@ -3542,13 +3548,15 @@ async function main() {
       ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild))
       : '';
     const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
+    // chatty 頻道不看發言比例：連數字都不給，模型才不會自己算「講太多了先不接」。
+    const chatty = isChattyChannel(cfg.discord, job.channel.id);
     const time = [
       formatTimeContext({ messageAt: job.entries[0].at }),
       quietAt ? `（你設了安靜到 ${formatQuietUntil(quietAt)}；★ 只按 reaction，不送文字）` : '',
-      formatActivityLine(activity.stats(key)),
+      chatty ? '' : formatActivityLine(activity.stats(key)),
     ].filter(Boolean).join('\n');
     return {
-      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, blacklistStatus, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled }), blacklistStatus, batch, time].filter(Boolean).join('\n'),
       images,
       feedbackEntries,
     };
@@ -3583,7 +3591,16 @@ async function main() {
       : job.reminder
         ? { text: job.reminder, images: [], feedbackEntries: [] }
         : job.followup
-          ? { text: formatFollowupPrompt(job.followup), images: [], feedbackEntries: [] }
+          ? {
+            // 回訪沒有【新訊息】，只有這幾行：先校正黑名單，再給回訪提示。
+            // 少了黑名單，模型會拿舊 prompt 的名單去 @ 已經退出的人。
+            text: [
+              job.channel?.guild ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild)) : '',
+              formatFollowupPrompt(job.followup, { openTopic: isChattyChannel(cfg.discord, job.channel?.id) }),
+            ].filter(Boolean).join('\n'),
+            images: [],
+            feedbackEntries: [],
+          }
           : await buildBatchPrompt(key, job);
     if (epoch !== epochOf(key)) {
       log(`整理批次期間會話已重置，丟棄 (${key})`);
@@ -4673,8 +4690,18 @@ async function main() {
     const noGuildRules = cfg.discord.allow.guilds.length === 0 && cfg.discord.allow.channels.length === 0;
     if (noGuildRules && !cfg.discord.allowAllWhenEmpty) log('⚠️ 頻道白名單為空：只會回應 allow.users 裡的私聊');
     if (!cfg.discord.messageContentIntent) log('ℹ️ 未申請 Message Content 意圖：頻道裡只會處理 @bot 的訊息');
+    warnChattyChannels();
     void registerSlashCommands();
   });
+
+  // chatty 頻道如果還是 @ 模式，【參與度】根本不會出現；啟動與每次改設定都提醒一次。
+  function warnChattyChannels() {
+    for (const id of cfg.discord.chattyChannels) {
+      if (requireMentionForChannel(cfg.discord, id)) {
+        log(`⚠️ chattyChannels 的 ${id} 還是要 @bot（requireMentionInChannel 或 messageContentIntent），參與度不會生效`);
+      }
+    }
+  }
 
   // 已持久化的會話先排進 follow；事件流重連時客戶端會自動重放。
   for (const sessionId of Object.values(sessions)) api.events.follow(sessionId);
@@ -4739,6 +4766,7 @@ async function main() {
       sandbox: cfg.discord.sandbox,
       requireMentionInGuild: cfg.discord.requireMentionInGuild,
       requireMentionInChannel: cfg.discord.requireMentionInChannel,
+      chattyChannels: cfg.discord.chattyChannels,
       // 唯讀：改這些要重啟橋接或重生 preset
       messageContentIntent: cfg.discord.messageContentIntent,
       agentPreset: cfg.discord.agentPreset,
@@ -4749,8 +4777,9 @@ async function main() {
   }
 
   async function updateConfig(patch) {
-    // 只接受白名單、黑名單、ownerIds、media、sandbox、requireMentionInGuild／InChannel；
-    // 其餘欄位一律沿用目前值。整份候選設定都過一次 normalizeDiscordConfig：ID 格式、數字範圍都在那裡擋。
+    // 只接受白名單、黑名單、ownerIds、media、sandbox、requireMentionInGuild／InChannel、
+    // chattyChannels；其餘欄位一律沿用目前值。整份候選設定都過一次 normalizeDiscordConfig：
+    // ID 格式、數字範圍都在那裡擋。
     const next = normalizeDiscordConfig({
       ...cfg.discord,
       allow: patch?.allow ?? cfg.discord.allow,
@@ -4773,6 +4802,7 @@ async function main() {
         ? patch.requireMentionInGuild
         : cfg.discord.requireMentionInGuild,
       requireMentionInChannel: patch?.requireMentionInChannel ?? cfg.discord.requireMentionInChannel,
+      chattyChannels: patch?.chattyChannels ?? cfg.discord.chattyChannels,
     });
 
     // 先寫檔再改記憶體：寫檔失敗時直接拋錯，設定和檔案都還是舊的。
@@ -4787,6 +4817,7 @@ async function main() {
       sandbox: next.sandbox,
       requireMentionInGuild: next.requireMentionInGuild,
       requireMentionInChannel: next.requireMentionInChannel,
+      chattyChannels: next.chattyChannels,
     };
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
@@ -4807,10 +4838,12 @@ async function main() {
     cfg.discord.sandbox = next.sandbox;
     cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
     cfg.discord.requireMentionInChannel = next.requireMentionInChannel;
+    cfg.discord.chattyChannels = next.chattyChannels;
     ownerIds.clear();
     for (const id of next.ownerIds) ownerIds.add(id);
 
-    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
+    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，chatty ${next.chattyChannels.length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
+    warnChattyChannels();
     return editableConfig();
   }
 

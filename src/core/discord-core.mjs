@@ -103,6 +103,8 @@ export function normalizeDiscordConfig(raw) {
     requireMentionInGuild: src.requireMentionInGuild !== false,
     // 單頻道覆寫：{ "頻道ID": true } = 只能 @bot；false = 自由參與；沒列出的頻道跟 guild 預設。
     requireMentionInChannel: booleanMap(src.requireMentionInChannel, 'discord.requireMentionInChannel'),
+    // 不限制發言頻率的頻道：這裡是大家來找 bot 聊天的地方，沒叫它也可以接。
+    chattyChannels: idList(src.chattyChannels, 'discord.chattyChannels'),
     messageContentIntent: src.messageContentIntent !== false,
     ackMessage: typeof src.ackMessage === 'string' ? src.ackMessage : '',
     maxMessageChars: clamp(src.maxMessageChars, DISCORD_MAX_CHARS, 200, DISCORD_MAX_CHARS),
@@ -265,6 +267,14 @@ export function requireMentionForChannel(cfg, channelId) {
   if (!cfg?.messageContentIntent) return true;
   const override = cfg?.requireMentionInChannel?.[String(channelId ?? '')];
   return typeof override === 'boolean' ? override : cfg?.requireMentionInGuild !== false;
+}
+
+/**
+ * 這個頻道是不是「來找 bot 聊天」的頻道：不看發言比例，沒 ★ 也可以接。
+ * 只影響提示詞，不影響准入；名單在 config.json 的 discord.chattyChannels。
+ */
+export function isChattyChannel(cfg, channelId) {
+  return Boolean(cfg?.chattyChannels?.includes(String(channelId ?? '')));
 }
 
 /**

@@ -15,9 +15,13 @@ const dayKey = (now) => {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 };
 
-/** 回訪的 prompt 本文：只有提示，要不要說話交給模型。 */
-export function formatFollowupPrompt({ minutes, note } = {}) {
-  return `【回訪】你 ${minutes} 分鐘前說要回來看：${note}\n（這是回訪，不是新訊息；想說話就呼叫 send_message，不想就別送。）`;
+/** 回訪的 prompt 本文：只有提示，要不要說話交給模型。
+ *  openTopic：chatty 頻道回訪時，舊話題冷了可以直接起一個新的。 */
+export function formatFollowupPrompt({ minutes, note } = {}, { openTopic = false } = {}) {
+  const tail = openTopic
+    ? '（這是回訪，不是新訊息。這個頻道可以自己開話題：舊話題冷了就直接起一個新的，不用硬接。想說話就呼叫 send_message，不想就別送。）'
+    : '（這是回訪，不是新訊息；想說話就呼叫 send_message，不想就別送。）';
+  return `【回訪】你 ${minutes} 分鐘前說要回來看：${note}\n${tail}`;
 }
 
 /**
@@ -46,7 +50,7 @@ export function createFollowupStore({
   /**
    * @returns {{entry: object}|{error: string}}
    */
-  function add(key, { minutes, note } = {}) {
+  function add(key, { minutes, note, maxPerDay: perCallMax } = {}) {
     const value = Math.round(Number(minutes));
     if (!Number.isInteger(value) || value < minMinutes || value > maxMinutes) {
       return { error: `minutes 要在 ${minMinutes}~${maxMinutes} 之間` };
@@ -56,8 +60,10 @@ export function createFollowupStore({
     if (pending(key) >= maxPerKey) {
       return { error: `這個會話已經排了 ${maxPerKey} 個回訪，等其中一個到再排` };
     }
-    if (todayCount(key) >= maxPerDay) {
-      return { error: `今天已經排了 ${maxPerDay} 次回訪，明天再排` };
+    // chatty 頻道自己開話題更容易排回訪，用比較小的每日上限。
+    const dailyCap = Number.isFinite(perCallMax) ? perCallMax : maxPerDay;
+    if (todayCount(key) >= dailyCap) {
+      return { error: `今天已經排了 ${dailyCap} 次回訪，明天再排` };
     }
     dayCounts.set(key, { day: dayKey(now()), count: todayCount(key) + 1 });
     const entry = { id: `f${nextId += 1}`, key, note: text, minutes: value, at: now() + value * 60_000 };
