@@ -3949,6 +3949,16 @@ console.log('## 10. 引用、上下文、出站閘門');
     '黑名單現況和這批的 ⊘ 一起當判斷依據');
   ok(formatBlacklistStatus(Array.from({ length: 25 }, (_, i) => `U${i}`)).includes('…等 25 人'),
     '黑名單太長時只列前 20 人');
+  const starredBlacklist = formatBlacklistStatus(['阿華'], { stars: ['皎朧孤'] });
+  ok(starredBlacklist.includes('⊘ 只看不回：「阿華」'), '★ 的人不列在 ⊘ 名單，其他退出者照列');
+  ok(starredBlacklist.includes('★ 優先於黑名單：「皎朧孤」') && starredBlacklist.includes('照 ★ 回'),
+    '黑名單現況明講 ★ 優先，並列出這批可以回的人');
+  ok(starredBlacklist.includes('這一批訊息標 ⊘ 的人一樣只看不回') && starredBlacklist.includes('以這一行為準'),
+    '有 ★ 時仍然保留 ⊘ 的保護句');
+  ok(!starredBlacklist.includes('不算數'), '不寫沒有主詞的「⊘ 不算數」');
+  const onlyStarBlacklist = formatBlacklistStatus([], { stars: ['皎朧孤'] });
+  ok(onlyStarBlacklist.includes('⊘ 只看不回：除了下面 ★ 的人') && onlyStarBlacklist.includes('★ 優先於黑名單：「皎朧孤」'),
+    '唯一退出的成員這批叫你時，⊘ 名單說沒有別人');
   const guildMembers = {
     members: {
       cache: new Map([

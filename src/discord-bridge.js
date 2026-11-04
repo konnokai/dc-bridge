@@ -3575,8 +3575,16 @@ async function main() {
     const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
     // 名單每批重算：模型會把舊 prompt 或壓縮摘要裡的 ⊘ 當成現在，這一行負責校正。
     // 只列這個伺服器的成員，名字取法跟【最近頻道訊息】一致，模型才對得上。
+    // 這批標 ★ 的退出者要從 ⊘ 名單移出，不然模型會同時看到「只看不回」和「可以回」。
+    // 用 id 比對：合批期間改暱稱時名字會對不上，兩份名單就又同時出現。
+    const starredIds = new Set(job.entries
+      .filter((entry) => entry.direct && cfg.discord.deny.self.includes(String(entry.userId)))
+      .map((entry) => String(entry.userId)));
     const blacklistStatus = guild
-      ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild))
+      ? formatBlacklistStatus(
+        guildBlacklistNames(cfg.discord.deny.self.filter((id) => !starredIds.has(String(id))), job.channel.guild),
+        { stars: guildBlacklistNames([...starredIds], job.channel.guild) },
+      )
       : '';
     const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
     // chatty 頻道不看發言比例：連數字都不給，模型才不會自己算「講太多了先不接」。

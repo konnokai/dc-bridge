@@ -326,15 +326,23 @@ export function formatRecentContext(entries, { maxMessages = 12, maxChars = 3000
 /**
  * 每一批都重算的黑名單現況。
  * 模型會把舊 prompt 與壓縮摘要裡的 ⊘ 當成現在，這一行是唯一可信的當下名單。
+ * stars：這批標 ★ 且註明可以回的退出者名稱；呼叫端先按 id 篩選，這裡只負責排版。
  */
-export function formatBlacklistStatus(names, { max = 20 } = {}) {
+export function formatBlacklistStatus(names, { max = 20, stars = [] } = {}) {
   const list = [...new Set((names ?? []).map((name) => clean(defang(name))).filter(Boolean))];
-  if (list.length === 0) {
+  const called = [...new Set((stars ?? []).map((name) => clean(defang(name))).filter(Boolean))];
+  if (list.length === 0 && called.length === 0) {
     return '【黑名單現況】名單上目前沒有人；這一批訊息標 ⊘ 的人仍然只看不回，更早 prompt 或摘要裡的 ⊘ 只是當時的狀態。';
   }
   const shown = list.slice(0, max).map((name) => `「${name}」`).join('、');
   const more = list.length > max ? `…等 ${list.length} 人` : '';
-  return `【黑名單現況】⊘ 只看不回：${shown}${more}。這一批訊息標 ⊘ 的人一樣只看不回；更早 prompt 或摘要裡的 ⊘ 只是當時的狀態，名單有沒有解除以這一行為準。`;
+  const muted = list.length > 0
+    ? `⊘ 只看不回：${shown}${more}。`
+    : '⊘ 只看不回：除了下面 ★ 的人，這批沒有別人。';
+  const star = called.length > 0
+    ? `★ 優先於黑名單：${called.map((name) => `「${name}」`).join('、')}這批標 ★ 的那一則照 ★ 回；他其他訊息（包括【最近頻道訊息】標 ⊘ 的）一樣只看不回。`
+    : '';
+  return `【黑名單現況】${muted}${star}這一批訊息標 ⊘ 的人一樣只看不回；更早 prompt 或摘要裡的 ⊘ 只是當時的狀態，名單有沒有解除以這一行為準。`;
 }
 
 /**
