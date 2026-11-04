@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, notes, deleteNote, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -138,6 +138,21 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
       }
       if (req.method === 'GET' && url.pathname === '/api/memory') {
         sendJson(res, 200, handlers.memory());
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/followups') {
+        sendJson(res, 200, handlers.followups());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/followups/delete') {
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        if (!/^f\d+$/.test(id)) {
+          sendJson(res, 400, { error: '缺少回訪 id' });
+          return;
+        }
+        const removed = handlers.deleteFollowup(id);
+        sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這個回訪' });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/notes') {

@@ -471,6 +471,14 @@ function planVideoSheet(probedSeconds, opts = {}) {
   };
 }
 
+/** 拼圖每一格大約對應第幾秒；fps 抽樣不是精確等分，所以標「約」。 */
+function frameTimesLabel(seconds, count) {
+  const step = seconds / Math.max(1, count);
+  const decimals = seconds < 10 ? 1 : 0;
+  const times = Array.from({ length: count }, (_, i) => (i * step).toFixed(decimals).replace(/\.0$/, ''));
+  return `約 ${times.join('/')}s`;
+}
+
 /**
  * 抽格拼圖的共同實作：input 是本機檔案或 http(s) 網址（yt-dlp 的直連串流）。
  * 失敗一律回一句可讀原因，不丟例外給呼叫端。
@@ -507,7 +515,7 @@ async function renderVideoSheet(input, opts = {}) {
     }
     const parts = [probed > 0 ? `影片 ${probed.toFixed(1)}s` : '影片長度不明'];
     if (probed <= 0 || probed > windowSeconds) parts.push(`只看前 ${windowSeconds}s`);
-    parts.push(`抽 ${layout.sampleFrames} 格拼成 ${layout.cols}×${layout.rows} 左上→右下`);
+    parts.push(`抽 ${layout.sampleFrames} 格拼成 ${layout.cols}×${layout.rows}（${frameTimesLabel(windowSeconds, layout.sampleFrames)}，左上→右下）`);
     parts.push('只有畫面沒有聲音');
     return { ok: true, buffer: out, mimeType: 'image/jpeg', note: parts.join('，') };
   } finally {

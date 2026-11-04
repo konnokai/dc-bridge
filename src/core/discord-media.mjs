@@ -17,9 +17,47 @@ import { componentParts, embedIsSensitive, messageParts, visibleAttachments } fr
 // images-ext-*：Discord 替連結預覽代抓的外部圖片。原站由 Discord 去抓，橋接只連 Discord 的主機。
 export const DISCORD_IMAGE_HOSTS = Object.freeze(['cdn.discordapp.com', 'media.discordapp.net', 'images-ext-1.discordapp.net', 'images-ext-2.discordapp.net']);
 
+// 同時最多跑幾個縮圖／抽格。多個頻道同時丟影片時，不讓 ffmpeg 把 CPU 打滿，
+// 免得 Discord heartbeat 和回合回應跟著變慢。下載是 I/O，照舊並行。
+const MEDIA_CONCURRENCY = 2;
+// 排到隊但剩餘預算不到這個數字就不跑了：跑也一定逾時，還會把呼叫端的其他結果一起拖掉。
+const MEDIA_QUEUE_MIN_MS = 10_000;
+
+/**
+ * 同時最多 limit 個任務在跑，其餘照排隊順序等。排隊中的任務不會被丟掉；
+ * 每個任務內部本來就有 ffmpeg 逾時，所以佇列不會永久卡住。
+ * @returns {(task: () => Promise) => Promise}
+ */
+export function createMediaQueue(limit = MEDIA_CONCURRENCY) {
+  const cap = Math.max(1, Math.floor(limit));
+  let active = 0;
+  const waiting = [];
+  const release = () => {
+    const next = waiting.shift();
+    if (!next) {
+      active -= 1;
+      return;
+    }
+    // 直接把名額交給下一個：active 不變，避免別的任務插隊。
+    Promise.resolve().then(next.task).then(next.resolve, next.reject).finally(release);
+  };
+  return function run(task) {
+    if (active < cap) {
+      active += 1;
+      return Promise.resolve().then(task).finally(release);
+    }
+    return new Promise((resolve, reject) => waiting.push({ task, resolve, reject }));
+  };
+}
+
+const mediaQueue = createMediaQueue();
+
 const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
 // 影片只抽幾格拼圖，不下載原片給模型。
 const VIDEO_MIME = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+// 語音訊息（Discord 是 audio/ogg）與上傳的音檔橋接聽不到：分類出來給一句人話，
+// 不要讓群友看到「不是支援的圖片或影片格式」這種技術句子。
+const AUDIO_EXT = new Set(['mp3', 'ogg', 'oga', 'opus', 'wav', 'm4a', 'aac', 'flac', 'weba']);
 const EXT_MIME = new Map([
   ['png', 'image/png'],
   ['jpg', 'image/jpeg'],
@@ -59,6 +97,10 @@ export function collectMediaAttachments(attachments, limits) {
   for (const item of list) {
     const name = safeName(item?.name);
     const declared = String(item?.contentType ?? '').toLowerCase();
+    if (declared.startsWith('audio/') || (!declared && AUDIO_EXT.has(/\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase()))) {
+      skipped.push({ name, reason: '語音或音訊（聽不到）', kind: 'audio' });
+      continue;
+    }
     const mime = declared
       ? (IMAGE_MIME.has(declared) || VIDEO_MIME.has(declared) ? declared : null)
       : inferMime(name);
@@ -258,7 +300,17 @@ export function resolveGeneratedImage(dir, file, { maxBytes = 10 * 1024 * 1024 }
  * 影片先抽格拼圖，再走跟圖片一樣的出口；解析度／體積超標時交給 ffmpeg 縮小。
  * 縮不動回傳 error，由呼叫端變成一句可讀訊息。
  */
-export async function prepareMediaBlock(buffer, name, limits) {
+export async function prepareMediaBlock(buffer, name, limits, { deadline } = {}) {
+  return mediaQueue(() => {
+    // deadline 是呼叫端整通工具的預算；排隊等掉的時間也要算進去。
+    if (deadline && deadline - Date.now() < MEDIA_QUEUE_MIN_MS) {
+      return { error: '媒體排隊太久，這張先跳過' };
+    }
+    return prepareMediaBlockNow(buffer, name, limits);
+  });
+}
+
+async function prepareMediaBlockNow(buffer, name, limits) {
   if (sniffVideo(buffer)) {
     const result = await normalizeVideoForModel(buffer, {
       maxModelBytes: limits.maxModelBytes,
@@ -303,7 +355,18 @@ export async function prepareMediaBlock(buffer, name, limits) {
 }
 
 /** yt-dlp 的直連網址 → 跟附件一樣的圖像區塊（影片抽格拼圖）。 */
-export async function prepareVideoUrlBlock(url, limits, { timeoutMs } = {}) {
+export async function prepareVideoUrlBlock(url, limits, { timeoutMs, deadline } = {}) {
+  return mediaQueue(() => {
+    const left = deadline ? deadline - Date.now() : Infinity;
+    if (left < MEDIA_QUEUE_MIN_MS) return { error: '媒體排隊太久，影片連結這次先跳過' };
+    // 預算在拿到名額之後才算：排隊的時間不能白花。
+    return prepareVideoUrlBlockNow(url, limits, {
+      timeoutMs: Math.max(5_000, Math.min(timeoutMs ?? 45_000, left)),
+    });
+  });
+}
+
+async function prepareVideoUrlBlockNow(url, limits, { timeoutMs } = {}) {
   const result = await normalizeVideoUrlForModel(url, {
     maxModelBytes: limits.maxModelBytes,
     maxVideoSeconds: limits.maxVideoSeconds,

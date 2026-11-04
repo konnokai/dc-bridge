@@ -49,6 +49,7 @@ import {
 } from '../src/core/discord-core.mjs';
 import {
   collectMediaAttachments,
+  createMediaQueue,
   describeSkipped,
   embedImages,
   fetchDiscordMedia,
@@ -3081,6 +3082,13 @@ console.log('## 8. 附件（圖片與影片）');
     '影片也只在 Discord CDN 上才收');
   ok(collectMediaAttachments([att({ name: 'a.zip', contentType: 'application/zip' })], limits).skipped[0].reason.includes('影片'),
     '不是圖片也不是影片的附件說明會講清楚');
+  const voice = collectMediaAttachments([att({ name: 'voice-message.ogg', contentType: 'audio/ogg' })], limits);
+  ok(voice.accepted.length === 0 && voice.skipped[0]?.kind === 'audio', '語音訊息（audio/ogg）不進模型，標成 audio');
+  ok(voice.skipped[0]?.reason.includes('聽不到'), '語音的跳過原因說人話');
+  ok(collectMediaAttachments([att({ name: 'song.mp3', contentType: '' })], limits).skipped[0]?.kind === 'audio',
+    '沒有 contentType 的音檔用副檔名認');
+  ok(collectMediaAttachments([att({ name: 'pic.png', contentType: 'image/png' })], limits).skipped.length === 0,
+    '圖片不會被誤認成音訊');
   ok(normalizeDiscordConfig({}).media.maxBytes === 20 * 1024 * 1024, '下載上限預設跟 Discord 免費額度（20MB）一致');
 
   // 影片連結：只有白名單網域交給 yt-dlp，其它網址一律不碰。
@@ -3107,6 +3115,30 @@ console.log('## 8. 附件（圖片與影片）');
   ok(capped.skipped.some((s) => s.reason.includes('最多')), '超過張數的附件有說明');
 
   ok(describeSkipped([{ name: 'a.png', reason: '太大' }]).includes('a.png（太大）'), '跳過原因會寫給模型看');
+
+  // 媒體佇列：同時最多兩個縮圖／抽格，第三個排隊等；任務丟例外也要把名額還回去。
+  const runQueued = createMediaQueue(2);
+  let active = 0;
+  let peak = 0;
+  const started = [];
+  const job = (name, ms) => runQueued(async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    started.push(name);
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    active -= 1;
+    return name;
+  });
+  const settledJobs = await Promise.allSettled([job('a', 30), job('b', 30), job('c', 5), job('d', 5)]);
+  ok(peak === 2, '同時最多兩個媒體任務');
+  ok(settledJobs.every((r) => r.status === 'fulfilled' && r.value), '排隊的任務都會跑到，不會被丟掉');
+  ok(started.slice(0, 2).sort().join() === 'a,b', '先來的先跑');
+  ok(started.slice(2).join() === 'c,d', '排隊的照順序開始，不會插隊');
+  const throwQueue = createMediaQueue(1);
+  const throwing = throwQueue(async () => { throw new Error('boom'); });
+  const afterThrow = throwQueue(async () => 'ok');
+  const throwResults = await Promise.allSettled([throwing, afterThrow]);
+  ok(throwResults[0].status === 'rejected' && throwResults[1].value === 'ok', '前一個丟例外，名額還是會放給下一個');
 
   // 貼圖：Map 模擬 discord.js 的 message.stickers（Collection 就是 Map）。format 1=PNG、3=Lottie、4=GIF。
   const stickers = new Map([
@@ -3452,6 +3484,8 @@ console.log('## 9. 控制台');
       quota: async () => ({ ok: true, windows: [{ key: 'rolling', remainingPercent: 97 }] }),
       codexQuota: async () => ({ ok: true, fiveHour: { remainingPercent: 94 }, weekly: { remainingPercent: 85 } }),
       memory: () => ({ enabled: true, users: [{ userId: '2', name: '小明', facts: ['喜歡貓'] }] }),
+      followups: () => ({ enabled: true, items: [{ id: 'f1', key: 'ch:1', where: '#閒聊', note: '回來看', remainingMinutes: 10, at: '2026-01-01T00:00:00.000Z' }] }),
+      deleteFollowup: (id) => id === 'f1',
       notes: () => ({ enabled: true, notes: [{ id: 'n1', text: '週五打球' }] }),
       deleteNote: (id) => id === 'n1',
       devFeedback: () => ({
@@ -3527,6 +3561,17 @@ console.log('## 9. 控制台');
   ok((await fetch(`${base}/api/memory`)).status === 401, '沒有 token 讀不到群友記憶');
   const memoryResponse = await fetch(`${base}/api/memory`, { headers: authed });
   ok(memoryResponse.status === 200 && (await memoryResponse.json()).users[0].facts[0] === '喜歡貓', '記憶端點回 handler 的結果');
+  ok((await fetch(`${base}/api/followups`)).status === 401, '沒有 token 讀不到回訪排程');
+  const followupResponse = await fetch(`${base}/api/followups`, { headers: authed });
+  const followupBody = await followupResponse.json();
+  ok(followupResponse.status === 200 && followupBody.items[0].id === 'f1' && followupBody.items[0].remainingMinutes === 10,
+    '回訪端點回 handler 的結果');
+  const followupDelete = await fetch(`${base}/api/followups/delete`, { method: 'POST', headers: { ...authed, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'f1' }) });
+  ok(followupDelete.status === 200 && (await followupDelete.json()).ok === true, '取消回訪端點會呼叫 handler');
+  const followupMissing = await fetch(`${base}/api/followups/delete`, { method: 'POST', headers: { ...authed, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'f99' }) });
+  ok(followupMissing.status === 404, '不存在的回訪回 404');
+  const followupNoId = await fetch(`${base}/api/followups/delete`, { method: 'POST', headers: { ...authed, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'nope' }) });
+  ok(followupNoId.status === 400, '非法回訪 id 回 400');
   ok((await fetch(`${base}/api/notes`)).status === 401, '沒有 token 讀不到頻道筆記');
   const notesResponse = await fetch(`${base}/api/notes`, { headers: authed });
   ok(notesResponse.status === 200 && (await notesResponse.json()).notes[0].id === 'n1', '筆記端點回 handler 的結果');
