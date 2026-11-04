@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { findSensitive } from './discord-security.mjs';
+import { describeSensitive, formatSensitiveHit } from './discord-security.mjs';
 
 /** 單次工具呼叫的內容上限；sendLong 會再按 Discord 的 2000 字上限切段。 */
 export const AGENT_MAX_CONTENT = 8_000;
@@ -110,6 +110,7 @@ export function createMessageRefs({ perKey = MESSAGE_REFS_PER_KEY } = {}) {
  * @param options.resolveChannel  async key => Discord channel
  * @param options.isAllowed       (key, channel) => boolean
  * @param options.secrets         () => 已知令牌清單（會話令牌另外自動加入）
+ * @param options.knownEmoji      () => Set<':名稱:'>：目錄裡真的存在的表情代號，敏感閘門不把它們當憑證值
  * @param options.blockSensitive  () => boolean
  * @param options.refs            createMessageRefs()：送出的訊息登記成 #編號，改／收回時查回 id
  * @param options.deliver         async (key, { content, replyTo, sticker, file }) => 送出的 Discord 訊息 id 陣列
@@ -125,6 +126,7 @@ export function createAgentSender({
   resolveChannel,
   isAllowed,
   secrets = () => [],
+  knownEmoji = () => null,
   blockSensitive = () => true,
   refs = createMessageRefs(),
   deliver,
@@ -194,8 +196,12 @@ export function createAgentSender({
 
   /** 用存著的令牌比對：模型傳來的可能是大寫版，拿它比對會漏掉內容裡的小寫原文。 */
   function checkSensitive(sessionId, text) {
-    const hit = blockSensitive() ? findSensitive(text, [...secrets(), tokens.get(sessionId)]) : null;
-    if (hit) throw statusError(`內容命中敏感資訊閘門（${hit}），已攔截`, 400);
+    const hit = blockSensitive()
+      ? describeSensitive(text, [...secrets(), tokens.get(sessionId)], knownEmoji())
+      : null;
+    if (!hit) return;
+    // 說出被擋的片段，模型才不用猜是哪個詞；令牌原文只說「已知令牌」，免得再外流一次。
+    throw statusError(`內容命中敏感資訊閘門：${formatSensitiveHit(hit)}，已攔截；改掉那個片段再送`, 400);
   }
 
   /** 會出現在頻道裡的動作（送出、投票、修改）排同一條隊，共用「一輪 5 則」。 */

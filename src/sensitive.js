@@ -58,9 +58,34 @@ function decodedSensitiveTexts(value) {
 // 否则 "A: /reset" 会黏成 "A:/reset" 被当成磁碟路径误挡。
 // 磁碟路径要求 drive 之后还有一层分隔符，"Q：/help" 这种聊天才不会中。
 const PATH_RE = /((?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'<>|]*[\\/][^\s"'<>|]*|\\\\[^\\\s"'<>|]+\\[^\s"'<>|]+|(?<![A-Za-z0-9])(?:\/home\/|\/Users\/|\/etc\/|\/var\/|\/root\/)[^\s"'<>|]*)/i;
-const CREDENTIAL_RE = /((?:token|密码|密钥|口令|password|passwd|secret|api[_-]?key|authorization|bearer|access[_-]?key|credential)["']?(?:\s*(?:[:=：]|是|为)\s*["']?[^\s，。；、"']{3,}|\s+[A-Za-z0-9_\-./]{3,}))/i;
+// 繁简两边的关键词都收：NFKC 不会把「密碼」转成「密码」。
+const CREDENTIAL_RE = /((?:token|密码|密碼|密钥|密鑰|口令|password|passwd|secret|api[_-]?key|authorization|bearer|access[_-]?key|credential)["']?(?:\s*(?:[:=：]|是|为|為)\s*["']?[^\s，。；、"']{3,}|\s+[A-Za-z0-9_\-./]{3,}))/i;
 const BASE_SENSITIVE_RE = new RegExp(`(?:${PATH_RE.source}|${CREDENTIAL_RE.source})`, 'i');
 const compactText = (text) => text.replace(/[\s._-]+/g, '');
+
+/** 在单一形态上比一次；命中时回报种类与片段（凭据比对的是紧凑文字，片段可能与原文空白不同）。 */
+function firstSensitiveHit(text) {
+  const filePath = text.match(PATH_RE);
+  if (filePath) return { rule: 'path', match: filePath[0] };
+  const credential = compactText(text).match(CREDENTIAL_RE);
+  if (credential) return { rule: 'credential', match: credential[0] };
+  return null;
+}
+
+/**
+ * 敏感判定并回报命中原因：`{ rule: 'path' | 'credential', match }` 或 `null`。
+ * 需要告诉调用方「哪一个词被挡」时用这个；只需要布尔值时用 `SENSITIVE_RE.test()`。
+ */
+export function matchSensitive(value) {
+  const canonical = normalizeSensitiveText(value);
+  const direct = firstSensitiveHit(canonical);
+  if (direct) return direct;
+  for (const decoded of decodedSensitiveTexts(canonical)) {
+    const hit = firstSensitiveHit(decoded);
+    if (hit) return hit;
+  }
+  return null;
+}
 
 /**
  * 结构化敏感判定：`.test()` 会先归一化再匹配（伪装形态也能命中）。
@@ -71,11 +96,7 @@ const compactText = (text) => text.replace(/[\s._-]+/g, '');
  */
 export const SENSITIVE_RE = new class StructuredSensitiveRegExp extends RegExp {
   test(value) {
-    const canonical = normalizeSensitiveText(value);
-    if (PATH_RE.test(canonical) || CREDENTIAL_RE.test(compactText(canonical))) return true;
-    return decodedSensitiveTexts(canonical).some((decoded) => (
-      PATH_RE.test(decoded) || CREDENTIAL_RE.test(compactText(decoded))
-    ));
+    return matchSensitive(value) !== null;
   }
 }(BASE_SENSITIVE_RE.source, BASE_SENSITIVE_RE.flags);
 

@@ -309,6 +309,20 @@ export function labelEmojiTags(text, catalogs) {
 }
 
 /**
+ * 目錄裡真的存在的表情代號（小寫、含冒號，例如 `:jokerdog:`）。
+ * 給敏感閘門用：只有真表情才不算憑證的值，`:hunter2:` 這種自己編的照樣要擋。
+ */
+export function knownEmojiTokens(catalogs) {
+  const tokens = new Set();
+  for (const catalog of catalogs?.values?.() ?? []) {
+    for (const entry of catalog.entries ?? []) {
+      if (entry?.name) tokens.add(`:${String(entry.name).toLowerCase()}:`);
+    }
+  }
+  return tokens;
+}
+
+/**
  * 把模型輸出的 `:名稱:` 換成 `<:名稱:id>` / `<a:名稱:id>`。
  * 當前伺服器的同名表情優先；找不到就保留原文（不亂猜 id）。
  * URL 與時間（`http://`、`12:30`）不會命中，因為名稱必須存在目錄裡。

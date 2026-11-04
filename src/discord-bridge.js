@@ -106,8 +106,8 @@ import {
   saveReloadFile,
   takeReloadSummary,
 } from './core/discord-reload.mjs';
-import { findSensitive } from './core/discord-security.mjs';
-import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, formatEmojiLine, isUnicodeEmoji, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { describeSensitive, findSensitive, formatSensitiveHit } from './core/discord-security.mjs';
+import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, formatEmojiLine, isUnicodeEmoji, knownEmojiTokens, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -1410,6 +1410,8 @@ async function main() {
     resolveChannel,
     isAllowed: isChannelAllowed,
     secrets: agentSecrets,
+    // 真的存在的 `:名稱:` 才不算憑證值：「省 token :jokerdog:」不該被擋，`token :hunter2:` 要擋。
+    knownEmoji: () => knownEmojiTokens(emojiCatalogs),
     blockSensitive: () => cfg.discord.security.blockSensitive,
     refs: messageRefs,
     deliver: deliverAgentMessage,
@@ -2332,9 +2334,10 @@ async function main() {
     async remember(body) {
       const { key, target, shown: name } = await memoryTarget(body, textArg(body.name, 40));
       const fact = typeof body.fact === 'string' ? body.fact : '';
-      if (cfg.discord.security.blockSensitive && findSensitive(fact, [...agentSecrets(), body.token])) {
-        throw toolError('這條像是密碼、令牌或本機路徑，不能記', 400);
-      }
+      const hit = cfg.discord.security.blockSensitive
+        ? describeSensitive(fact, [...agentSecrets(), body.token], knownEmojiTokens(emojiCatalogs))
+        : null;
+      if (hit) throw toolError(`這條命中敏感資訊閘門：${formatSensitiveHit(hit)}，不能記`, 400);
       const facts = rememberFact(memoryStore, { userId: target.author.id, name, fact }, { maxFacts: cfg.discord.memory.maxFacts });
       if (!facts) throw toolError('fact 是空的', 400);
       markMemoryDirty();
@@ -2509,9 +2512,10 @@ async function main() {
       const usage = typeof body.usage === 'string' ? body.usage : '';
       const examples = Array.isArray(body.examples) ? body.examples : [];
       if (!term || !meaning.trim()) throw toolError('term 和 meaning 都要給', 400);
-      if (cfg.discord.security.blockSensitive && findSensitive([term, meaning, usage, ...examples].join('\n'), [...agentSecrets(), body.token])) {
-        throw toolError('這段像是密碼、令牌或本機路徑，不能收', 400);
-      }
+      const slangHit = cfg.discord.security.blockSensitive
+        ? describeSensitive([term, meaning, usage, ...examples].join('\n'), [...agentSecrets(), body.token], knownEmojiTokens(emojiCatalogs))
+        : null;
+      if (slangHit) throw toolError(`這段命中敏感資訊閘門：${formatSensitiveHit(slangHit)}，不能收`, 400);
       const result = recordSlang(slangStore, { guildId: channel.guildId, term, meaning, usage, examples });
       if (!result) throw toolError('term 和 meaning 都要給', 400);
       slangWrites.set(key, used + 1);
@@ -2536,9 +2540,10 @@ async function main() {
       const tag = textArg(body.tag, 24);
       const description = typeof body.description === 'string' ? body.description : '';
       if (!tag || !description.trim()) throw toolError('tag 和 description 都要給', 400);
-      if (cfg.discord.security.blockSensitive && findSensitive([tag, description].join('\n'), [...agentSecrets(), body.token])) {
-        throw toolError('這段像是密碼、令牌或本機路徑，不能收', 400);
-      }
+      const tagHit = cfg.discord.security.blockSensitive
+        ? describeSensitive([tag, description].join('\n'), [...agentSecrets(), body.token], knownEmojiTokens(emojiCatalogs))
+        : null;
+      if (tagHit) throw toolError(`這段命中敏感資訊閘門：${formatSensitiveHit(tagHit)}，不能收`, 400);
       const result = recordChannelTag(slangStore, { guildId: channel.guildId, channelId: channel.id, tag, description });
       if (!result) throw toolError('tag 和 description 都要給', 400);
       if (result.full) throw toolError(`這個頻道的風格已經記滿 ${result.max} 條，先在控制台刪掉一條再加`, 409);

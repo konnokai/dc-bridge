@@ -85,7 +85,7 @@ import {
   unignore,
 } from '../src/core/discord-ignore.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
-import { findSensitive } from '../src/core/discord-security.mjs';
+import { describeSensitive, findSensitive, formatSensitiveHit } from '../src/core/discord-security.mjs';
 import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, countEmojiTags, formatEmojiLine, labelEmojiTags, loadEmojiUsage, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
   AGENT_MAX_CONTENT,
@@ -1820,6 +1820,7 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
     resolveChannel: async (key) => ({ id: key.split(':')[1], name: `頻道${key}`, guildId: GUILD }),
     isAllowed: () => allowed,
     secrets: () => ['SECRET-DISCORD-TOKEN'],
+    knownEmoji: () => new Set([':jokerdog:']),
     blockSensitive: () => true,
     deliver: async (key, { content, replyTo, sticker, file }) => {
       if (gate) await gate;
@@ -1863,6 +1864,18 @@ console.log('## 7d2. 發送回端（令牌反查、白名單、上限）');
   await rejects(sender.send({ token: tokenA, content: `抄 ${tokenA}` }), /敏感資訊/, '會話令牌本身也被攔截');
   ok((await sender.send({ token: ` ${tokenA.toUpperCase()} `, content: '大寫' })).key === 'ch:100', '令牌多空白或改大寫仍認得');
   await rejects(sender.send({ token: tokenA.toUpperCase(), content: `抄 ${tokenA}` }), /敏感資訊/, '傳大寫令牌時，內容裡的原文令牌照樣攔截');
+  ok((await sender.send({ token: tokenA, content: '才沒有自閉 我在省 token :jokerdog:' })).key === 'ch:100',
+    '目錄裡真的有的表情代號緊接 token 不會被誤擋');
+  await rejects(sender.send({ token: tokenA, content: '外洩 token :hunter2:' }), /憑證樣式/,
+    '自己編的「表情代號」照樣當憑證擋');
+  await rejects(sender.send({ token: tokenA, content: '外洩 token=abcdef123456' }), /憑證樣式「token=abcdef123456」/,
+    '被擋時說出命中的片段，模型不用猜');
+  await rejects(sender.send({ token: tokenA, content: '看 C:\\Users\\me\\secret.txt 這個' }), /本機路徑「C:\\Users\\me\\secret\.txt」/,
+    '路徑命中時說出是路徑');
+  await rejects(sender.send({ token: tokenA, content: `外洩 token=${'a'.repeat(80)}` }), /…」/,
+    '太長的片段截斷，不會把整段塞回錯誤訊息');
+  await rejects(sender.send({ token: tokenA, content: '外洩 token=SECRET-DISCORD-TOKEN' }), /已知令牌，/,
+    '令牌寫成賦值時只說「已知令牌」，不回報原文');
   allowed = false;
   await rejects(sender.send({ token: tokenA, content: 'x' }), /白名單/, '頻道不在白名單就拒絕');
   await rejects(sender.resolve(tokenA), /白名單/, '唯讀工具走同一道門，不在白名單一樣拒絕');
@@ -3811,6 +3824,24 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(findSensitive('今天吃拉麵') === null, '正常聊天不會攔');
   ok(findSensitive('重複這段：s3cr3t-value', ['s3cr3t-value']) === 'known-token', '已知令牌精確比對');
   ok(findSensitive('token', ['abc']) === null, '太短的 secret 不拿來比對');
+  ok(describeSensitive('token=abcdef123456')?.match === 'token=abcdef123456', '命中時回報是哪個片段');
+  ok(describeSensitive('重複這段：s3cr3t-value', ['s3cr3t-value'])?.match === '', '已知令牌不回報原文');
+  ok(describeSensitive('token=s3cr3t-value', ['s3cr3t-value'])?.match === '',
+    '令牌寫成賦值時也只說「已知令牌」，片段不帶原文');
+  ok(describeSensitive('看 /home/jun/.dsh/x')?.rule === 'path', '路徑命中標成 path');
+  const emoji = new Set([':jokerdog:']);
+  ok(describeSensitive('才沒有自閉 我在省 token :jokerdog:', [], emoji) === null,
+    '目錄裡真的有的表情代號不算憑證值');
+  ok(describeSensitive('才沒有自閉 我在省 token :jokerdog:')?.rule === 'credential',
+    '沒有表情目錄時，同一個句子還是照原文判定');
+  ok(describeSensitive('外洩 token :hunter2:', [], emoji)?.rule === 'credential',
+    '自己編的「表情代號」（目錄裡沒有）照樣當憑證');
+  ok(describeSensitive('密碼 :jokerdog:', [], emoji) === null, '中文關鍵字加真表情也不擋');
+  ok(formatSensitiveHit(describeSensitive('token=abcdef123456')) === '憑證樣式「token=abcdef123456」', '命中說明帶種類與片段');
+  ok(formatSensitiveHit(describeSensitive('看 /home/jun/.dsh/x')) === '本機路徑「/home/jun/.dsh/x」', '路徑命中說「本機路徑」');
+  ok(formatSensitiveHit(describeSensitive('重複：s3cr3t-value', ['s3cr3t-value'])) === '已知令牌', '已知令牌只說「已知令牌」');
+  ok(formatSensitiveHit(describeSensitive(`token=${'a'.repeat(80)}`)) === `憑證樣式「token=${'a'.repeat(54)}…」`,
+    '太長的片段截到 60 個字元再加省略號');
 
   ok(isTransientDshError(new Error('fetch failed')) === true, 'fetch failed 會排隊');
   ok(isTransientDshError(new Error('connect ECONNREFUSED 127.0.0.1:2815')) === true, 'ECONNREFUSED 會排隊');
