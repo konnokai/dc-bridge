@@ -95,9 +95,16 @@ console.log('## 6. 橋接有接上');
   ok(/chatty \? '' : formatActivityLine\(activity\.stats\(key\)\)/.test(bridge), 'chatty 頻道不印發言頻率');
   ok(bridge.includes('openTopic: isChattyChannel(cfg.discord, job.channel?.id)'), '回訪依頻道決定能不能開話題');
   ok(bridge.includes("job.channel?.guild ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild)) : ''"), '回訪帶黑名單現況');
+  ok(bridge.includes('const starredIds = new Set(job.entries'), '批次把這批 ★ 的退出者挑出來');
+  ok(bridge.includes('cfg.discord.deny.self.filter((id) => !starredIds.has(String(id)))'),
+    '⊘ 名單排除這批 ★ 的退出者');
+  ok(bridge.includes('{ stars: guildBlacklistNames([...starredIds], job.channel.guild) }'),
+    '★ 名單跟 ⊘ 名單用同一份成員資料');
   ok(bridge.includes('isChattyChannel(cfg.discord, key.slice(3)) ? 2 : undefined'), 'chatty 回訪套用每日 2 次');
   const persona = fs.readFileSync(path.resolve('dsh/agent-presets/dc-chat/agent.cordis.yml'), 'utf8');
   ok(persona.includes('這批有【參與度】區塊時'), 'persona 說明【參與度】優先');
+  ok(persona.includes('★ 優先於黑名單'), 'persona 明講 ★ 優先於黑名單');
+  ok(persona.includes('他其他沒標 ★ 的訊息仍然只看不回'), 'persona 的 ⊘ 例外只限退出者本人');
 }
 
 console.log(failures === 0 ? '\n全部通過' : `\n${failures} 項失敗`);
