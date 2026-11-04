@@ -80,19 +80,26 @@ export function repliedName(message) {
  * @param options.debounceMs  最後一則之後再等多久
  * @param options.maxWaitMs   從第一則算起最多等多久
  * @param options.maxMessages 一批最多幾則，滿了立刻送
+ * @param options.urgentMs    出現 urgent 之後改用的等待時間，預設 4000
+ * @param options.typingMs    有人在打字時往後延多久，預設 10000
  * @param options.onFlush     (key, items) => void
  * @param options.now / setTimer / clearTimer  測試用的時鐘注入
+ *
+ * item.urgent：這則在叫 bot（頻道裡 @ 或回覆）。從這則起整批改用 urgentMs 的短等待，
+ * 後面補的句子會併進同一批，分句不會被拆成兩個回合。
  */
 export function createBatcher({
   debounceMs,
   maxWaitMs,
   maxMessages,
+  urgentMs = 4_000,
+  typingMs = 10_000,
   onFlush,
   now = Date.now,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 }) {
-  const batches = new Map(); // key -> { items, firstAt, timer }
+  const batches = new Map(); // key -> { items, firstAt, deadline, timer, urgent, typing }
 
   function flush(key) {
     const batch = batches.get(key);
@@ -102,21 +109,62 @@ export function createBatcher({
     onFlush(key, batch.items);
   }
 
+  /** 重排送出時間：base 之後再等 typing 窗口，但不超過第一則之後的 maxWaitMs。 */
+  function schedule(key, batch, base) {
+    let deadline = base;
+    for (const [userId, until] of batch.typing) {
+      if (until <= now()) batch.typing.delete(userId);
+      else if (until > deadline) deadline = until;
+    }
+    clearTimer(batch.timer);
+    batch.deadline = Math.min(deadline, batch.firstAt + maxWaitMs);
+    batch.timer = setTimer(() => flush(key), Math.max(0, batch.deadline - now()));
+    batch.timer?.unref?.();
+  }
+
   function add(key, item) {
     let batch = batches.get(key);
     if (!batch) {
-      batch = { items: [], firstAt: now(), timer: null };
+      batch = { items: [], firstAt: now(), timer: null, urgent: false, typing: new Map() };
       batches.set(key, batch);
     }
+    // 他剛在這批叫過 bot（只 @ 不說話也算）：接著補的那則把整批升成 urgent，
+    // 不用等他補完再從頭等 20 秒。私聊每則都 direct，不算補句，照 debounce 合批。
+    const followsDirect = Boolean(item.guildId) && item.userId
+      && batch.items.some((entry) => entry.direct && String(entry.userId) === String(item.userId));
+    if (item.urgent || followsDirect) {
+      batch.urgent = true;
+      // 從叫 bot 的這則起，只認叫 bot 的人的打字：旁人還沒打完不該拖慢回答。
+      for (const userId of batch.typing.keys()) {
+        if (!batch.items.some((entry) => String(entry.userId) === userId && entry.direct)) batch.typing.delete(userId);
+      }
+    }
+    // 他已經送出訊息，打字狀態就結束；留著會讓這批白等一個 typing 窗口。
+    if (item.userId) batch.typing.delete(String(item.userId));
     batch.items.push(item);
-    clearTimer(batch.timer);
     const waited = now() - batch.firstAt;
     if (batch.items.length >= maxMessages || waited >= maxWaitMs) {
       flush(key);
       return;
     }
-    batch.timer = setTimer(() => flush(key), Math.min(debounceMs, maxWaitMs - waited));
-    batch.timer?.unref?.();
+    const wait = batch.urgent ? Math.min(debounceMs, urgentMs) : debounceMs;
+    schedule(key, batch, now() + wait);
+  }
+
+  /**
+   * 有人在打字：這批裡已經有他的訊息才延長，最多延 typingMs。
+   * urgent 批次只認叫 bot 的那個人；回傳有沒有真的排到。
+   */
+  function extend(key, userId) {
+    const batch = batches.get(key);
+    if (!batch || !userId) return false;
+    const id = String(userId);
+    const eligible = batch.items.some((entry) => String(entry.userId) === id
+      && (!batch.urgent || entry.direct));
+    if (!eligible) return false;
+    batch.typing.set(id, now() + typingMs);
+    schedule(key, batch, batch.deadline ?? now());
+    return true;
   }
 
   /** 丟掉還沒送出的那批（/reset 時用，不能讓舊訊息進新會話）。 */
@@ -127,7 +175,7 @@ export function createBatcher({
     batches.delete(key);
   }
 
-  return { add, drop, flush };
+  return { add, extend, drop, flush };
 }
 
 /** 兩批合成一批。超過上限先丟最舊的閒聊；★（有人叫 bot）那幾則一定留著。 */

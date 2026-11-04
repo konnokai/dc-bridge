@@ -151,8 +151,10 @@ export function normalizeDiscordConfig(raw) {
     },
     batch: {
       // 同一會話的訊息先等一下再合成一批送出，一批只開一個模型回合。
-      debounceMs: clamp(src.batch?.debounceMs, 5000, 500, 30_000),
-      maxWaitMs: clamp(src.batch?.maxWaitMs, 15_000, 1000, 120_000),
+      // 20 秒：分句對話常常隔好幾秒才補下一句，等太短會只看到半句。
+      debounceMs: clamp(src.batch?.debounceMs, 20_000, 500, 30_000),
+      // 一定有人叫 bot 的訊息會用較短的等待（見 discord-batch.mjs 的 urgentMs），這裡只管閒聊能累積多久。
+      maxWaitMs: clamp(src.batch?.maxWaitMs, 30_000, 1000, 120_000),
       maxMessages: clamp(src.batch?.maxMessages, 20, 1, 50),
     },
     security: {

@@ -391,7 +391,7 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 
 **結果（2026-10-29）**：
 - 共用函式是 `embedImages(embeds)`（`src/core/discord-media.mjs`）：只收 `proxyURL`，同一個 embed 只拿一張（有 `image` 就不拿 `thumbnail`，那通常只是縮小版）。
-- 跟計畫第 2 點不同：批次不是在 `handleMessage` 收，而是在送出時讀 `entry.message.embeds`。S2 結論：預覽走 `messageUpdate`，discord.js 14.27.0 會 patch 同一個 Message 物件（`MessageUpdate.js` → `Message._patch`），批次本來就等 `batch.debounceMs`（預設 5 秒），所以在送出時讀才拿得到，`messageCreate` 當下多半還是空的。
+- 跟計畫第 2 點不同：批次不是在 `handleMessage` 收，而是在送出時讀 `entry.message.embeds`。S2 結論：預覽走 `messageUpdate`，discord.js 14.27.0 會 patch 同一個 Message 物件（`MessageUpdate.js` → `Message._patch`），批次本來就等 `batch.debounceMs`（預設 20 秒；有人 @ 時縮短成 4 秒），所以在送出時讀才拿得到，`messageCreate` 當下多半還是空的。
 - 沒開 Message Content 意圖時 `embeds` 一律是空的，只有網址（官方文件警告）；`view_message` 同理。
 - persona 加了一句：只看到 tenor／giphy 網址就 `view_message` 看圖。沒實機貼 Tenor 連結驗證過。
 
