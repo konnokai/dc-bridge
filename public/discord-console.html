@@ -368,6 +368,18 @@
   </section>
 
   <section class="card">
+    <h2>回訪排程 <span id="followup-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 schedule_followup 排的「N 分鐘後回來看」。時間到會給它一個提示，要不要說話由它決定；重啟不會清掉，停機超過 30 分鐘的會丟掉。</p>
+    <div class="table-wrap">
+      <table style="min-width:640px">
+        <colgroup><col style="width:20%"><col><col style="width:13%"><col style="width:19%"><col style="width:9%"></colgroup>
+        <thead><tr><th>會話</th><th>內容</th><th>剩餘</th><th>到點</th><th></th></tr></thead>
+        <tbody id="followup-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
     <h2>模型自己不理的人 <span id="ignored-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 ignore_user 設的暫時名單，時間到自動失效。跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開；這裡的人連 @ 都不處理。</p>
     <div class="table-wrap">
@@ -492,7 +504,11 @@
     const res = await fetch(path, { ...options, headers });
     if (res.status === 401) { showGate('token 不正確或已失效'); throw new Error('unauthorized'); }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    if (!res.ok) {
+      const error = new Error(data.error || ('HTTP ' + res.status));
+      error.status = res.status; // 讓呼叫端分辨「已經不在了」跟真正的失敗
+      throw error;
+    }
     return data;
   }
 
@@ -1061,6 +1077,21 @@
     ] : []));
   }
 
+  function renderFollowups(data) {
+    const items = data?.items ?? [];
+    $('followup-count').textContent = data?.enabled === false
+      ? '（已關閉：config.json 的 discord.followup.enabled）'
+      : `（${items.length} 個）`;
+    $('followup-rows').replaceChildren(...(items.length ? items.map((item) => el('tr', {},
+      el('td', {}, el('strong', {}, item.where || item.key)),
+      el('td', {}, item.note || '—'),
+      el('td', { className: 'num' }, item.remainingMinutes > 0 ? `${item.remainingMinutes} 分鐘` : '已到點'),
+      el('td', { className: 'muted' }, item.at ? new Date(item.at).toLocaleString() : '—'),
+      el('td', {}, el('button', { className: 'danger', dataset: { followupId: item.id }, textContent: '取消' })),
+    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' },
+      data?.enabled === false ? '回訪功能關著。' : '現在沒有排回訪。'))]));
+  }
+
   function renderMemory(data) {
     const rows = data?.users ?? [];
     $('memory-count').textContent = data?.enabled
@@ -1253,7 +1284,7 @@
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
-      api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise,
+      api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise, api('/api/followups'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -1269,6 +1300,7 @@
     if (results[9].status === 'fulfilled') renderNotes(results[9].value);
     if (results[10].status === 'fulfilled') renderCodexQuota(results[10].value);
     if (results[11].status === 'fulfilled' && results[11].value) renderDevFeedback(results[11].value);
+    if (results[12].status === 'fulfilled') renderFollowups(results[12].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -1488,6 +1520,20 @@
     } finally {
       button.disabled = false;
     }
+  });
+
+  $('followup-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-followup-id]');
+    if (!button) return;
+    if (!confirm('取消這個回訪？時間到就不會再提醒模型了。')) return;
+    button.disabled = true;
+    try {
+      await api('/api/followups/delete', { method: 'POST', body: JSON.stringify({ id: button.dataset.followupId }) });
+    } catch (error) {
+      // 404＝已經被取消、或列被重新整理換掉了；重新整理就好，不用嚇使用者。
+      if (error.status !== 404) alert('取消失敗：' + error.message);
+    }
+    await refresh();
   });
 
   $('dev-feedback-rows').addEventListener('click', async (event) => {

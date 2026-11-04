@@ -29,10 +29,29 @@ npm run test:console-ui          # 等价于 node scripts/test-console-ui.mjs
 node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 ```
 
-脚本使用 Playwright 和 Chromium。优先使用项目内安装的 `playwright`；Windows 上若未安装 Playwright，会自动改用本机 Chrome / Edge，无需下载浏览器。其他环境可安装 Playwright 及其浏览器，或通过以下环境变量指定：
+脚本需要 `playwright` 模块和 Chromium，两者缺一就在第 23~31 行直接中止，**不会**自动改用本机浏览器。先装：
+
+```sh
+npm install --no-save playwright
+npx playwright install chromium
+```
+
+已经有可用的 Chromium / Chrome / Edge 时，可以用环境变量指定：
 
 - `PLAYWRIGHT_MODULE`：Playwright 模块目录（例如 `npm install --no-save playwright` 后指向 `node_modules/playwright`）。
-- `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`：Chromium / Chrome 可执行文件。
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`：Chromium / Chrome / Edge 可执行文件。
+
+### 没有本机 Chrome 的环境（OpenChamber）
+
+OpenChamber 这台没有本机 Chrome / Edge，也没装 Playwright，`npm run test:console-ui` 会直接中止。这不是测试失败，别当成回归结果。目视检查改用 OpenChamber 的浏览器面板（`openchamber_web` 工具：`browser.open`、`browser.snapshot`、`browser.click`、`browser.close`），它跟专案在同一台机器，开得了 `127.0.0.1`：
+
+1. 起一个 preview server：
+   - QQ 控制台：`npm run preview:console`（`http://127.0.0.1:4173`）。
+   - Discord 控制台：没有现成 preview，照 `scripts/test-console-ui.mjs` 里 `startConsole({ host: '127.0.0.1', port: 4199, token: 't', htmlPath: 'public/discord-console.html', handlers: {...} })` 的写法起一个临时 server。handlers 要包含页面会打的每一个 `/api/*`，缺一个就 500。
+2. `browser.open` 开 `http://127.0.0.1:4199/?token=t#sessions`，`browser.snapshot` 读文字与可点元素，要互动就 `browser.click`；看完 `browser.close`。
+3. 这种检查是人工目视，不算回归。改前端后仍要跑 `scripts/test-console-static.mjs`（ID 唯一、JS 可解析）和 `npm run test:discord`。
+
+> 别用 `obscura` 那组 browser 工具：它会挡私有 IP，`127.0.0.1` 和区网地址都开不了。
 
 测试自行启动随机端口的 fixture，并在退出时关闭浏览器和服务。浏览器请求被限制到该 fixture 的 origin，外部请求会被阻止并使检查失败。
 
@@ -55,6 +74,7 @@ node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
 - 思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。
 - Discord 版控制台（`public/discord-console.html`，用 `startConsole` 加 mock handler 起一个随机端口）：「频道风格」的频道下拉選單顯示 `#頻道名 · 伺服器名（筆數）`，名稱或伺服器還是撞才補 id，跟狀態過濾一起作用，換頻道回到第 1 頁，重新整理後保留選擇，頻道沒有條目時退回「全部頻道」。
 - Discord 對話表：次數、畫圖、最後觸發、第一次可點擊排序；同欄切換升冪/降冪，換欄預設降冪，排序後回第 1 頁，`aria-sort` 與箭頭同步，同值保留伺服器順序。
+- Discord 會話分頁的「回訪排程」卡片：列出排程與剩餘時間，取消按鈕會呼叫 `/api/followups/delete`。
 - Discord 所有表格固定欄寬：換頁或內容變長時欄位與按鈕位置不變；375px 下各分頁的表格儲存格不溢出到隔壁欄。
 - 无 JavaScript 错误、未知 API 或外部网络请求。
 

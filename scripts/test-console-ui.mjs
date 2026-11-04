@@ -590,6 +590,7 @@ try {
         usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries, learning: { enabled: true } }),
@@ -681,6 +682,7 @@ try {
         usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries, learning: { enabled: true } }),
@@ -758,6 +760,7 @@ try {
         usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries, learning: { enabled: true } }),
@@ -819,6 +822,7 @@ try {
         usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
@@ -882,6 +886,7 @@ try {
         }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [{ userId: '1', name: '群友', facts: ['事情'], updatedAt: old }] }),
+        followups: () => ({ enabled: true, items: [{ id: 'f1', key: 'discord:ch:123456789012345678', where: '#很長的頻道名稱', note: '回來看很長很長的話題'.repeat(3), remainingMinutes: 25, at: new Date(old).toISOString() }] }),
         notes: () => ({ enabled: true, notes: [{ id: 'n1', channelId: '123456789012345678', channelName: '很長的頻道名稱', text: '筆記', by: 'summary', at: new Date(old).toISOString(), expiresAt: old }] }),
         sessions: () => [{ key: 'discord:ch:123456789012345678', label: '#很長的頻道名稱 · 很長的伺服器名稱', sessionId: 'ses_0123456789abcdefghijklmn', lastActive: old, quietUntil: old, pending: 'question' }],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
@@ -912,6 +917,8 @@ try {
       assert.deepEqual(await p.locator('#trigger-rows tr td strong').allTextContents(), ['b-user', 'a-user']);
       assert.match(await p.locator('#sessions tr td:first-child').textContent(), /#很長的頻道名稱 · 很長的伺服器名稱/,
         '會話欄顯示頻道 + 伺服器名稱，不是 key');
+      assert.match(await p.locator('#followup-rows tr td:nth-child(3)').textContent(), /25 分鐘/,
+        '回訪卡片顯示剩餘時間');
     } finally {
       await dcContext.close();
       await dc.close();
@@ -933,6 +940,7 @@ try {
         usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
         sessions: () => [],
         config: () => current,
         updateConfig: async (body) => { posts.push(body); return current; },
@@ -1004,6 +1012,7 @@ try {
         usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
         quota: async () => ({ skipped: true }),
         memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
         notes: () => ({ enabled: true, notes: [] }),
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),

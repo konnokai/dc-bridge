@@ -57,7 +57,7 @@ import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefu
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { loadStatusFile, parseStatusText, saveStatusFile } from './core/discord-status.mjs';
-import { createFollowupStore, formatFollowupPrompt } from './core/discord-followup.mjs';
+import { createFollowupStore, formatFollowupPrompt, formatFollowupStatus, loadFollowupFile, saveFollowupFile } from './core/discord-followup.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import {
   DEV_FEEDBACK_EDITS_PER_TURN,
@@ -195,6 +195,7 @@ const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
 const CUSTOM_STATUS_FILE = path.join(STATE_DIR, 'discord-custom-status.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
+const FOLLOWUPS_FILE = path.join(STATE_DIR, 'discord-followups.json');
 const DEV_FEEDBACK_FILE = path.join(STATE_DIR, 'discord-dev-feedback.json');
 const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
 const CODEX_RESET_FILE = path.join(STATE_DIR, 'discord-codex-reset.json');
@@ -765,7 +766,19 @@ async function main() {
   const needsOpening = new Set(); // key → 新會話的開場提示還沒真的送進模型
   const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
   const quietState = createQuietState(); // key -> 安靜到什麼時候
-  const followups = createFollowupStore(); // 模型自己排的「N 分鐘後回來看」
+  const followupsLoaded = loadFollowupFile(FOLLOWUPS_FILE);
+  if (followupsLoaded.warning) log(`⚠️ 回訪排程：${followupsLoaded.warning}`);
+  // 模型自己排的「N 分鐘後回來看」。寫檔失敗只記 log：存不了檔不能連帶讓排回訪失敗。
+  const followups = createFollowupStore({
+    saved: followupsLoaded.saved,
+    onChange: (snapshot) => {
+      try {
+        saveFollowupFile(FOLLOWUPS_FILE, snapshot);
+      } catch (error) {
+        log(`回訪排程存檔失敗：${error?.message ?? error}`);
+      }
+    },
+  });
   const reactionInbox = createReactionInbox(); // key -> 自己的訊息收到的 reaction（下一批提示）
 
   /** 安靜到什麼時候；剛結束就把 primedKeys 拿掉，下一批重新帶上下文。 */
@@ -2189,7 +2202,7 @@ async function main() {
         : new Map();
       const media = collectMediaAttachments(viewMediaItems({ target, replied: repliedMessage, fixMessages }), cfg.discord.media);
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
-        const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media);
+        const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media, { deadline: viewStart + 55_000 });
         if (!prepared.block) throw new Error(prepared.error);
         return {
           data: prepared.block.data,
@@ -2229,7 +2242,7 @@ async function main() {
           if (!stream.ok) {
             lines.push(`影片連結看不了：${flat(stream.reason, 120)}`);
           } else {
-            const sheet = await prepareVideoUrlBlock(stream.url, cfg.discord.media, { timeoutMs: budget() });
+            const sheet = await prepareVideoUrlBlock(stream.url, cfg.discord.media, { timeoutMs: budget(), deadline: viewStart + 55_000 });
             if (sheet.block) {
               images.push({ data: sheet.block.data, mimeType: sheet.block.mediaType });
               if (sheet.note) videoNotes.push(sheet.note);
@@ -3622,7 +3635,9 @@ async function main() {
     // 只看「是不是新會話」：安靜結束也會清掉 primedKeys（為了重帶上下文），
     // 拿它判斷開場會在每次安靜後再叫模型主動說話一次。
     const opening = needsOpening.has(key) && job.direct ? `\n${OPENING_HINT}` : '';
-    const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${sendHint}`;
+    // 回訪清單只給「會說話的回合」：NO_TOOL 提醒與系統訊息不需要，多一行只是雜訊。
+    const schedule = job.reminder || job.system ? '' : formatFollowupStatus(followups.list(key));
+    const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${schedule ? `${schedule}\n` : ''}${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
     queued.push(job.direct);
@@ -4386,8 +4401,10 @@ async function main() {
     const emptyDirect = direct && !fullText && !stickers && media.accepted.length === 0;
     if (!fullText && !stickers && media.accepted.length === 0) {
       if (direct && parts.attachments.length) {
+        // 只有語音時說人話；其他附件維持原本的技術說明（含是哪一種格式被擋）。
+        const audioOnly = media.skipped.length > 0 && media.skipped.every((item) => item.kind === 'audio');
         const reason = media.skipped[0]?.reason ?? '附件沒有送進模型';
-        await sendLong(key, `附件沒有送進模型：${reason}`);
+        await sendLong(key, audioOnly ? '這則是語音或音訊，我聽不到；打字告訴我內容好嗎' : `附件沒有送進模型：${reason}`);
         return;
       }
       if (!direct) return;
@@ -4966,6 +4983,29 @@ async function main() {
             enabled: cfg.discord.memory.enabled,
             users: memoryOverview(memoryStore),
           }),
+          followups: () => ({
+            enabled: cfg.discord.followup.enabled,
+            items: followups.all().map((entry) => {
+              const channelId = entry.key.startsWith('ch:') ? entry.key.slice(3) : '';
+              const channel = channelId ? client.channels.cache.get(channelId) : null;
+              return {
+                id: entry.id,
+                key: entry.key,
+                where: channelId ? (channel?.name ? `#${channel.name}` : channelId) : '私聊',
+                note: entry.note,
+                minutes: entry.minutes,
+                at: new Date(entry.at).toISOString(),
+                scheduledAt: new Date(entry.at - entry.minutes * 60_000).toISOString(),
+                remainingMinutes: Math.max(0, Math.round((entry.at - Date.now()) / 60_000)),
+              };
+            }),
+          }),
+          // 控制台的逃生門：排錯或不想回訪了，管理員可以直接取消。
+          deleteFollowup: (id) => {
+            const removed = followups.remove(String(id ?? ''));
+            if (removed) log(`控制台取消回訪 ${id}`);
+            return removed;
+          },
           notes: () => ({
             enabled: cfg.discord.notes.enabled,
             notes: notesOverview(notesStore).map((note) => ({

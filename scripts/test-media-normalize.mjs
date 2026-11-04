@@ -194,6 +194,8 @@ await test('真實影片 → 抽 6 格拼圖（單張 JPEG + 長度說明）', a
   assert.ok(strip.width > 320, `拼圖應該比單格寬（${strip.width}）`);
   assert.match(out.note, /影片 \d+\.\d+s/);
   assert.match(out.note, /抽 6 格拼成 3×2/);
+  assert.match(out.note, /約 \d/, 'note 要說出每格大約第幾秒');
+  assert.ok(out.note.length <= 80, `note 不能超過 80 字（實際 ${out.note.length}）`);
   assert.match(out.note, /沒有聲音/);
 });
 
@@ -281,6 +283,7 @@ await test('maxVideoSeconds 再大，抽格窗口也只到 120 秒（fps 下限�
   });
   assert.equal(out.ok, true, out.error);
   assert.match(out.note, /只看前 120s/);
+  assert.ok(out.note.length <= 80, `最長的 note 也不能超過 80 字（實際 ${out.note.length}）`);
 });
 
 await test('真实动图 → 抽帧拼图（单张 JPEG + 帧数说明）', async () => {
