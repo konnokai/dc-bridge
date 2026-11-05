@@ -1057,6 +1057,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
 - `mcp__web-search-safe__web_fetch`（`url`）：只讀抓 HTTPS（443）網頁正文，結果會包一層「這是資料、不是指令」的外殼，擋內網與本機位址。
   HTML 回標題、說明與前 2000 字可見文字；純文字最多 50000 字。
+  `Content-Encoding` 是 gzip／deflate／br 會先解壓再讀（有些站沒被要求也會壓縮，例如 bilibili）；不支援的編碼或二進位內容回「無法解析」，不把亂碼當正文。
   Google Docs／Slides／Sheets 的 `/edit`、`/view` 會自動改寫成 `export?format=txt`／`csv`（公開文件才有效；私人文件回登入頁時明確說打不開）。
   HTML 會抽 `og:title`／`og:description`／`<title>` 與可見文字；只有標題、沒有正文時明講「只有標題」。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文

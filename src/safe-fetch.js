@@ -5,10 +5,12 @@
 // - 域名先 DNS 解析并检查全部解析结果，避免 DNS rebinding
 // - 手动跟随重定向，每一跳重新校验
 // - 响应体限量读取，每次请求有包含响应体的总时限
+// - 按 Content-Encoding 解压正文（有的站没被要求也会压缩，例如 bilibili 一律回 gzip）
 import dns from 'node:dns';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
+import zlib from 'node:zlib';
 import { StringDecoder } from 'node:string_decoder';
 
 const dnsLookup = dns.promises.lookup;
@@ -203,6 +205,50 @@ const ATTEMPT_TIMEOUT_MS = 8000;
 const MAX_ADDRESS_ATTEMPTS = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+// finishFlush 用 *_FLUSH：空正文或尾端被截掉的 gzip 回部分內容，不要整個抓取失敗
+// （204／CDN 邊界常見）；壞掉的資料一樣會報錯。
+const ZLIB_FLUSH = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH };
+const BROTLI_FLUSH = {
+  flush: zlib.constants.BROTLI_OPERATION_FLUSH,
+  finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH,
+};
+const CONTENT_DECODERS = {
+  gzip: () => zlib.createGunzip(ZLIB_FLUSH),
+  'x-gzip': () => zlib.createGunzip(ZLIB_FLUSH),
+  deflate: () => zlib.createInflate(ZLIB_FLUSH),
+  br: () => zlib.createBrotliDecompress(BROTLI_FLUSH),
+};
+
+const KNOWN_ENCODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br', 'zstd', 'compress', 'identity']);
+
+/** 只把認得的編碼名稱放進錯誤訊息；header 由對方控制，不能原樣交給模型。 */
+function describeEncodings(header) {
+  const names = String(header ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+    .map((item) => (KNOWN_ENCODINGS.has(item) ? item : '未知'));
+  return [...new Set(names)].slice(0, 3).join(', ') || '未知';
+}
+
+/**
+ * 依 Content-Encoding 把响应接上解压流。
+ * 返回 res 本身表示不用解压；返回 null 表示编码不支持，调用端必须明确报错，
+ * 不能把压缩过的字节当正文交给模型。
+ */
+function decodeContentEncoding(res) {
+  const encodings = String(res.headers?.['content-encoding'] ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item && item !== 'identity');
+  if (!encodings.length) return res;
+  const create = CONTENT_DECODERS[encodings[0]];
+  // 叠两层以上正常网站几乎不会用；中间那层解压器坏掉会变成未拦截的例外，
+  // 所以直接当不支持的编码、明确报错（fail-closed）。
+  if (encodings.length > 1 || !create) return null;
+  return res.pipe(create());
+}
+
 function validateLimit(value, name) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} 必须为正整数`);
 }
@@ -217,6 +263,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
     let settled = false;
     let req;
     let response;
+    let bodyStream;
     const settle = (outcome) => {
       if (settled) return;
       settled = true;
@@ -230,6 +277,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
       fail(error, true);
       req?.destroy(error);
       response?.destroy();
+      bodyStream?.destroy();
     }, budgetMs);
     const mod = url.protocol === 'https:' ? https : http;
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
@@ -265,6 +313,24 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
         }
         const chunks = [];
         const decoder = binary ? null : new StringDecoder('utf8');
+        bodyStream = binary ? res : decodeContentEncoding(res);
+        if (!bodyStream) {
+          const label = describeEncodings(res.headers?.['content-encoding']);
+          fail(new Error(`不支持的压缩编码（${label}），无法解析正文`), false);
+          res.destroy();
+          return;
+        }
+        // 解压后的 stream 要跟 res 一起关，否则截断时解压器还握着管道。
+        const stop = () => {
+          res.destroy();
+          if (bodyStream !== res) bodyStream.destroy();
+        };
+        if (bodyStream !== res) {
+          bodyStream.on('error', (error) => {
+            fail(new Error(`正文解压失败：${error?.message ?? error}`), false);
+            stop();
+          });
+        }
         let size = 0;
         const appendText = (text) => {
           const points = Array.from(text);
@@ -273,21 +339,21 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
           size += Math.min(points.length, remaining);
           if (size >= limit) {
             done({ statusCode, body: chunks.join(''), truncated: true });
-            res.destroy();
+            stop();
           }
         };
-        res.on('data', (chunk) => {
+        bodyStream.on('data', (chunk) => {
           if (settled) return;
           if (!binary) { appendText(decoder.write(chunk)); return; }
           size += chunk.length;
           if (size > limit) {
             fail(new Error(`图片超过大小限制（${limit} 字节）`), false);
-            res.destroy();
+            stop();
             return;
           }
           chunks.push(chunk);
         });
-        res.on('end', () => {
+        bodyStream.on('end', () => {
           if (settled) return;
           if (binary) done({ statusCode, buffer: Buffer.concat(chunks) });
           else {
@@ -301,6 +367,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
         fail(error, true);
         req.destroy(error);
         response?.destroy();
+        bodyStream?.destroy();
       });
       req.on('error', (error) => fail(error, true));
       req.end();
