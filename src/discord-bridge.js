@@ -55,6 +55,13 @@ import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, 
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
+import { createQuoteProvider } from './core/quote-provider.mjs';
+import { openTradeDb } from './core/discord-trade-db.mjs';
+import { createTradeService, formatPct, formatTwd, parseHhmm, playerAccountId, pickPlayerIdentity } from './core/discord-trade.mjs';
+import { buildBotPrompt, buildReviewPrompt, canRunBot, canRunReview, formatPlayerNotice, formatReviewNotice, formatTradeNotice } from './core/bot-trader.mjs';
+import { createInstitutionalProvider } from './core/institutional-provider.mjs';
+import { createMaterialProvider } from './core/material-provider.mjs';
+import { findSymbol } from './core/trade-symbols.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { loadStatusFile, parseStatusText, saveStatusFile } from './core/discord-status.mjs';
 import { createFollowupStore, formatFollowupPrompt, formatFollowupStatus, loadFollowupFile, saveFollowupFile } from './core/discord-followup.mjs';
@@ -297,6 +304,10 @@ const slashCommandData = [
     .setDescription('刪除 bot 記下的關於你的事（所有伺服器共用）')
     .setDMPermission(true),
   new SlashCommandBuilder()
+    .setName('portfolio')
+    .setDescription('查自己的模擬股票帳戶（只有你看得到）')
+    .setDMPermission(true),
+  new SlashCommandBuilder()
     .setName('blacklist')
     .setDescription('切換自己的黑名單狀態（加入／移出，所有伺服器共用，只能改自己）')
     .setDMPermission(false),
@@ -412,6 +423,23 @@ async function main() {
   acquireLock();
   const { sessions } = loadSessions(SESSIONS_FILE);
   const reverse = new Map(Object.entries(sessions).map(([key, sessionId]) => [sessionId, key]));
+  // Bot 交易的一次性會話只活在記憶體；不要寫進 sessions 檔，否則重啟後會 follow 已歸檔的 session。
+  const persistedSessions = () => Object.fromEntries(Object.entries(sessions).filter(([key]) => !key.startsWith('bot:')));
+
+  // 模擬股票：交易域獨立 SQLite；報價、結算與 Bot 排程都在 login 之後才啟動。
+  let tradeDb = null;
+  let tradeQuotes = null;
+  let tradeInstitutional = null;
+  let tradeMaterial = null;
+  let tradeService = null;
+  let botActiveRun = null;
+  let tradeSettlementTimer = null;
+  let botTraderTimer = null;
+  let botReviewTimer = null;
+  let botReviewRunning = false;
+  let tradeSettling = false;
+  let botStarting = false;
+  const botTokenSink = new Map(); // sessionId -> { tokens }：Bot 回合的 token 累計
 
   // 群友記憶：模型用 remember_user 記的；私聊與 NSFW 頻道不記（在工具入口擋）。
   const memoryLoaded = loadMemoryFile(MEMORY_FILE);
@@ -1004,7 +1032,7 @@ async function main() {
       // 只有真的新建會話才標記開場。sessions 會從磁碟載入，重啟後 existing 分支
       // 不會走到這裡，所以部署重啟後的第一批不會再被叫去主動說話。
       needsOpening.add(key);
-      saveSessions(SESSIONS_FILE, sessions);
+      saveSessions(SESSIONS_FILE, persistedSessions());
       await applyModel(sessionId);
       log(`新會話 ${key} → ${sessionId}（preset ${cfg.discord.agentPreset}）`);
       return sessionId;
@@ -1097,7 +1125,7 @@ async function main() {
     agentSender.forget(sessionId);
     collectors.delete(sessionId);
     modelApplied.delete(sessionId);
-    saveSessions(SESSIONS_FILE, sessions);
+    saveSessions(SESSIONS_FILE, persistedSessions());
 
     // 佇列要清、回合要取消，最後才歸檔（歸檔只是隱藏，不會停掉還在跑的工作）。
     try {
@@ -1801,6 +1829,120 @@ async function main() {
     return sandboxTurnAllowed({ key, channels: cfg.discord.sandbox.channels });
   }
 
+  function requireTrade() {
+    if (!tradeService) throw toolError('模擬股票沒有開啟或還沒就緒（config.json 的 discord.trade.enabled）', 403);
+    return tradeService;
+  }
+
+  function tradeFailure(error) {
+    if (typeof error?.statusCode === 'number') return error;
+    return toolError(String(error?.message ?? error), 400);
+  }
+
+  function formatMarket(market) {
+    if (!market) return '市場狀態不明';
+    const next = market.open || !market.nextOpen ? '' : `；下一次開盤 ${market.nextOpen}`;
+    return market.open
+      ? `${market.label}；這不是即時報價，今天下單用今日收盤價結算`
+      : `${market.label}${next}；現在不能排隊下單`;
+  }
+
+  function formatQuoteResult(result) {
+    if (!result.entry) {
+      if (!result.candidates?.length) return '查不到這個股票。商品主檔目前只有台股一般上市／上櫃普通股。';
+      return `找到多個可能：${result.candidates.map((item) => `${item.symbol} ${item.name}（${item.exchange}）`).join('、')}。請問是哪一個，不要自己猜。`;
+    }
+    const entry = result.entry;
+    const lines = [`${entry.name}（${entry.symbol}）｜${entry.exchange === 'TWSE' ? '上市' : '上櫃'}`];
+    if (!result.quote) {
+      lines.push('最近收盤價：查不到（報價來源可能中斷）');
+    } else {
+      const quote = result.quote;
+      const change = quote.changeCents ?? 0;
+      const changePct = quote.referenceCents > 0 ? (change / quote.referenceCents) * 100 : 0;
+      lines.push(`最近收盤價：${formatTwd(quote.closeCents)}（${quote.asOf}）`);
+      lines.push(`漲跌：${change >= 0 ? '+' : ''}${formatTwd(change)}（${formatPct(changePct)}）`);
+    }
+    lines.push(`市場：${formatMarket(result.market)}`);
+    lines.push(`可下單：${result.tradable && result.market?.open ? '是' : '否'}`);
+    return lines.join('\n');
+  }
+
+  /** 公開復盤前去掉連結，避免新聞或模型輸出變成釣魚連結／邀請連結。 */
+  function stripPublicLinks(text) {
+    return String(text ?? '')
+      .replace(/https?:\/\/(?:discord(?:app)?\.(?:gg|com\/invite))\/\S+/gi, '（邀請連結已省略）')
+      .replace(/\b(?:discord\.gg|discord(?:app)?\.com\/invite)\/\S+/gi, '（邀請連結已省略）')
+      .replace(/https?:\/\/\S+/gi, '（連結已省略）')
+      .replace(/\bwww\.\S+/gi, '（連結已省略）')
+      .replace(/@(everyone|here)/gi, '@\u200b$1');
+  }
+
+  function formatOrderLine(order) {
+    const side = order.side === 'buy' ? '買' : '賣';
+    const state = order.status === 'pending' ? '排隊中' : (order.status === 'filled' ? '已成交' : '未成交');
+    const price = order.fill_price_cents ? `＠${formatTwd(order.fill_price_cents)}` : '';
+    return `${side} ${order.symbol} ${order.qty ?? ''} 股 ${state}${price}（${String(order.created_at).slice(0, 16).replace('T', ' ')}）`;
+  }
+
+  function formatPortfolioResult(portfolio) {
+    if (!portfolio.exists) {
+      return '你還沒有模擬帳戶。第一次成功排隊下單時會自動建立（起始資金依設定）。';
+    }
+    const lines = [
+      `現金 ${formatTwd(portfolio.cashCents)}（保留 ${formatTwd(portfolio.reservedCents)}，可用 ${formatTwd(portfolio.availableCashCents)}）`,
+      `淨值 ${formatTwd(portfolio.navCents)}｜報酬率 ${formatPct(portfolio.returnPct)}｜已實現 ${formatTwd(portfolio.realizedCents)}｜未實現 ${formatTwd(portfolio.unrealizedCents)}`,
+    ];
+    if (portfolio.positions.length) {
+      lines.push('持股：');
+      for (const position of portfolio.positions) {
+        lines.push(`- ${position.symbol} ${position.name} ${position.qty} 股｜平均成本 ${formatTwd(position.avgCostCents)}｜現價 ${position.priceCents === null ? '查不到' : formatTwd(position.priceCents)}｜未實現 ${formatTwd(position.unrealizedCents)}`);
+      }
+    } else {
+      lines.push('目前沒有持股。');
+    }
+    if (portfolio.orders.length) {
+      lines.push('最近訂單：');
+      for (const order of portfolio.orders) lines.push(`- ${formatOrderLine(order)}`);
+    }
+    return lines.join('\n');
+  }
+
+  /**
+   * 玩家身分：由會話令牌與這一輪的觸發訊息決定，模型填的 user id 一律不採信。
+   * place_order 必須指定訊息；查帳戶可以省略（這一輪只有一個觸發者時）。
+   */
+  async function tradePlayerIdentity(body, { requireMessage = false } = {}) {
+    const { key, kind, channel } = await agentSender.resolve(body.token);
+    if (kind !== 'ch' && kind !== 'dm') throw toolError('模擬股票只能在一般頻道或私聊使用', 403);
+    const users = turnUsers.get(key) ?? [];
+    const directs = turnDirectMessages.get(key) ?? [];
+    let identity;
+    try {
+      identity = pickPlayerIdentity({
+        users,
+        directs,
+        message: body.message,
+        lookup: (ref) => messageRefs.lookup(key, ref),
+        requireMessage,
+      });
+    } catch (error) {
+      throw tradeFailure(error);
+    }
+    const channelId = kind === 'ch' ? String(channel?.id ?? key.slice(3)) : null;
+    const guildId = kind === 'ch' ? (channel?.guildId ?? null) : null;
+    return { key, kind, ...identity, guildId, channelId };
+  }
+
+  async function tradeBotIdentity(body) {
+    const { sessionId } = await agentSender.resolve(body.token, { allowBot: true });
+    if (!botActiveRun || sessionId !== botActiveRun.sessionId) {
+      throw toolError('這不是目前的 Bot 交易回合；bot_place_order 只能在排程回合使用', 403);
+    }
+    if (botActiveRun.ordered) throw toolError('這一輪已經下過單，一輪最多一筆', 429);
+    return botActiveRun;
+  }
+
   const agentHandlers = {
     // 每次回報（含 poll 續命）後存檔；存檔失敗只寫 log，不能讓回報變成 5xx。
     imageJob: async (body) => {
@@ -1821,6 +1963,104 @@ async function main() {
       limits: cfg.discord.media,
       enabled: cfg.discord.media.enabled,
     }),
+    async 'trade-quote'(body) {
+      const service = requireTrade();
+      try {
+        return { text: formatQuoteResult(await service.quote(String(body.query ?? ''))) };
+      } catch (error) {
+        throw tradeFailure(error);
+      }
+    },
+    async 'trade-order'(body) {
+      const service = requireTrade();
+      const identity = await tradePlayerIdentity(body, { requireMessage: true });
+      try {
+        const result = await service.placeOrder({
+          actorKind: 'player',
+          actorId: identity.userId,
+          side: body.side,
+          symbol: String(body.symbol ?? '').trim(),
+          quantity: body.quantity,
+          requestId: `msg:${identity.messageId}`,
+          messageId: identity.messageId,
+          guildId: identity.guildId,
+          channelId: identity.channelId,
+        });
+        if (result.duplicate) {
+          return { text: `這則訊息已經下過單（${result.order.id}，${result.order.status}），不重複下單。` };
+        }
+        const order = result.order;
+        const entry = findSymbol(order.symbol);
+        const portfolio = await service.portfolio(playerAccountId(identity.userId));
+        const lines = [
+          `已排隊（pending）：${order.side === 'buy' ? '買入' : '賣出'} ${entry?.name ?? order.symbol}（${order.symbol}）${order.qty} 股，訂單 ${order.id}。`,
+          order.side === 'buy' ? `保留現金 ${formatTwd(order.reserved_cents)}。` : `保留 ${order.reserved_qty} 股。`,
+          '今天收盤後才結算；成交價與費用會再通知，現在不是已成交。',
+        ];
+        if (portfolio.exists) lines.push(`目前可用現金 ${formatTwd(portfolio.availableCashCents)}。`);
+        return { text: lines.join('\n') };
+      } catch (error) {
+        throw tradeFailure(error);
+      }
+    },
+    async 'trade-portfolio'(body) {
+      const service = requireTrade();
+      const identity = await tradePlayerIdentity(body);
+      return { text: formatPortfolioResult(await service.portfolio(playerAccountId(identity.userId))) };
+    },
+    async 'trade-leaderboard'(body) {
+      const service = requireTrade();
+      const { kind, channel } = await agentSender.resolve(body.token);
+      if (kind !== 'ch' || !channel?.guildId) throw toolError('排行榜只能在伺服器頻道查', 400);
+      const { rows, market } = await service.leaderboard({ guildId: channel.guildId });
+      if (!rows.length) return { text: '這個伺服器還沒有模擬交易紀錄。' };
+      const lines = [`模擬投資排行榜（依總報酬率；${market?.label ?? '市場狀態不明'}）`];
+      let index = 0;
+      for (const row of rows) {
+        index += 1;
+        let name;
+        if (row.kind === 'bot') {
+          name = `🤖 ${client.user.displayName || client.user.username}`;
+        } else {
+          const userId = row.accountId.slice('user:'.length);
+          const member = channel.guild?.members.cache.get(userId)
+            ?? await channel.guild?.members.fetch(userId).catch(() => null);
+          name = member?.displayName ?? userId;
+        }
+        lines.push(`${index}. ${name}｜${formatTwd(row.navCents)}｜${formatPct(row.returnPct)}`);
+      }
+      return { text: lines.join('\n') };
+    },
+    async 'trade-bot-portfolio'(body) {
+      const service = requireTrade();
+      await agentSender.resolve(body.token, { allowBot: true });
+      if (!service.botAccountId) return { text: 'Bot 交易員還沒建立帳戶（config.json 的 discord.trade.bot.enabled）。' };
+      return { text: formatPortfolioResult(await service.portfolio(service.botAccountId)) };
+    },
+    async 'trade-bot-order'(body) {
+      const service = requireTrade();
+      const run = await tradeBotIdentity(body);
+      try {
+        const result = await service.placeOrder({
+          actorKind: 'bot',
+          actorId: client.user.id,
+          side: body.side,
+          symbol: String(body.symbol ?? '').trim(),
+          quantity: body.quantity,
+          requestId: `run:${run.runId}`,
+          reason: body.reason,
+          note: body.note,
+        });
+        if (result.duplicate) {
+          run.ordered = true;
+          return { text: `這一輪已經下過單（${result.order.id}），不重複下單。` };
+        }
+        run.ordered = true;
+        return { text: `已排隊：${result.order.side === 'buy' ? '買入' : '賣出'} ${result.order.symbol} ${result.order.qty} 股，訂單 ${result.order.id}。收盤後結算。` };
+      } catch (error) {
+        throw tradeFailure(error);
+      }
+    },
     async send(body) {
       // 安靜期間只准 reaction 與生圖的檔案；文字與貼圖會變成新的噪音。
       const { key } = await agentSender.resolve(body.token);
@@ -2965,6 +3205,11 @@ async function main() {
 
     // 先記帳再分流：學習會話也要算錢，只是在控制台歸到 internal，不送回 Discord。
     usage.ingestEvent(frame.sessionId, event);
+    // Bot 交易回合的 token 上限用這裡的累計；會話跑完就歸檔。
+    const tokenSink = botTokenSink.get(frame.sessionId);
+    if (tokenSink && event.type === 'assistant/message') {
+      tokenSink.tokens += Number(event.data?.usage?.totalTokens) || 0;
+    }
 
     // 記住看過的最大 turn：/ask 用它排除提問前就存在的回合。
     const eventTurn = event.data?.turn;
@@ -4102,12 +4347,17 @@ async function main() {
   }
 
   /**
-   * 背景會話：建一個獨立 session、只收文字、結束就歸檔（不進 reverse，不會送回 Discord）。
-   * 黑話抽取和每日頻道摘要共用；preset 用 dc.slang.learnerPreset（沒有 Discord 工具）。
+   * 背景會話：建一個獨立 session、只收文字、結束就歸檔。
+   * 黑話抽取、每日摘要與 Bot 交易共用；preset 預設是 dc.slang.learnerPreset。
+   *
+   * registerKey：Bot 交易要讓工具端用得到會話令牌，會暫時登記進 sessions/reverse，
+   * 回合結束就移除；一般背景整理不登記。
    */
-  async function runBackgroundPrompt({ prompt, timeoutMs, label, title, key = null, usageKind = 'learner' }) {
-    const learnerPreset = cfg.discord.slang.learnerPreset;
-    await requirePreset(learnerPreset);
+  async function runBackgroundPrompt({
+    prompt, timeoutMs, label, title, key = null, usageKind = 'learner',
+    preset = cfg.discord.slang.learnerPreset, registerKey = null, onSession = null,
+  }) {
+    await requirePreset(preset);
 
     if (!backgroundWorkspaceId) {
       const dir = cfg.discord.sessionDir || path.join(STATE_DIR, 'discord-agents');
@@ -4117,12 +4367,17 @@ async function main() {
     }
     const created = unwrap(await api.sessions.create({
       workspaceId: backgroundWorkspaceId,
-      agentPreset: learnerPreset,
+      agentPreset: preset,
     }), 'session.create');
     const sessionId = created.sessionId;
     if (usageKind === 'summary') rememberSummarySession(sessionId);
-    else rememberLearnerSession(sessionId);
+    else if (usageKind === 'learner') rememberLearnerSession(sessionId);
     await renameSession(sessionId, key, title);
+    if (registerKey) {
+      sessions[registerKey] = sessionId;
+      reverse.set(sessionId, registerKey);
+    }
+    onSession?.(sessionId);
 
     try {
       // 背景整理不需要深度推理；模型不支援 low 時沿用預設，不讓整個工作失敗。
@@ -4180,6 +4435,12 @@ async function main() {
       lastTurns.delete(sessionId);
       openTurns.delete(sessionId);
       snapshotReady.delete(sessionId);
+      botTokenSink.delete(sessionId);
+      if (registerKey) {
+        if (sessions[registerKey] === sessionId) delete sessions[registerKey];
+        if (reverse.get(sessionId) === registerKey) reverse.delete(sessionId);
+        agentSender.forget(sessionId);
+      }
       try { await withTimeout(api.stopSessionWork(sessionId), 15_000, 'stopSessionWork'); } catch { /* 已結束 */ }
       try { await withTimeout(api.workspace.archiveSession({ sessionId }), 15_000, 'archiveSession'); } catch { /* 已歸檔 */ }
     }
@@ -4542,7 +4803,7 @@ async function main() {
 
   async function handleSlashCommand(interaction) {
     // 私聊只開放 forget/reset/reload-system-prompt/status（其餘指令在 DM 沒有意義）。
-    if (!interaction.inGuild() && !['forget', 'reset', 'reload-system-prompt', 'status'].includes(interaction.commandName)) {
+    if (!interaction.inGuild() && !['forget', 'reset', 'reload-system-prompt', 'status', 'portfolio'].includes(interaction.commandName)) {
       await interaction.reply({ content: '這個指令只能在伺服器頻道使用。', flags: MessageFlags.Ephemeral });
       return;
     }
@@ -4561,12 +4822,41 @@ async function main() {
       const removed = forgetUser(memoryStore, { userId: interaction.user.id });
       if (removed) markMemoryDirty();
       const statsRemoved = forgetTriggerUser(interaction.user.id);
+      let tradeRemoved = false;
+      try {
+        if (tradeService) {
+          tradeRemoved = tradeService.forgetAccount(interaction.user.id);
+        } else {
+          // 交易沒開也要刪：DB 檔存在就只為了 /forget 開一下，不啟動排程。
+          const dbFile = path.join(STATE_DIR, 'discord-trade.sqlite');
+          if (fs.existsSync(dbFile)) {
+            if (!tradeDb) tradeDb = openTradeDb(dbFile);
+            tradeRemoved = tradeDb.deleteAccount(playerAccountId(interaction.user.id));
+          }
+        }
+      } catch (error) {
+        log(`/forget 刪除模擬帳戶失敗：${error?.message ?? error}`);
+      }
       await interaction.reply({
-        content: removed || statsRemoved
-          ? '已刪除我記下的關於你的事，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
-          : '我沒有你的記憶。',
+        content: removed || statsRemoved || tradeRemoved
+          ? '已刪除我記下的關於你的事與模擬股票帳戶，所有伺服器一起刪（目前頻道的對話上下文不受影響）。'
+          : '我沒有你的記憶或模擬帳戶。',
         flags: MessageFlags.Ephemeral,
       });
+      return;
+    }
+    if (interaction.commandName === 'portfolio') {
+      if (!tradeService) {
+        await interaction.reply({ content: '模擬股票沒有開啟（config.json 的 discord.trade.enabled）。', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      try {
+        const portfolio = await tradeService.portfolio(playerAccountId(interaction.user.id));
+        const text = formatPortfolioResult(portfolio);
+        await interaction.reply({ content: splitDiscordMessage(text, 1900)[0], flags: MessageFlags.Ephemeral });
+      } catch (error) {
+        await interaction.reply({ content: `查不到模擬帳戶：${error?.message ?? error}`, flags: MessageFlags.Ephemeral });
+      }
       return;
     }
     if (interaction.commandName === 'blacklist') {
@@ -4810,6 +5100,354 @@ async function main() {
     }
   });
 
+  // ── 模擬股票 ──────────────────────────────────────────────────────────────
+  function writeTradeLimits() {
+    try {
+      const file = path.join(STATE_DIR, 'discord-trade-limits.json');
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify({
+        maxWebSearchesPerTurn: cfg.discord.trade.bot.maxWebSearchesPerTurn,
+        maxWebFetchesPerTurn: cfg.discord.trade.bot.maxWebFetchesPerTurn,
+      })}\n`, { mode: 0o600 });
+      fs.renameSync(tmp, file);
+    } catch (error) {
+      log(`模擬股票：寫入搜尋上限失敗：${error?.message ?? error}`);
+    }
+  }
+
+  function initTrade() {
+    const dbFile = path.join(STATE_DIR, 'discord-trade.sqlite');
+    if (!cfg.discord.trade.enabled) {
+      // 交易關閉但 DB 還在：建立 enabled:false 的 service，讓排隊中的單繼續結算。
+      if (!fs.existsSync(dbFile)) {
+        log('模擬股票：未開啟');
+        return false;
+      }
+      try {
+        if (!tradeDb) tradeDb = openTradeDb(dbFile);
+        if (!tradeQuotes) tradeQuotes = createQuoteProvider({ log });
+        if (!tradeInstitutional) tradeInstitutional = createInstitutionalProvider({ log });
+        if (!tradeMaterial) tradeMaterial = createMaterialProvider({ log });
+        tradeService = createTradeService({
+          db: tradeDb,
+          config: cfg.discord.trade,
+          quotes: tradeQuotes,
+          botId: client.user.id,
+          log,
+        });
+        writeTradeLimits();
+        log('模擬股票：未開啟（只結算既有訂單）');
+      } catch (error) {
+        tradeService = null;
+        log(`⚠️ 模擬股票關閉狀態啟動失敗：${error?.message ?? error}`);
+      }
+      return false;
+    }
+    try {
+      if (!tradeDb) tradeDb = openTradeDb(dbFile);
+      if (!tradeQuotes) tradeQuotes = createQuoteProvider({ log });
+      if (!tradeInstitutional) tradeInstitutional = createInstitutionalProvider({ log });
+      if (!tradeMaterial) tradeMaterial = createMaterialProvider({ log });
+      tradeService = createTradeService({
+        db: tradeDb,
+        config: cfg.discord.trade,
+        quotes: tradeQuotes,
+        botId: client.user.id,
+        log,
+      });
+      writeTradeLimits();
+      void tradeQuotes.getHolidays();
+      void tradeQuotes.refreshAll();
+      log(`模擬股票：已開啟（台股，${dbFile}）`);
+      return true;
+    } catch (error) {
+      // DB 開不起來就停用交易，不要自動重建一個空 DB 蓋掉帳。
+      tradeService = null;
+      log(`⚠️ 模擬股票啟動失敗，交易停用：${error?.message ?? error}`);
+      return false;
+    }
+  }
+
+  async function sendTradeNotice(channelId, text) {
+    if (!channelId) return;
+    try {
+      const channel = await client.channels.fetch(channelId);
+      if (!channel?.isTextBased?.()) return;
+      await channel.send({ content: text, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
+    } catch (error) {
+      log(`模擬股票通知失敗（${channelId}）：${error?.message ?? error}`);
+    }
+  }
+
+  async function playerDisplayName(order) {
+    if (!order.channel_id || !order.account_id?.startsWith('user:')) return '';
+    try {
+      const channel = await client.channels.fetch(order.channel_id);
+      const userId = order.account_id.slice('user:'.length);
+      const member = channel?.guild?.members.cache.get(userId)
+        ?? await channel?.guild?.members.fetch(userId).catch(() => null);
+      return member?.displayName ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  async function runTradeSettlement() {
+    if (!tradeService || tradeSettling) return;
+    tradeSettling = true;
+    try {
+      let events;
+      try {
+        events = await tradeService.settleDue();
+      } catch (error) {
+        log(`模擬股票結算失敗：${error?.message ?? error}`);
+        return;
+      }
+      for (const event of events) {
+        const order = event.order;
+        const name = findSymbol(order.symbol)?.name ?? order.symbol;
+        const isBot = order.actor === 'bot';
+        const displayName = isBot ? '' : await playerDisplayName(order);
+        const prefix = displayName ? `（${displayName} 的模擬訂單）` : '';
+        const body = isBot
+          ? formatTradeNotice(order, name, event.type)
+          : formatPlayerNotice(order, name, event.type);
+        const text = `${prefix}${body}`;
+        const channelId = isBot ? cfg.discord.trade.bot.announceChannelId : order.channel_id;
+        if (channelId) {
+          await sendTradeNotice(channelId, text);
+        } else if (!isBot && order.account_id?.startsWith('user:')) {
+          // 私聊下的單沒有 channel_id：用 DM 通知本人。
+          const userId = order.account_id.slice('user:'.length);
+          try {
+            const user = await client.users.fetch(userId);
+            await user.send({ content: text, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
+          } catch (error) {
+            log(`模擬股票私聊通知失敗（${userId}）：${error?.message ?? error}`);
+          }
+        }
+        log(`模擬股票結算 ${order.id}：${event.type}${event.reason ? `（${event.reason}）` : ''}`);
+      }
+      await backupTradeDb();
+    } finally {
+      tradeSettling = false;
+    }
+  }
+
+  /** 每日結算後備份一次，保留 7 份。 */
+  async function backupTradeDb() {
+    if (!tradeDb) return;
+    const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/-/g, '');
+    const dir = path.join(STATE_DIR, 'backups');
+    const file = path.join(dir, `discord-trade-${day}.sqlite`);
+    if (fs.existsSync(file)) return;
+    const tmp = `${file}.tmp`;
+    try {
+      tradeDb.backup(tmp);
+      fs.renameSync(tmp, file);
+      try { fs.chmodSync(file, 0o600); } catch { /* Windows 沒有 POSIX 權限 */ }
+      const keep = fs.readdirSync(dir)
+        .filter((name) => /^discord-trade-\d{8}\.sqlite$/.test(name))
+        .sort();
+      for (const old of keep.slice(0, Math.max(0, keep.length - 7))) {
+        fs.rmSync(path.join(dir, old), { force: true });
+      }
+      log(`模擬股票：已備份 ${file}`);
+    } catch (error) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* 沒留下半個檔 */ }
+      log(`模擬股票備份失敗：${error?.message ?? error}`);
+    }
+  }
+
+  async function runBotTrader() {
+    if (!tradeService || !tradeService.config.enabled || !cfg.discord.trade.bot.enabled || botActiveRun || botReviewRunning || botStarting) return;
+    botStarting = true;
+    try {
+      const market = await tradeService.state();
+      const dayStart = new Date(Date.parse(`${market.date}T00:00:00+08:00`)).toISOString();
+      const allRuns = tradeDb.botRunsSince(dayStart);
+      const runs = allRuns.filter((run) => run.kind !== 'review');
+      const tradesToday = tradeDb.countBotOrdersSince(dayStart);
+      const lastRunAt = runs[0] ? Date.parse(runs[0].started_at) : 0;
+      const gate = canRunBot({
+        config: { enabled: true, ...cfg.discord.trade.bot },
+        market,
+        runsToday: runs.length,
+        tradesToday,
+        lastRunAt,
+      });
+      if (!gate.ok) return;
+      const tokensToday = allRuns.reduce((sum, run) => sum + (run.tokens ?? 0), 0);
+      if (tokensToday >= cfg.discord.trade.bot.maxTokensPerDay) {
+        log(`模擬股票 Bot：今天 token 已達上限（${tokensToday}）`);
+        return;
+      }
+      const portfolio = await tradeService.portfolio(tradeService.botAccountId);
+      const lastReviewRaw = tradeDb.latestReviewBefore(market.date);
+      const lastReview = lastReviewRaw && market.prevPrevTradingDate && lastReviewRaw.date >= market.prevPrevTradingDate
+        ? lastReviewRaw
+        : null;
+      const prompt = buildBotPrompt({ portfolio, market, config: cfg.discord.trade.bot, lastReview });
+      const runId = `br-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const sink = { tokens: 0 };
+      tradeDb.insertBotRun({ id: runId, kind: 'decision', startedAt: new Date().toISOString(), market: 'TW', status: 'running' });
+      botActiveRun = { runId, sessionId: '', ordered: false };
+      let status = 'hold';
+      let reason = '';
+      try {
+        const text = await runBackgroundPrompt({
+          prompt,
+          timeoutMs: 3 * 60_000,
+          label: 'Bot 交易',
+          title: 'Discord 模擬交易員',
+          preset: cfg.discord.trade.bot.preset,
+          registerKey: 'bot:trader',
+          usageKind: 'bot',
+          onSession: (sessionId) => {
+            botActiveRun.sessionId = sessionId;
+            botTokenSink.set(sessionId, sink);
+          },
+        });
+        reason = String(text ?? '').trim().slice(0, 300);
+        status = botActiveRun.ordered ? 'pending' : 'hold';
+      } catch (error) {
+        status = 'error';
+        reason = String(error?.message ?? error).slice(0, 300);
+        log(`模擬股票 Bot 失敗：${reason}`);
+      } finally {
+        tradeDb.updateBotRun(runId, {
+          endedAt: new Date().toISOString(),
+          status,
+          tokens: sink.tokens,
+          reason,
+        });
+        botActiveRun = null;
+      }
+      log(`模擬股票 Bot ${runId}：${status}（${sink.tokens} tokens）${reason ? `｜${reason.slice(0, 80)}` : ''}`);
+    } catch (error) {
+      botActiveRun = null;
+      log(`模擬股票 Bot 排程失敗：${error?.message ?? error}`);
+    } finally {
+      botStarting = false;
+    }
+  }
+
+  function stopTradeJobs() {
+    if (tradeSettlementTimer) { clearInterval(tradeSettlementTimer); tradeSettlementTimer = null; }
+    if (botTraderTimer) { clearInterval(botTraderTimer); botTraderTimer = null; }
+    if (botReviewTimer) { clearInterval(botReviewTimer); botReviewTimer = null; }
+  }
+
+  async function runBotReview() {
+    const review = cfg.discord.trade.bot.review;
+    if (!tradeService || !tradeService.config.enabled || !cfg.discord.trade.bot.enabled || !review?.enabled) return;
+    if (botActiveRun || botStarting || botReviewRunning) return;
+    botReviewRunning = true;
+    try {
+      const market = await tradeService.state();
+      const dayStart = new Date(Date.parse(`${market.date}T00:00:00+08:00`)).toISOString();
+      const allRuns = tradeDb.botRunsSince(dayStart);
+      const reviewRuns = allRuns.filter((run) => run.kind === 'review');
+      const tokensToday = allRuns.reduce((sum, run) => sum + (run.tokens ?? 0), 0);
+      const gate = canRunReview({
+        config: review,
+        market,
+        runsToday: reviewRuns.length,
+        tokensToday,
+        maxTokensPerDay: cfg.discord.trade.bot.maxTokensPerDay,
+      });
+      if (!gate.ok) return;
+      // 先讓 19:00 的結算跑一次；資料還沒到就照樣復盤，只是持倉可能還是結算前狀態。
+      await runTradeSettlement();
+      const portfolio = await tradeService.portfolio(tradeService.botAccountId);
+      const entries = portfolio.exists
+        ? portfolio.positions.map((position) => findSymbol(position.symbol)).filter(Boolean)
+        : [];
+      const institutional = entries.length
+        ? await tradeInstitutional.getForSymbols(entries, market.date)
+        : { bySymbol: new Map(), missing: [], errors: [] };
+      const material = entries.length
+        ? await tradeMaterial.getForSymbols(entries, market.date, { since: market.prevTradingDate || market.date })
+        : { available: true, bySymbol: new Map(), errors: [] };
+      // 19:10 只等法人；重大訊息 API 常常隔天才更新，不等它，prompt 會標最近交易日。
+      const waiting = institutional.missing.length > 0;
+      if (waiting && market.minutes < parseHhmm(review.after) + 30) {
+        log(`模擬股票復盤：等法人資料（${institutional.missing.join(', ')}）`);
+        return;
+      }
+      const prompt = buildReviewPrompt({
+        portfolio,
+        market,
+        institutional: institutional.bySymbol,
+        material: material.bySymbol,
+        now: new Date(),
+      });
+      const runId = `rv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const sink = { tokens: 0 };
+      tradeDb.insertBotRun({ id: runId, kind: 'review', startedAt: new Date().toISOString(), market: 'TW', status: 'running' });
+      let status = 'ok';
+      let reason = '';
+      let summary = '';
+      try {
+        const text = await runBackgroundPrompt({
+          prompt,
+          timeoutMs: 3 * 60_000,
+          label: '當日復盤',
+          title: 'Discord 模擬交易復盤',
+          preset: cfg.discord.trade.bot.preset,
+          registerKey: 'bot:review',
+          usageKind: 'bot',
+          onSession: (sessionId) => { botTokenSink.set(sessionId, sink); },
+        });
+        summary = String(text ?? '').trim();
+        reason = summary.slice(0, 300);
+        if (!summary) {
+          status = 'error';
+          reason = '復盤回覆是空的';
+        } else {
+          const publicSummary = stripPublicLinks(summary);
+          const hit = cfg.discord.security.blockSensitive ? findSensitive(publicSummary, agentSecrets()) : null;
+          if (hit) {
+            status = 'error';
+            reason = `復盤內容命中敏感資訊：${formatSensitiveHit(hit)}`;
+            log(`模擬股票復盤 ${runId}：${reason}，不發布`);
+          } else {
+            tradeDb.saveDailyReview({ date: market.date, createdAt: new Date().toISOString(), summary: publicSummary, tokens: sink.tokens });
+            if (cfg.discord.trade.bot.announceChannelId) {
+              await sendTradeNotice(cfg.discord.trade.bot.announceChannelId, formatReviewNotice(market.date, publicSummary).slice(0, 1900));
+            }
+          }
+        }
+      } catch (error) {
+        status = 'error';
+        reason = String(error?.message ?? error).slice(0, 300);
+        log(`模擬股票復盤失敗：${reason}`);
+      } finally {
+        tradeDb.updateBotRun(runId, { endedAt: new Date().toISOString(), status, tokens: sink.tokens, reason });
+      }
+      log(`模擬股票復盤 ${runId}：${status}（${sink.tokens} tokens）`);
+    } catch (error) {
+      log(`模擬股票復盤排程失敗：${error?.message ?? error}`);
+    } finally {
+      botReviewRunning = false;
+    }
+  }
+  function scheduleTradeJobs() {
+    stopTradeJobs();
+    if (!tradeService) return;
+    const minutes = Math.max(1, cfg.discord.trade.settlement.twCheckMinutes);
+    tradeSettlementTimer = setInterval(() => { void runTradeSettlement(); }, minutes * 60_000);
+    tradeSettlementTimer.unref?.();
+    setTimeout(() => { void runTradeSettlement(); }, 20_000).unref?.();
+    botTraderTimer = setInterval(() => { void runBotTrader(); }, 5 * 60_000);
+    botTraderTimer.unref?.();
+    botReviewTimer = setInterval(() => { void runBotReview(); }, 5 * 60_000);
+    botReviewTimer.unref?.();
+    setTimeout(() => { void runBotTrader(); }, 45_000).unref?.();
+    setTimeout(() => { void runBotReview(); }, 60_000).unref?.();
+  }
+
   client.once(Events.ClientReady, (ready) => {
     log(`已登入：${ready.user.tag}（${ready.user.id}）`);
     if (ownerIds.size === 0) log('⚠️ 沒有設定 discord.ownerIds：/reset、/status、工具審批都會不可用');
@@ -4840,6 +5478,10 @@ async function main() {
     }
     throw error;
   }
+
+  // ── 模擬股票 ──────────────────────────────────────────────────────────────
+  initTrade();
+  scheduleTradeJobs();
 
   // ── 智能體發送 API（MCP） ────────────────────────────────────────────────
   // 只綁 127.0.0.1 的隨機埠，端點寫在 state/discord-agent.json 給 MCP server 讀。
@@ -4893,6 +5535,7 @@ async function main() {
       requireMentionInGuild: cfg.discord.requireMentionInGuild,
       requireMentionInChannel: cfg.discord.requireMentionInChannel,
       chattyChannels: cfg.discord.chattyChannels,
+      trade: cfg.discord.trade,
       // 唯讀：改這些要重啟橋接或重生 preset
       messageContentIntent: cfg.discord.messageContentIntent,
       agentPreset: cfg.discord.agentPreset,
@@ -4929,6 +5572,19 @@ async function main() {
         : cfg.discord.requireMentionInGuild,
       requireMentionInChannel: patch?.requireMentionInChannel ?? cfg.discord.requireMentionInChannel,
       chattyChannels: patch?.chattyChannels ?? cfg.discord.chattyChannels,
+      // trade 逐層合併：控制台表單只送有改的欄位，不要把其他費率或 Bot 設定蓋回預設值。
+      trade: {
+        ...cfg.discord.trade,
+        ...(patch?.trade ?? {}),
+        fees: { ...cfg.discord.trade.fees, ...(patch?.trade?.fees ?? {}) },
+        settlement: { ...cfg.discord.trade.settlement, ...(patch?.trade?.settlement ?? {}) },
+        fx: { ...cfg.discord.trade.fx, ...(patch?.trade?.fx ?? {}) },
+        bot: {
+          ...cfg.discord.trade.bot,
+          ...(patch?.trade?.bot ?? {}),
+          review: { ...cfg.discord.trade.bot.review, ...(patch?.trade?.bot?.review ?? {}) },
+        },
+      },
     });
 
     // 先寫檔再改記憶體：寫檔失敗時直接拋錯，設定和檔案都還是舊的。
@@ -4944,6 +5600,7 @@ async function main() {
       requireMentionInGuild: next.requireMentionInGuild,
       requireMentionInChannel: next.requireMentionInChannel,
       chattyChannels: next.chattyChannels,
+      trade: next.trade,
     };
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
@@ -4965,8 +5622,50 @@ async function main() {
     cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
     cfg.discord.requireMentionInChannel = next.requireMentionInChannel;
     cfg.discord.chattyChannels = next.chattyChannels;
+    cfg.discord.trade = next.trade;
     ownerIds.clear();
     for (const id of next.ownerIds) ownerIds.add(id);
+
+    // 交易設定改了：用同一個 DB 重建 service，讓新費率／上限立刻生效；已建立的訂單
+    // 各自記著下單當時的費率，不會被新設定影響。關閉時保留 service（enabled=false）
+    // 讓已排隊的單繼續結算，只是不再接受新單。
+    if (!next.trade.enabled) {
+      if (tradeDb) {
+        if (!tradeQuotes) tradeQuotes = createQuoteProvider({ log });
+        if (!tradeInstitutional) tradeInstitutional = createInstitutionalProvider({ log });
+        if (!tradeMaterial) tradeMaterial = createMaterialProvider({ log });
+        tradeService = createTradeService({
+          db: tradeDb,
+          config: next.trade,
+          quotes: tradeQuotes,
+          botId: client.user.id,
+          log,
+        });
+      } else {
+        tradeService = null;
+      }
+      stopTradeJobs();
+      if (tradeService) scheduleTradeJobs();
+      writeTradeLimits();
+    } else {
+      if (!tradeService) initTrade();
+      else {
+        try {
+          tradeService = createTradeService({
+            db: tradeDb,
+            config: next.trade,
+            quotes: tradeQuotes,
+            botId: client.user.id,
+            log,
+          });
+          writeTradeLimits();
+        } catch (error) {
+          tradeService = null;
+          log(`模擬股票：套用新設定失敗：${error?.message ?? error}`);
+        }
+      }
+      scheduleTradeJobs();
+    }
 
     log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，chatty ${next.chattyChannels.length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
     warnChattyChannels();
@@ -5207,6 +5906,15 @@ async function main() {
             return removed;
           },
           logs: (limit) => LOG_RING.slice(-limit),
+          trade: async (name) => {
+            if (!tradeService) return { enabled: false, reason: '模擬股票沒有開啟或啟動失敗' };
+            const data = await tradeService.overview();
+            if (name === 'accounts') return { enabled: true, accounts: data.accounts, market: data.market };
+            if (name === 'orders') return { enabled: true, orders: data.orders };
+            if (name === 'quotes') return { enabled: true, quotes: data.quotes };
+            if (name === 'bot') return { enabled: true, botRuns: data.botRuns, botEnabled: data.botEnabled, botAccount: data.botAccount };
+            return data;
+          },
         },
       });
       const shown = host.includes(':') ? `[${host}]` : host;
@@ -5230,6 +5938,7 @@ async function main() {
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
     codexResetPinger?.stop();
     clearAllTtftTimers();
+    stopTradeJobs();
     if (summaryTimer) clearTimeout(summaryTimer);
     try { await agentApiHandle?.close(); } catch { /* 已經關了 */ }
     try { await consoleHandle?.close(); } catch { /* 已經關了 */ }

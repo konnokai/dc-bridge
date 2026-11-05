@@ -23,7 +23,7 @@ const MODULE_FILE = fs.realpathSync(fileURLToPath(import.meta.url))
 const ENDPOINT_FILE = process.env.DC_AGENT_FILE
   || path.resolve(path.dirname(MODULE_FILE), '../../state/discord-agent.json')
 
-const TOKEN_TOOLS = /^mcp__(?:discord|slang)__/
+const TOKEN_TOOLS = /^mcp__(?:discord|slang|trade)__/
 
 // 跟 src/core/discord-agent.mjs 的 resolve() 同步：只有這一種失敗可以重試，
 // 白名單、額度、會話已結束的 403 重送還是會被擋，重試沒有意義。

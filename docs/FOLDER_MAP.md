@@ -20,6 +20,7 @@ Discord 不 import `src/bridge.js`。
 | `discord-bridge.js` | 入口：Gateway、批次、`agentHandlers`、控制台 |
 | `mcp-discord.js` | Discord 工具（發訊、看訊息、表情、投票） |
 | `mcp-slang.js` | 黑話工具 |
+| `mcp-trade.js` | 模擬股票工具（查價、下單、持股、排行榜） |
 | `core/discord-core.mjs` | 設定正規化、長文切段、會話映射 |
 | `core/discord-agent.mjs` | token 解析、每輪額度、`send` 守衛 |
 | `core/discord-batch.mjs` | 批次器、回合佇列（含指令排隊與 hold/rebase）與 batch prompt 組裝 |
@@ -46,6 +47,13 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-send-handler.mjs` | MCP `/send` 的送出統計（觸發與繪圖次數） |
 | `core/discord-image-jobs.mjs` | 背景生圖回報、完成提示排進會話閘門、畫圖次數歸屬 |
 | `core/discord-console.mjs` | 控制台 API 的純邏輯 |
+| `core/discord-trade.mjs` | 模擬股票交易規則：費用、漲跌停、排隊、結算、損益、排行榜 |
+| `core/discord-trade-db.mjs` | 交易域 SQLite（`state/discord-trade.sqlite`） |
+| `core/quote-provider.mjs` | 台股盤後報價：TWSE／TPEx OpenAPI 與行事曆 |
+| `core/institutional-provider.mjs` | 三大法人買賣超日報：TWSE T86、TPEx OpenAPI |
+| `core/material-provider.mjs` | 每日重大訊息：TWSE t187ap04_L、TPEx mopsfin_t187ap04_O |
+| `core/trade-symbols.mjs` | 模擬股票商品主檔（台股白名單） |
+| `core/bot-trader.mjs` | Bot 交易員的排程判斷、prompt 與公告文字 |
 
 ### QQ 專用
 
@@ -76,7 +84,7 @@ Discord 不 import `src/bridge.js`。
 
 | 路徑 | 內容 | 線 |
 | --- | --- | --- |
-| `dsh/agent-presets/` | preset 的權威源：`dc-chat`、`dc-learner`、`qq-chat`、`qq-chat-v2` | 兩條 |
+| `dsh/agent-presets/` | preset 的權威源：`dc-chat`、`dc-learner`、`dc-trader`、`qq-chat`、`qq-chat-v2` | 兩條 |
 | `plugins/` | DSH 插件：`dc-agent-presets`（Discord 的 patch、工具守衛與畫圖路徑鎖）、`qq-agent-presets`、`qq-mode-console` | 兩條 |
 | `public/` | `discord-console.html`（Discord 控制台，預設 3110）、`console.html`（QQ 控制台，3100） | 兩條 |
 | `roles/` | 人格卡（QQ 控制台用） | QQ |

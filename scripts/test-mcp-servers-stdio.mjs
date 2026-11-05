@@ -14,6 +14,7 @@ const SERVERS = [
   { serverName: 'web-search-safe', script: 'src/mcp-web-search-safe.js' },
   { serverName: 'discord', script: 'src/mcp-discord.js' },
   { serverName: 'slang', script: 'src/mcp-slang.js' },
+  { serverName: 'trade', script: 'src/mcp-trade.js' },
 ];
 
 let failures = 0;

@@ -119,6 +119,46 @@
       "learnerPreset": "dc-learner",
       "timeoutMs": 90000
     },
+    "trade": {
+      "enabled": false,
+      "allowedGuilds": [],
+      "allowedChannels": [],
+      "extraHolidays": [],
+      "startingCash": 1000000,
+      "maxOrderPct": 30,
+      "reserveBufferPct": 5,
+      "fees": {
+        "twFeeRate": 0.001425,
+        "twTaxRate": 0.003,
+        "minFee": 0
+      },
+      "slippageRate": 0,
+      "fx": {
+        "source": "daily",
+        "spreadRate": 0.001
+      },
+      "settlement": {
+        "twCheckMinutes": 10,
+        "twSettleAfter": "19:00"
+      },
+      "bot": {
+        "enabled": false,
+        "market": "TW",
+        "announceChannelId": "",
+        "preset": "dc-trader",
+        "maxTurnsPerDay": 1,
+        "maxTradesPerDay": 1,
+        "minIntervalMin": 60,
+        "maxOutputTokens": 500,
+        "maxTokensPerDay": 20000,
+        "maxWebSearchesPerTurn": 3,
+        "maxWebFetchesPerTurn": 2,
+        "review": {
+          "enabled": true,
+          "after": "19:10"
+        }
+      }
+    },
     "console": {
       "enabled": true,
       "host": "127.0.0.1",

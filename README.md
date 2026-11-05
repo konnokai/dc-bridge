@@ -10,7 +10,7 @@
 
 ## 快速開始
 
-需要 Node.js ≥ 22.13、一個執行中的 DSH Web（預設 `http://127.0.0.1:3080`）、一個 Discord bot token。
+需要 Node.js ≥ 26.0（交易域用內建 `node:sqlite`）、一個執行中的 DSH Web（預設 `http://127.0.0.1:3080`）、一個 Discord bot token。
 
 ```bash
 npm install

@@ -2,6 +2,8 @@
 
 **版本：v0.4 — 精簡 MVP：台股、盤後結算、SQLite、Bot 交易員**
 
+**狀態：第一版已實作（2026-11-05）。** 這份文件仍是規則的權威來源；第二階段項目尚未實作。
+
 **定位：** Discord 群組內使用的虛擬股票交易遊戲。玩家與 Bot 都是參與者。
 
 **適用對象：** 企劃者、Bridge／MCP 後端開發者、測試人員
@@ -25,7 +27,7 @@
 **A 模式的代價要先講清楚：**
 
 - `get_quote` 顯示的是最近一次官方收盤價，不是盤中即時價。盤中查價會標「今日尚未收盤」。
-- `place_order` 只回 `pending`，不是「已成交」。收盤資料出來後才結算，通常要等幾小時。
+- `place_order` 只回 `pending`，不是「已成交」。19:00 後才用當日收盤資料結算；收盤價、法人與晚報一次收齊。
 - 好處是不用取得台股即時報價授權，也沒有「拿舊價成交」的套利問題。
 - 如果一定要「現在多少錢、現在成交」，那是 B 模式，需要即時報價授權；本文件不採用。
 
@@ -173,10 +175,13 @@
 | 漲跌幅 | 一般股票 ±10%，有例外 | 無一般性每日 ±10% 限制 |
 | 休市 | 台灣交易所行事曆 | 美國交易所行事曆 |
 
+- 表上的 13:30 是收盤時間；實際結算在 19:00 後，等收盤價、法人與晚報資料齊。
+
 - （第二階段）美股交易時間要正確處理夏令與冬令時間，使用 IANA 時區 `America/New_York`，不要硬寫 UTC-5／UTC-4。
 - 交易時間、休市日及特殊交易狀態以市場資料為準，不單純依星期幾判斷。
 - （第二階段）早收日（例如 2026-11-27、2026-12-24）以 13:00 ET 為收盤。
 - 年度休市日（TWSE／NYSE）用靜態清單，每年更新；颱風等臨時休市由控制台開關或當日無收盤資料判定。
+- 第一版用 `trade.extraHolidays` 補臨時休市日；沒有補到的那天仍可能接受下單，隔天找不到收盤資料時會拒絕訂單。
 - 臨時休市（颱風、交易所公告）沒有新鮮收盤資料就不結算，不用舊價硬算。
 
 台股一般股票 tick（升降單位）：
@@ -285,6 +290,8 @@ ETF 的 tick 不同（未滿 50 元 0.01、50 元以上 0.05），第一版不�
 
 - 台股上市：臺灣證券交易所 OpenAPI（盤後日資料）
 - 台股上櫃：櫃買中心 OpenAPI（盤後日資料）
+- 三大法人：TWSE T86 日報、TPEx OpenAPI（收盤後）
+- 重大訊息：TWSE OpenAPI `t187ap04_L`、TPEx OpenAPI `mopsfin_t187ap04_O`（收盤後；有時隔天才更新，復盤抓最近交易日）
 - 美股（第二階段）：Finnhub 收盤後 `/quote`（免費方案，個人／非商業用途；使用前確認條款與限額）
 - 匯率（第二階段）：台銀／央行每日牌告，或 FinMind 免費外幣資料；實作前實測
 
@@ -313,6 +320,12 @@ ETF 的 tick 不同（未滿 50 元 0.01、50 元以上 0.05），第一版不�
 4. **計算**：成交價 = 收盤價 ± 滑價；計算手續費、稅（匯差第二階段）、淨額；檢查漲跌停與價格有效性。
 5. **入帳**：在同一個 SQLite transaction 更新現金、持倉、訂單、現金流水。
 6. **通知**：成交或拒絕後，在原本頻道通知；`get_portfolio` 可看到最近訂單。
+
+**結算時間**
+
+- 19:00 前不結算：收盤價、法人與晚報通常還沒齊。
+- 19:00 後每 `settlement.twCheckMinutes` 分鐘檢查一次；資料日期等於 `trade_date` 才成交。
+- 資料延遲就繼續等；不會用昨天的收盤價冒充今天。
 
 **數量與保留**
 
@@ -592,6 +605,7 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 
 - Bridge 內建排程器，每 5 分鐘檢查一次。
 - 只在市場開放時啟動；每日最多 1 次決策、最多 1 筆訂單（可設定）。
+- 收盤後 19:10 另跑一次當日復盤，不下單；收盤價與法人先由 Bridge 抓，模型補新聞。
 - 每次決策只選一個市場（`bot.market`，預設 TW；`US`／`alternate` 第二階段）；要同時跑台美就開兩次決策，次數共用每日上限。
 - 兩次決策至少間隔 60 分鐘；重啟不補做。
 - 每次決策建立一個一次性會話，使用 `dc-trader` preset；執行期間暫時登記到 bridge 的 `sessions`／`reverse`（key 例如 `bot:trader`），結束後移除並歸檔。
@@ -614,6 +628,13 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 - 模型超時、回傳無效工具參數、選到白名單外的標的 → 跳過，不交易。
 - 不因為新聞文字、模型心得或「我覺得會漲」直接下單；一定要有合法工具呼叫。
 
+**當日復盤**
+
+- 收盤後（預設 19:10）跑一次，不再下單；只整理當日損益、持股、法人、最近交易日的重大訊息與新聞。
+- 收盤價與法人／重大訊息由 Bridge 先抓，模型只用 `web_search` 補新聞；資料 19:40 還缺就照跑並標查不到。
+- 輸出 5~8 句，Bridge 發到 `announceChannelId`，並存進 `daily_reviews` 給隔天 09:00 決策當背景。
+- 不貼新聞全文，不提到玩家資料；每個交易日最多一次，重啟不補做。
+
 **Token 與成本上限**
 
 - `maxTurnsPerDay`：預設 1。
@@ -634,7 +655,7 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 **排行榜**
 
 - Bot 帳戶有 `kind = 'bot'`。
-- 預設與玩家同榜，標 `🤖`；設定可改成只顯示在「AI 對手」區。
+- 與玩家同榜，標 `🤖`；第一版不另外做「AI 對手」分區。
 - 同一個起始資金、同一套費用；不給 Bot 額外資金或特權。
 
 **新聞使用邊界**
@@ -655,6 +676,7 @@ Bot 是第一版的正式參與者，不是第二階段功能。
       "enabled": false,
       "allowedGuilds": [],
       "allowedChannels": [],
+      "extraHolidays": [],
       "startingCash": 1000000,
       "maxOrderPct": 30,
       "reserveBufferPct": 5,
@@ -671,6 +693,7 @@ Bot 是第一版的正式參與者，不是第二階段功能。
       },
       "settlement": {
         "twCheckMinutes": 10,
+        "twSettleAfter": "19:00",
         "usCheckMinutes": 10
       },
       "bot": {
@@ -684,7 +707,11 @@ Bot 是第一版的正式參與者，不是第二階段功能。
         "maxOutputTokens": 500,
         "maxTokensPerDay": 20000,
         "maxWebSearchesPerTurn": 3,
-        "maxWebFetchesPerTurn": 2
+        "maxWebFetchesPerTurn": 2,
+        "review": {
+          "enabled": true,
+          "after": "19:10"
+        }
       }
     }
   }
@@ -698,6 +725,8 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 - 費率用嚴格驗證，錯誤就拋；不要用 `clamp` 默默套預設值。
 - 建單時把當下費率存進該筆 order；改設定不影響已建立的訂單，不需要 reload 才能讓新舊費率一致。
 - 第一版只使用台股相關欄位；`fx`、`settlement.usCheckMinutes`、`bot.market` 的 US／alternate、`snapshots` 第二階段才啟用。
+- `settlement.twSettleAfter` 預設 19:00：19:00 前不結算，避免收盤價、法人與晚報還沒齊就先成交。
+- `bot.review` 是收盤後復盤：預設 19:10，一次決策後會等法人資料，19:40 後仍缺就照跑並標查不到。
 
 ### 6.5 MCP 與 preset 整合
 
@@ -795,7 +824,7 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 - 控制台查詢帳戶、訂單、流水比讀大 JSON 簡單。
 - Node 26 內建 `node:sqlite`，不需要新增 native dependency。
 
-注意：Node 26.13 的 `node:sqlite` 是 Stability 1.2（release candidate），不再需要 `--experimental-sqlite`；`DatabaseSync` 是 `Database` 的 deprecated 別名，新程式用 `Database`。若之後要完全避開變動中的 API，再評估 `better-sqlite3`，但要處理原生模組部署。
+注意：Node 26.12 只有 `DatabaseSync`；26.13 起多了 `Database`，`DatabaseSync` 變成 deprecated 別名。程式用 `sqlite.Database ?? sqlite.DatabaseSync`，兩版都能跑。若之後要完全避開變動中的 API，再評估 `better-sqlite3`，但要處理原生模組部署。
 
 ### 8.2 資料庫
 
@@ -845,6 +874,9 @@ orders (
   source_message_id TEXT,          -- 玩家下單的觸發訊息；Bot 為 NULL
   reserved_cents INTEGER NOT NULL DEFAULT 0,
   reserved_qty INTEGER NOT NULL DEFAULT 0,
+  fee_rate_ppm INTEGER NOT NULL DEFAULT 0,
+  tax_rate_ppm INTEGER NOT NULL DEFAULT 0,
+  min_fee_cents INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL,            -- pending / filled / rejected
   created_at TEXT NOT NULL,
   settled_at TEXT,
@@ -858,6 +890,7 @@ orders (
   quote_source TEXT,
   quote_as_of TEXT,
   reason TEXT,
+  reject_reason TEXT,
   note TEXT
 );
 
@@ -890,12 +923,20 @@ account_guilds (
 
 bot_runs (
   id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'decision',  -- decision / review
   started_at TEXT NOT NULL,
   ended_at TEXT,
   market TEXT,
-  status TEXT,                    -- hold / pending / skipped / error
+  status TEXT,                    -- decision: hold/pending/error；review: ok/error
   tokens INTEGER DEFAULT 0,
   reason TEXT
+);
+
+daily_reviews (
+  date TEXT PRIMARY KEY,          -- 交易日 YYYY-MM-DD
+  created_at TEXT NOT NULL,
+  summary TEXT NOT NULL,          -- 隔天決策會引用，最多顯示 1500 字
+  tokens INTEGER NOT NULL DEFAULT 0
 );
 ```
 
@@ -972,7 +1013,7 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
 - 只顯示目前伺服器的成員。用 `account_guilds` 記錄玩家在哪些伺服器下過單，排行榜只查這些成員；必要時再 `guild.members.fetch` 取名稱，不要抓整個大型伺服器。
 - 使用伺服器暱稱。
 - 最多顯示前 10 名。
-- Bot 標示 `🤖`；預設同榜，設定可改成只顯示在「AI 對手」區。
+- Bot 標示 `🤖`；第一版固定與玩家同榜，不另外做「AI 對手」分區。
 - 同分時依淨值、再依建立時間排序。
 
 帳戶跨伺服器共用，因此玩家在其他伺服器進行的交易也會影響同一個帳戶的排名。
@@ -1087,7 +1128,7 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
 5. 持股查詢、已實現／未實現損益、淨值、報酬率。
 6. 伺服器排行榜（含 Bot 標示）。
 7. SQLite 交易域、現金流水。
-8. Bot 交易員：台股、模型判斷、讀新聞、token 上限、結算後公告。
+8. Bot 交易員：台股、模型判斷、讀新聞、token 上限、結算後公告、19:10 當日復盤。
 9. 控制台「股盤」分頁與交易設定。
 10. `/portfolio`、`/forget`。
 11. Discord Bridge／MCP／preset 整合。
@@ -1137,6 +1178,9 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
 | 買入 10 股 | 建立 pending、保留現金、持倉尚未增加 |
 | 結算時現金不足 | 拒絕，釋放保留，不讓餘額變負 |
 | 收盤結算 | 現金、持倉、費用、稅、淨額正確；訂單變 filled |
+| 19:00 前結算 | 不成交；等 19:00 後資料到齊才結算 |
+| 當日復盤 | 19:10 後跑一次；有收盤價、法人、重大訊息與新聞摘要；不下單 |
+| 隔天決策 | 09:00 後第一次決策會帶入前一天的復盤摘要 |
 | 現金不足 | 拒絕，不建立訂單，不改帳戶 |
 | 賣出超額 | 拒絕，不保留股票 |
 | 市場休市 | 不建立新訂單 |
@@ -1252,6 +1296,8 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
    - `src/core/discord-trade.mjs`
    - `src/core/discord-trade-db.mjs`
    - `src/core/quote-provider.mjs`
+   - `src/core/institutional-provider.mjs`
+   - `src/core/material-provider.mjs`
    - `src/core/bot-trader.mjs`
    - `plugins/dc-agent-presets/presets/dc-trader.patch.yml`（由 preset build 流程產生）
 3. 修改：
@@ -1272,6 +1318,8 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
    - `scripts/test-discord-trade.mjs`（新）
    - `scripts/test-discord-trade-db.mjs`（新）
    - `scripts/test-discord-bot-trader.mjs`（新；`test-discord-all.mjs` 只跑 `test-discord-*.mjs`）
+   - `scripts/test-discord-institutional.mjs`（新；法人日報解析）
+   - `scripts/test-discord-material.mjs`（新；重大訊息解析）
    - `scripts/test-discord-bridge.mjs`（端點、身分、設定）
    - `scripts/test-mcp-servers-stdio.mjs`（工具註冊）
    - `scripts/test-console-ui.mjs`（股盤分頁）

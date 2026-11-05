@@ -127,6 +127,7 @@
     <button role="tab" id="tabbtn-memory" aria-controls="tab-memory" data-tab="memory">記憶</button>
     <button role="tab" id="tabbtn-sessions" aria-controls="tab-sessions" data-tab="sessions">會話</button>
     <button role="tab" id="tabbtn-dev-feedback" aria-controls="tab-dev-feedback" data-tab="dev-feedback">回饋</button>
+    <button role="tab" id="tabbtn-trade" aria-controls="tab-trade" data-tab="trade">股盤</button>
     <button role="tab" id="tabbtn-settings" aria-controls="tab-settings" data-tab="settings">設定</button>
     <button role="tab" id="tabbtn-logs" aria-controls="tab-logs" data-tab="logs">日誌</button>
   </nav>
@@ -191,6 +192,64 @@
   </section>
   </div>
 
+  <div class="tab-panel" role="tabpanel" id="tab-trade" aria-labelledby="tabbtn-trade" hidden>
+  <section class="card">
+    <h2>模擬股盤 <span id="trade-summary" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">唯讀。交易資料在 state/discord-trade.sqlite；下單只能從 Discord 對話或 Bot 排程，這裡不能改餘額或持倉。</p>
+    <div class="table-wrap">
+      <table style="min-width:760px">
+        <colgroup><col style="width:24%"><col style="width:8%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:10%"></colgroup>
+        <thead><tr><th>帳戶</th><th>種類</th><th class="num">現金</th><th class="num">保留</th><th class="num">淨值</th><th class="num">報酬率</th></tr></thead>
+        <tbody id="trade-accounts"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>持股 <span id="trade-position-count" class="muted"></span></h2>
+    <div class="table-wrap">
+      <table style="min-width:860px">
+        <colgroup><col style="width:18%"><col style="width:15%"><col style="width:9%"><col style="width:12%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
+        <thead><tr><th>帳戶</th><th>標的</th><th class="num">股數</th><th class="num">平均成本</th><th class="num">現價</th><th class="num">市值</th><th class="num">未實現</th></tr></thead>
+        <tbody id="trade-positions"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>訂單 <span id="trade-order-count" class="muted"></span></h2>
+    <div class="table-wrap">
+      <table style="min-width:960px">
+        <colgroup><col style="width:12%"><col style="width:16%"><col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:10%"></colgroup>
+        <thead><tr><th>時間</th><th>帳戶</th><th>標的</th><th>方向</th><th class="num">股數</th><th>狀態</th><th class="num">成交價</th><th class="num">手續費</th><th class="num">稅</th><th>原因</th></tr></thead>
+        <tbody id="trade-orders"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>報價來源</h2>
+    <div class="table-wrap">
+      <table style="min-width:640px">
+        <colgroup><col style="width:16%"><col style="width:16%"><col style="width:18%"><col style="width:12%"><col style="width:38%"></colgroup>
+        <thead><tr><th>來源</th><th>資料日期</th><th>最後抓取</th><th class="num">筆數</th><th>錯誤</th></tr></thead>
+        <tbody id="trade-quotes"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Bot 交易員 <span id="trade-bot-note" class="muted"></span></h2>
+    <div class="table-wrap">
+      <table style="min-width:760px">
+        <colgroup><col style="width:22%"><col style="width:10%"><col style="width:10%"><col style="width:12%"><col style="width:46%"></colgroup>
+        <thead><tr><th>開始</th><th>種類</th><th>狀態</th><th class="num">Tokens</th><th>原因</th></tr></thead>
+        <tbody id="trade-bot"></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
   <div class="tab-panel" role="tabpanel" id="tab-settings" aria-labelledby="tabbtn-settings" hidden>
   <section class="card">
     <h2>白名單與媒體</h2>
@@ -225,6 +284,50 @@
       </div>
     </form>
     <p class="muted" style="margin:10px 0 0">每行一個 Discord ID（字串）。preset、模型、port、token 請改 config.json 後重啟。</p>
+  </section>
+
+  <section class="card">
+    <h2>模擬股票</h2>
+    <form id="trade-form" class="grid">
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="trade-enabled" type="checkbox" style="width:auto;margin:0">
+        trade.enabled：開放模擬股票（第一版只有台股）
+      </label>
+      <label style="grid-column:1/-1">allowedGuilds（一行一個伺服器 ID；空白＝不限制）
+        <textarea id="trade-guilds" placeholder="123456789012345678"></textarea>
+      </label>
+      <label style="grid-column:1/-1">allowedChannels（一行一個頻道 ID；空白＝不限制）
+        <textarea id="trade-channels" placeholder="123456789012345678"></textarea>
+      </label>
+      <label>起始資金（NT$）<input id="trade-starting-cash" type="number" min="1000" step="1000"></label>
+      <label>單筆上限（帳戶淨值 %）<input id="trade-max-order-pct" type="number" min="1" max="100" step="1"></label>
+      <label>手續費率<input id="trade-fee-rate" type="number" min="0" max="0.1" step="0.000001"></label>
+      <label>證交稅率<input id="trade-tax-rate" type="number" min="0" max="0.1" step="0.000001"></label>
+      <label>最低手續費（NT$）<input id="trade-min-fee" type="number" min="0" step="1"></label>
+      <label>結算檢查間隔（分鐘）<input id="trade-settle-minutes" type="number" min="1" max="120" step="1"></label>
+      <label>結算開始時間<input id="trade-settle-after" type="time"></label>
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="trade-bot-enabled" type="checkbox" style="width:auto;margin:0">
+        bot.enabled：讓 Bot 交易員在盤中自己決策
+      </label>
+      <label>公告頻道 ID<input id="trade-bot-announce" placeholder="123456789012345678"></label>
+      <label>每日決策次數<input id="trade-bot-turns" type="number" min="1" max="24"></label>
+      <label>每日下單次數<input id="trade-bot-trades" type="number" min="1" max="24"></label>
+      <label>兩次決策間隔（分鐘）<input id="trade-bot-interval" type="number" min="1" max="1440"></label>
+      <label>每日 token 上限<input id="trade-bot-tokens" type="number" min="1000" step="1000"></label>
+      <label>每回合搜尋上限<input id="trade-bot-searches" type="number" min="0" max="10"></label>
+      <label>每回合抓取上限<input id="trade-bot-fetches" type="number" min="0" max="10"></label>
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="trade-bot-review-enabled" type="checkbox" style="width:auto;margin:0">
+        bot.review.enabled：收盤後跑一次當日復盤（收盤價、法人、新聞）
+      </label>
+      <label>復盤開始時間<input id="trade-bot-review-after" type="time"></label>
+      <div class="row" style="grid-column:1/-1">
+        <button type="submit">儲存</button>
+        <span id="trade-msg" class="msg"></span>
+      </div>
+    </form>
+    <p class="muted" style="margin:10px 0 0">Bot 使用 dc-trader preset，一次決策開一個一次性會話。費率改了不影響已建立的訂單（每筆單記著下單當時的費率）。</p>
   </section>
 
   <section class="card">
@@ -1077,6 +1180,97 @@
     ] : []));
   }
 
+  function tradeMoney(cents) {
+    const value = Number(cents);
+    if (!Number.isFinite(value)) return '—';
+    const sign = value < 0 ? '-' : '';
+    const abs = Math.abs(Math.round(value));
+    return `${sign}NT$${Math.floor(abs / 100).toLocaleString('en-US')}.${String(abs % 100).padStart(2, '0')}`;
+  }
+
+  function tradePct(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '—';
+    return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
+  }
+
+  function tradeAccountName(id) {
+    const text = String(id ?? '');
+    if (text.startsWith('bot:')) return '🤖 Bot';
+    return text.startsWith('user:') ? `玩家 ${text.slice(5)}` : text;
+  }
+
+  function renderTrade(data) {
+    const enabled = data?.enabled !== false;
+    $('trade-summary').textContent = enabled
+      ? `（${data.market?.label ?? ''}｜${data.accounts?.length ?? 0} 個帳戶）`
+      : `（${data?.reason ?? '未開啟'}）`;
+    if (!enabled) {
+      const empty = (id, span, text) => $(id).replaceChildren(el('tr', {}, el('td', { colSpan: span, className: 'muted' }, text)));
+      empty('trade-accounts', 6, '模擬股票沒有開啟。');
+      empty('trade-positions', 7, '—');
+      empty('trade-orders', 10, '—');
+      empty('trade-quotes', 5, '—');
+      empty('trade-bot', 5, '—');
+      return;
+    }
+    const accounts = data.accounts ?? [];
+    $('trade-accounts').replaceChildren(...(accounts.length ? accounts.map((account) => el('tr', {},
+      el('td', {}, tradeAccountName(account.accountId)),
+      el('td', { className: 'muted' }, account.kind === 'bot' ? 'Bot' : '玩家'),
+      el('td', { className: 'num' }, tradeMoney(account.cashCents)),
+      el('td', { className: 'num' }, tradeMoney(account.reservedCents)),
+      el('td', { className: 'num' }, tradeMoney(account.navCents)),
+      el('td', { className: 'num' }, tradePct(account.returnPct)),
+    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有人下單。'))]));
+
+    const positions = accounts.flatMap((account) => (account.positions ?? []).map((position) => ({ account, position })));
+    $('trade-position-count').textContent = `（${positions.length} 筆）`;
+    $('trade-positions').replaceChildren(...(positions.length ? positions.map(({ account, position }) => el('tr', {},
+      el('td', {}, tradeAccountName(account.accountId)),
+      el('td', {}, `${position.symbol} ${position.name ?? ''}`),
+      el('td', { className: 'num' }, String(position.qty ?? 0)),
+      el('td', { className: 'num' }, tradeMoney(position.avgCostCents)),
+      el('td', { className: 'num' }, position.priceCents === null ? '—' : tradeMoney(position.priceCents)),
+      el('td', { className: 'num' }, tradeMoney(position.marketValueCents)),
+      el('td', { className: 'num' }, tradeMoney(position.unrealizedCents)),
+    )) : [el('tr', {}, el('td', { colSpan: 7, className: 'muted' }, '目前沒有持股。'))]));
+
+    const orders = data.orders ?? [];
+    $('trade-order-count').textContent = `（最近 ${orders.length} 筆）`;
+    $('trade-orders').replaceChildren(...(orders.length ? orders.map((order) => el('tr', {},
+      el('td', { className: 'muted nowrap' }, String(order.created_at ?? '').slice(0, 16).replace('T', ' ')),
+      el('td', {}, tradeAccountName(order.account_id)),
+      el('td', {}, order.symbol),
+      el('td', {}, order.side === 'buy' ? '買' : '賣'),
+      el('td', { className: 'num' }, String(order.qty ?? '')),
+      el('td', {}, order.status === 'pending' ? '排隊中' : (order.status === 'filled' ? '已成交' : '未成交')),
+      el('td', { className: 'num' }, order.fill_price_cents ? tradeMoney(order.fill_price_cents) : '—'),
+      el('td', { className: 'num' }, order.fee_cents ? tradeMoney(order.fee_cents) : '—'),
+      el('td', { className: 'num' }, order.tax_cents ? tradeMoney(order.tax_cents) : '—'),
+      el('td', { className: 'muted' }, [order.reject_reason, order.actor === 'bot' ? order.reason : ''].filter(Boolean).join('｜')),
+    )) : [el('tr', {}, el('td', { colSpan: 10, className: 'muted' }, '還沒有訂單。'))]));
+
+    const quotes = data.quotes ?? [];
+    $('trade-quotes').replaceChildren(...(quotes.length ? quotes.map((quote) => el('tr', {},
+      el('td', {}, quote.exchange),
+      el('td', {}, quote.date ?? '—'),
+      el('td', { className: 'muted' }, quote.fetchedAt ? new Date(quote.fetchedAt).toLocaleString() : '—'),
+      el('td', { className: 'num' }, String(quote.count ?? 0)),
+      el('td', { className: 'muted' }, quote.error ?? ''),
+    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, '沒有報價來源資料。'))]));
+
+    const runs = data.botRuns ?? [];
+    $('trade-bot-note').textContent = data.botEnabled ? '' : '（Bot 交易沒有開啟）';
+    $('trade-bot').replaceChildren(...(runs.length ? runs.map((run) => el('tr', {},
+      el('td', { className: 'muted nowrap' }, String(run.started_at ?? '').slice(0, 16).replace('T', ' ')),
+      el('td', {}, run.kind === 'review' ? '復盤' : '決策'),
+      el('td', {}, run.status ?? '—'),
+      el('td', { className: 'num' }, String(run.tokens ?? 0)),
+      el('td', { className: 'muted' }, run.reason ?? ''),
+    )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, '還沒有 Bot 決策紀錄。'))]));
+  }
+
   function renderFollowups(data) {
     const items = data?.items ?? [];
     $('followup-count').textContent = data?.enabled === false
@@ -1258,6 +1452,31 @@
       .map(([id, on]) => `${id}=${on}`).join('\n');
     $('require-mention-channels').disabled = !c.messageContentIntent;
     $('chatty-channels').value = join(c.chattyChannels);
+    const trade = c.trade ?? {};
+    const fees = trade.fees ?? {};
+    const settlement = trade.settlement ?? {};
+    const bot = trade.bot ?? {};
+    $('trade-enabled').checked = trade.enabled === true;
+    $('trade-guilds').value = join(trade.allowedGuilds);
+    $('trade-channels').value = join(trade.allowedChannels);
+    $('trade-starting-cash').value = trade.startingCash ?? 1000000;
+    $('trade-max-order-pct').value = trade.maxOrderPct ?? 30;
+    $('trade-fee-rate').value = fees.twFeeRate ?? 0.001425;
+    $('trade-tax-rate').value = fees.twTaxRate ?? 0.003;
+    $('trade-min-fee').value = fees.minFee ?? 0;
+    $('trade-settle-minutes').value = settlement.twCheckMinutes ?? 10;
+    $('trade-settle-after').value = settlement.twSettleAfter ?? '19:00';
+    $('trade-bot-enabled').checked = bot.enabled === true;
+    $('trade-bot-announce').value = bot.announceChannelId ?? '';
+    $('trade-bot-turns').value = bot.maxTurnsPerDay ?? 1;
+    $('trade-bot-trades').value = bot.maxTradesPerDay ?? 1;
+    $('trade-bot-interval').value = bot.minIntervalMin ?? 60;
+    $('trade-bot-tokens').value = bot.maxTokensPerDay ?? 20000;
+    $('trade-bot-searches').value = bot.maxWebSearchesPerTurn ?? 3;
+    $('trade-bot-fetches').value = bot.maxWebFetchesPerTurn ?? 2;
+    const review = bot.review ?? {};
+    $('trade-bot-review-enabled').checked = review.enabled !== false;
+    $('trade-bot-review-after').value = review.after ?? '19:10';
   }
 
   async function loadConfig() {
@@ -1285,6 +1504,7 @@
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
       api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise, api('/api/followups'),
+      api('/api/trade/overview'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -1301,6 +1521,7 @@
     if (results[10].status === 'fulfilled') renderCodexQuota(results[10].value);
     if (results[11].status === 'fulfilled' && results[11].value) renderDevFeedback(results[11].value);
     if (results[12].status === 'fulfilled') renderFollowups(results[12].value);
+    if (results[13].status === 'fulfilled') renderTrade(results[13].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -1614,6 +1835,54 @@
           }),
           // chattyChannels 不受 messageContentIntent 鎖定：先設定好，開了意圖就生效。
           chattyChannels: lines($('chatty-channels').value),
+        }),
+      });
+      fillConfig(result.config);
+      msg.textContent = '已儲存（立即生效）';
+      msg.className = 'msg ok';
+      await refresh();
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  $('trade-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const msg = $('trade-msg');
+    msg.textContent = '儲存中…';
+    msg.className = 'msg';
+    try {
+      const result = await api('/api/config', {
+        method: 'POST',
+        body: JSON.stringify({
+          trade: {
+            enabled: $('trade-enabled').checked,
+            allowedGuilds: lines($('trade-guilds').value),
+            allowedChannels: lines($('trade-channels').value),
+            startingCash: Number($('trade-starting-cash').value),
+            maxOrderPct: Number($('trade-max-order-pct').value),
+            fees: {
+              twFeeRate: Number($('trade-fee-rate').value),
+              twTaxRate: Number($('trade-tax-rate').value),
+              minFee: Number($('trade-min-fee').value),
+            },
+            settlement: { twCheckMinutes: Number($('trade-settle-minutes').value), twSettleAfter: $('trade-settle-after').value },
+            bot: {
+              enabled: $('trade-bot-enabled').checked,
+              announceChannelId: $('trade-bot-announce').value.trim(),
+              maxTurnsPerDay: Number($('trade-bot-turns').value),
+              maxTradesPerDay: Number($('trade-bot-trades').value),
+              minIntervalMin: Number($('trade-bot-interval').value),
+              maxTokensPerDay: Number($('trade-bot-tokens').value),
+              maxWebSearchesPerTurn: Number($('trade-bot-searches').value),
+              maxWebFetchesPerTurn: Number($('trade-bot-fetches').value),
+              review: {
+                enabled: $('trade-bot-review-enabled').checked,
+                after: $('trade-bot-review-after').value,
+              },
+            },
+          },
         }),
       });
       fillConfig(result.config);

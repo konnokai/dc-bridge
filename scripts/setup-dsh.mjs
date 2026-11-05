@@ -12,7 +12,7 @@
 //
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]              # QQ 版
-//   node scripts/setup-dsh.mjs --discord [profile]    # Discord 版：只装 dc-chat / dc-learner preset
+//   node scripts/setup-dsh.mjs --discord [profile]    # Discord 版：只装 dc-chat / dc-learner / dc-trader preset
 //
 // 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
@@ -26,7 +26,7 @@ import { ALL_PRESETS, PRESETS, buildPatches, patchFileFor } from './build-agent-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-// --discord：只装 Discord 那套（dc-chat / dc-learner preset + dc-agent-presets bundle），
+// --discord：只装 Discord 那套（dc-chat / dc-learner / dc-trader preset + dc-agent-presets bundle），
 // 不碰 profile 里既有的 MCP，也不写 QQ 的 state/mode.json。
 const DISCORD_ONLY = process.argv.includes('--discord');
 const PROFILE = process.argv.slice(2).find((arg) => !arg.startsWith('--')) || 'web';
@@ -130,11 +130,11 @@ function yamlSingleQuote(s) {
 /**
  * 由桥接托管的 MCP 条目 id。
  *
- * Discord 装 web-search-safe（只读搜索）、mcp-discord（发讯息）与 mcp-slang（黑话／频道标签）；SnowLuma 的两个是
+ * Discord 装 web-search-safe（只读搜索）、mcp-discord（发讯息）、mcp-slang（黑话／频道标签）与 mcp-trade（模拟股票）；SnowLuma 的两个是
  * QQ 专用，装进 Discord profile 只会多出一堆连不上的工具。
  */
 const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
-const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord', 'mcp-slang'];
+const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord', 'mcp-slang', 'mcp-trade'];
 const managedMcpIds = () => (DISCORD_ONLY ? DISCORD_MCP_IDS : MANAGED_MCP_IDS);
 
 function mcpEntries() {
@@ -145,6 +145,8 @@ function mcpEntries() {
       'mcp-discord': { serverName: 'discord', script: path.join(REPO_ROOT, 'src', 'mcp-discord.js') },
       // 模型自己查詞、收黑話與頻道標籤；跟 mcp-discord 共用同一個 loopback 端點。
       'mcp-slang': { serverName: 'slang', script: path.join(REPO_ROOT, 'src', 'mcp-slang.js') },
+      // 模擬股票：查價、下單、持股、排行榜；身分與交易規則都在橋接。
+      'mcp-trade': { serverName: 'trade', script: path.join(REPO_ROOT, 'src', 'mcp-trade.js') },
     } : {
       'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
       'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
@@ -405,5 +407,5 @@ if (!DISCORD_ONLY) reportLegacyPresetDir();
 if (!DISCORD_ONLY) ensureLocalModeFile();
 autoInstallProfileBundles();
 log(DISCORD_ONLY
-  ? 'Done. Restart DSH (or reload the profile) so the dc-chat / dc-learner presets take effect.'
+  ? 'Done. Restart DSH (or reload the profile) so the dc-chat / dc-learner / dc-trader presets take effect.'
   : 'Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
