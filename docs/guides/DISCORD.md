@@ -88,7 +88,7 @@ pm2 logs dc-bridge
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `requireMentionInChannel` | 單頻道覆寫：`{ "頻道ID": true }` = 該頻道只能 @bot；`false` = 該頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。值必須是 JSON boolean（`"false"` 字串會被拒絕）。討論串用自己的 id，**不繼承**母頻道的覆寫（跟 `allow.channels` 一樣）；私聊不受影響。沒開 `messageContentIntent` 時一律要 @bot。控制台「設定」可以用 `頻道ID=true` 一行一個編輯 |
 | `chattyChannels` | 不限制發言頻率的頻道 ID 陣列（控制台「設定」可編輯）。列在這裡的頻道不看「10 分鐘送了幾則」，`【新訊息】` 前會多一段【參與度】：沒 ★ 也可以接，聊到她、拿她當梗、接著她剛說的話都算，插不上話才跳過。也允許她用 `schedule_followup` 自己排回訪開新話題（硬上限每天 2 次）。預設空（全部照一般自由參與規則） |
-| `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 20000（500~30000）。有人 @ 或回覆 bot 的那一批改用 4 秒的短等待；這批裡的人在打字就再延一個 10 秒窗口 |
+| `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 20000（500~30000）。有人 @ 或回覆 bot 的那一批改用 8 秒的短等待；這批裡的人在打字就再延一個 10 秒窗口 |
 | `batch.maxWaitMs` | 一批從第一則算起最多等多久，預設 30000（1000~120000）；訊息一直進來也不會無限延後 |
 | `batch.maxMessages` | 一批最多幾則，滿了立刻送出，預設 20（1~50） |
 | `messageContentIntent` | 是否申請 Message Content 特權意圖，預設 `true`。設 `false` 時會強制 `requireMentionInGuild: true`（不然收不到內容） |
@@ -215,8 +215,12 @@ GIPHY 的 API 條款另外要求：標示 **Powered by GIPHY**、不快取 API �
 期間的新訊息併進同一批；從第一則算起最多等 `batch.maxWaitMs`，滿 `batch.maxMessages` 則立刻送出。
 一批只開一個 DSH 回合。
 
-頻道裡有人 @bot 或回覆 bot 時，這一批不等滿 20 秒：從那一則起改用 4 秒的短等待，
+頻道裡有人 @bot 或回覆 bot 時，這一批不等滿 20 秒：從那一則起改用 8 秒的短等待，
 後面補的句子照樣併進同一批，送出後才恢復 20 秒。私聊沒有 @，一律照 debounce 合批。
+
+模型呼叫 `send_message` 送出純文字前，橋接會先看同一個觸發者有沒有還沒進模型的補句：
+有就這次不送，把補句回給模型，讓它在同一個回合重新決定怎麼回（一個回合最多攔一次）。
+帶圖片或貼圖的訊息不攔；補句裡的圖片照正常批次送，模型才看得到圖。
 
 這批裡已經有訊息的人正在打字時（Discord 的 typing 事件，`GuildMessageTyping`／`DirectMessageTyping`
 非特權 intent），送出時間再往後延一個 10 秒窗口，最多延到第一則之後的 `batch.maxWaitMs`。

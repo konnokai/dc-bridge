@@ -101,7 +101,7 @@ import {
   messageRefOf,
   startAgentApi,
 } from '../src/core/discord-agent.mjs';
-import { createBatcher, createTurnGate, formatBatch, imageRefTag, repliedName, resolveMentions, visibleName } from '../src/core/discord-batch.mjs';
+import { createBatcher, createTurnGate, formatBatch, imageRefTag, repliedName, resolveMentions, takeFollowups, visibleName } from '../src/core/discord-batch.mjs';
 import { createUrgentTyping } from '../src/core/discord-typing.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
@@ -2405,7 +2405,7 @@ console.log('## 7d3. 批次');
   batcher.flush('ch:4');
   ok(flushed.some((f) => f.key === 'ch:4' && f.items.join() === '98'), 'flush 立刻送出（指令要排在前面）');
 
-  // 有人 @ 的那批改用 4 秒的短等待：@ 前面與後面補的句子都留在同一批。
+  // 有人 @ 的那批改用 8 秒的短等待：@ 前面與後面補的句子都留在同一批。
   const urgentFlushed = [];
   const urgentBatcher = createBatcher({
     debounceMs: 20_000,
@@ -2421,15 +2421,15 @@ console.log('## 7d3. 批次');
   advance(3000);
   urgentBatcher.add('ch:5', { id: 201 });
   urgentBatcher.add('ch:5', { id: 202, urgent: true });
-  advance(3999);
-  ok(urgentFlushed.length === 0, '@ 之後還是等 urgentMs（預設 4 秒），不是立刻送');
+  advance(7999);
+  ok(urgentFlushed.length === 0, '@ 之後還是等 urgentMs（預設 8 秒），不是立刻送');
   advance(1);
   ok(urgentFlushed[0]?.items.join() === '200,201,202', '@ 前面等待中的訊息一起送');
 
   urgentBatcher.add('ch:5', { id: 203, urgent: true });
   advance(2000);
   urgentBatcher.add('ch:5', { id: 204 });
-  advance(3999);
+  advance(7999);
   ok(urgentFlushed.length === 1, '@ 之後補的句子還在同一批，不提早送');
   advance(1);
   ok(urgentFlushed[1]?.items.join() === '203,204', '@ 之後補的句子一起送');
@@ -2455,20 +2455,20 @@ console.log('## 7d3. 批次');
   upgradeBatcher.add('ch:10', { id: 600, userId: 'u7', guildId: 'g1', direct: true });
   advance(3000);
   upgradeBatcher.add('ch:10', { id: 601, userId: 'u7', guildId: 'g1' });
-  advance(3999);
+  advance(7999);
   ok(upgradeFlushed.length === 0, '補句後改用 urgentMs');
   advance(1);
   ok(upgradeFlushed[0]?.items.join() === '600,601', '同一個人補句就把整批升成 urgent');
 
   upgradeBatcher.add('ch:11', { id: 602, userId: 'u8', guildId: 'g1', direct: true });
   upgradeBatcher.add('ch:11', { id: 603, userId: 'u9', guildId: 'g1' });
-  advance(4000);
+  advance(8000);
   ok(upgradeFlushed.length === 1, '別人補話不會讓這批變 urgent');
   upgradeBatcher.drop('ch:11');
 
   upgradeBatcher.add('dm:1', { id: 604, userId: 'u10', direct: true });
   upgradeBatcher.add('dm:1', { id: 605, userId: 'u10', direct: true });
-  advance(4000);
+  advance(8000);
   ok(upgradeFlushed.length === 1, '私聊不會因為第二則就升 urgent');
   upgradeBatcher.drop('dm:1');
 
@@ -2508,10 +2508,10 @@ console.log('## 7d3. 批次');
   typingBatcher.extend('ch:8', 'u5');
   advance(1000);
   typingBatcher.add('ch:8', { id: 404, userId: 'u5' });
-  advance(3999);
+  advance(7999);
   ok(typingFlushed.length === 2, '送出訊息就清掉打字狀態，不白等一個窗口');
   advance(1);
-  ok(typingFlushed[2]?.items.join() === '403,404', '清掉之後照 urgent 的 4 秒送');
+  ok(typingFlushed[2]?.items.join() === '403,404', '清掉之後照 urgent 的 8 秒送');
 
   const capFlushed = [];
   const capBatcher = createBatcher({
@@ -2530,6 +2530,120 @@ console.log('## 7d3. 批次');
   ok(capFlushed.length === 0, '打字不能把批次留過頭');
   advance(1);
   ok(capFlushed[0] === '500', '打字最多延到 maxWaitMs');
+
+  console.log('## 7d3b. take 與 send 前的補句檢查');
+  {
+    // 每個小段用同一個假時鐘：advance 之後才跑得到 timer。
+    const makeClock = () => {
+      let clock = 0;
+      const timers = [];
+      const flushed = [];
+      const makeBatcher = (options = {}) => createBatcher({
+        debounceMs: 20_000,
+        maxWaitMs: 40_000,
+        maxMessages: 50,
+        onFlush: (key, items) => flushed.push({ key, items: items.map((item) => item.id), at: clock }),
+        now: () => clock,
+        setTimer: (fn, ms) => { const timer = { fn, at: clock + ms, live: true }; timers.push(timer); return timer; },
+        clearTimer: (timer) => { if (timer) timer.live = false; },
+        ...options,
+      });
+      const advance = (ms) => {
+        clock += ms;
+        for (const timer of timers) if (timer.live && timer.at <= clock) { timer.live = false; timer.fn(); }
+      };
+      return { makeBatcher, advance, flushed };
+    };
+
+    // take 只取指定的人；剩下的照自己的時間重新排，全取光就不再送。
+    {
+      const { makeBatcher, advance, flushed } = makeClock();
+      const batcher = makeBatcher();
+      batcher.add('ch:t', { id: 1, userId: 'u1', urgent: true, at: 0 });
+      advance(5_000);
+      batcher.add('ch:t', { id: 2, userId: 'u2', at: 5_000 });
+      advance(1_000);
+      const taken = batcher.take('ch:t', ['u1']);
+      ok(taken.map((item) => item.id).join() === '1', 'take 只取指定 userId 的項目');
+      // u2 自己的 20 秒從他到達時算，不是 u1 的 urgent 8 秒，也不是 take 的當下。
+      advance(18_999);
+      ok(flushed.length === 0, '取完之後不沿用 urgent 的送出時間');
+      advance(1);
+      ok(flushed[0]?.items.join() === '2', '剩下的項目照自己到達的時間送');
+
+      batcher.add('ch:t', { id: 3, userId: 'u1' });
+      batcher.add('ch:t', { id: 4, userId: 'u1' });
+      ok(batcher.take('ch:t', ['u1']).map((item) => item.id).join() === '3,4', '同一個人的補句全部取出');
+      advance(60_000);
+      ok(flushed.length === 1, '全取光就不會再 flush');
+    }
+
+    // 別人「先只 @ 不說話、再補一句」的 urgent 不能因為 take 掉觸發者就消失。
+    {
+      const { makeBatcher, advance, flushed } = makeClock();
+      const batcher = makeBatcher();
+      batcher.add('ch:u', { id: 30, userId: 'b', guildId: 'g1', direct: true, at: 0 });
+      batcher.add('ch:u', { id: 31, userId: 'b', guildId: 'g1', at: 1_000 });
+      batcher.add('ch:u', { id: 32, userId: 'a', guildId: 'g1', at: 2_000 });
+      ok(batcher.take('ch:u', ['a']).map((item) => item.id).join() === '32', '只取走觸發者，別人留著');
+      advance(8_999);
+      ok(flushed.length === 0, '別人補句的 urgent 還在，不會退回 20 秒');
+      advance(1);
+      ok(flushed[0]?.items.join() === '30,31', '別人的補句照 urgent 的時間送');
+    }
+
+    // 有圖片、影片、embed 或 component 的項目不取：工具回覆只能帶文字。
+    {
+      const { makeBatcher, advance, flushed } = makeClock();
+      const batcher = makeBatcher();
+      batcher.add('ch:m', { id: 10, userId: 'u1' });
+      batcher.add('ch:m', { id: 11, userId: 'u1', hasImage: true });
+      batcher.add('ch:m', { id: 12, userId: 'u1', media: { accepted: [{ name: 'a.png' }], skipped: [] } });
+      batcher.add('ch:m', { id: 13, userId: 'u1', message: { embeds: [{}] } });
+      batcher.add('ch:m', { id: 14, userId: 'u1', message: { components: [{}] } });
+      batcher.add('ch:m', { id: 15, userId: 'u1', message: { attachments: { size: 1 } } });
+      ok(batcher.take('ch:m', ['u1']).map((item) => item.id).join() === '10', 'take 不取有媒體的項目');
+      advance(20_000);
+      ok(flushed[0]?.items.join() === '11,12,13,14,15', '有媒體的訊息留給正常批次送');
+    }
+
+    // send 前的補句檢查：只攔同一個觸發者，回覆裡有 #編號可以 reply_to。
+    {
+      const { makeBatcher, advance, flushed } = makeClock();
+      const batcher = makeBatcher();
+      const refs = createMessageRefs();
+      batcher.add('ch:f', {
+        id: 'm1', userId: 'u1', author: '小明', text: '剛剛只是講表符內的文字', direct: true, guildId: 'g1',
+        message: { mentions: { repliedUser: { id: 'u9', username: '阿華', displayName: '阿華' } } },
+      });
+      ok(takeFollowups({ batcher, key: 'ch:f', userIds: ['u2'], refs }) === null, '不是這一輪叫 bot 的人，不攔');
+      const hit = takeFollowups({ batcher, key: 'ch:f', userIds: ['u1'], refs });
+      ok(hit?.taken.length === 1, '攔到同一個觸發者的補句');
+      ok(/剛剛只是講表符內的文字/.test(hit?.notice ?? '') && /★小明/.test(hit?.notice ?? ''),
+        '工具回覆帶補句，沿用 ★ 標記');
+      ok(/↪回覆 阿華/.test(hit?.notice ?? ''), '補句是回覆時，帶上回覆對象的名字');
+      ok(/#[0-9a-z]{6}/.test(hit?.notice ?? ''), '補句登記 #編號，模型可以 reply_to');
+      ok(takeFollowups({ batcher, key: 'ch:f', userIds: ['u1'], refs }) === null, '取走之後不會重複攔');
+      batcher.add('ch:f', {
+        id: 'm2', userId: 'u1', author: '小明', text: '[圖片]', guildId: 'g1',
+        media: { accepted: [{ name: 'a.png' }], skipped: [] },
+      });
+      ok(takeFollowups({ batcher, key: 'ch:f', userIds: ['u1'], refs }) === null, '有圖片的補句不攔');
+      advance(20_000);
+      ok(flushed.some((entry) => entry.items.includes('m2')), '沒被攔的訊息照正常批次送');
+    }
+
+    // 預設 urgentMs 是 8 秒。
+    {
+      const { makeBatcher, advance, flushed } = makeClock();
+      const batcher = makeBatcher();
+      batcher.add('ch:8s', { id: 20, urgent: true });
+      advance(7999);
+      ok(flushed.length === 0, 'urgent 預設等 8 秒');
+      advance(1);
+      ok(flushed[0]?.items.join() === '20', 'urgent 滿 8 秒才送');
+    }
+  }
 
   // @ 模式頻道：叫過 bot 的人還在打字時，補句（沒 @）也收。
   console.log('## 7d4. @ 模式的補句窗口');

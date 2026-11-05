@@ -74,13 +74,22 @@ export function repliedName(message) {
   return visibleName(member?.displayName, user.displayName, user.username) || '未知';
 }
 
+/** 工具回覆只能帶文字：有附件、貼圖、embed（連結預覽、GIF）或 component 的訊息不取，留給正常批次，模型才看得到圖。 */
+const hasMedia = (entry) => Boolean(entry.hasImage)
+  || (entry.media?.accepted?.length ?? 0) > 0
+  || (entry.message?.attachments?.size ?? 0) > 0
+  || (entry.message?.stickers?.size ?? 0) > 0
+  || (entry.message?.embeds?.length ?? 0) > 0
+  || (entry.message?.components?.length ?? 0) > 0
+  || (entry.message?.messageSnapshots?.size ?? 0) > 0;
+
 /**
  * 建立批次器。
  *
  * @param options.debounceMs  最後一則之後再等多久
  * @param options.maxWaitMs   從第一則算起最多等多久
  * @param options.maxMessages 一批最多幾則，滿了立刻送
- * @param options.urgentMs    出現 urgent 之後改用的等待時間，預設 4000
+ * @param options.urgentMs    出現 urgent 之後改用的等待時間，預設 8000
  * @param options.typingMs    有人在打字時往後延多久，預設 10000
  * @param options.onFlush     (key, items) => void
  * @param options.now / setTimer / clearTimer  測試用的時鐘注入
@@ -92,7 +101,7 @@ export function createBatcher({
   debounceMs,
   maxWaitMs,
   maxMessages,
-  urgentMs = 4_000,
+  urgentMs = 8_000,
   typingMs = 10_000,
   onFlush,
   now = Date.now,
@@ -167,6 +176,41 @@ export function createBatcher({
     return true;
   }
 
+  /**
+   * 取出還沒送出的項目：只取 userIds 裡的人、而且沒有媒體的訊息。
+   * 模型用工具回覆時只能帶文字，補句的圖留給正常批次送。
+   * 取完空了就丟掉；還有剩就依剩下的項目重排送出時間，不沿用被取走那則的時間。
+   */
+  function take(key, userIds) {
+    const batch = batches.get(key);
+    if (!batch) return [];
+    const ids = new Set((Array.isArray(userIds) ? userIds : [userIds]).map(String));
+    const taken = batch.items.filter((entry) => ids.has(String(entry.userId)) && !hasMedia(entry));
+    if (taken.length === 0) return [];
+    batch.items = batch.items.filter((entry) => !taken.includes(entry));
+    if (batch.items.length === 0) {
+      drop(key);
+      return taken;
+    }
+    // 被取走的人已經不在這批，留著他的打字狀態只會拖慢剩下的訊息。
+    for (const userId of batch.typing.keys()) {
+      if (!batch.items.some((entry) => String(entry.userId) === userId)) batch.typing.delete(userId);
+    }
+    // 重新照剩下的項目算 urgent（同一個人先叫 bot 再補句，也算 urgent），
+    // 送出時間用最後一則自己的到達時間，別人的訊息才不會被往後拖。
+    const directUsers = new Set();
+    batch.urgent = batch.items.some((entry) => {
+      const followsDirect = Boolean(entry.guildId) && entry.userId && directUsers.has(String(entry.userId));
+      if (entry.direct && entry.userId) directUsers.add(String(entry.userId));
+      return Boolean(entry.urgent) || followsDirect;
+    });
+    const wait = batch.urgent ? Math.min(debounceMs, urgentMs) : debounceMs;
+    // 批次項目的順序不一定照時間排（handleMessage 有 await），取最晚的那一則。
+    const lastAt = Math.max(...batch.items.map((entry) => Number(entry.at) || 0));
+    schedule(key, batch, (lastAt || now()) + wait);
+    return taken;
+  }
+
   /** 丟掉還沒送出的那批（/reset 時用，不能讓舊訊息進新會話）。 */
   function drop(key) {
     const batch = batches.get(key);
@@ -175,7 +219,7 @@ export function createBatcher({
     batches.delete(key);
   }
 
-  return { add, extend, drop, flush };
+  return { add, extend, take, drop, flush };
 }
 
 /** 兩批合成一批。超過上限先丟最舊的閒聊；★（有人叫 bot）那幾則一定留著。 */
@@ -461,4 +505,33 @@ export function formatBatch(entries, { guild }) {
     ? '★ = 有 @你或回覆你，不代表內容在講你；'
     : '這批沒有 ★（沒有人 @你或回覆你）；';
   return `【新訊息】（${legend}#編號 用來指定要回覆、查看或按 reaction 的訊息）\n${lines.join('\n')}`;
+}
+
+/**
+ * 送出前的補句檢查：把同一個觸發者還沒進模型的補句從批次取出來，整理成工具回覆。
+ * 圖片留給正常批次，模型才看得到；沒有補句回 null。
+ *
+ * @param options.batcher  createBatcher 的回傳值
+ * @param options.key      會話 key
+ * @param options.userIds  這一輪叫 bot 的人
+ * @param options.refs     createMessageRefs()：補句要登記 #編號，模型才能 reply_to
+ * @returns {{taken: object[], notice: string} | null}
+ */
+export function takeFollowups({ batcher, key, userIds, refs }) {
+  const taken = batcher.take(key, userIds);
+  if (taken.length === 0) return null;
+  const entries = [...taken].sort((a, b) => a.at - b.at).map((entry) => ({
+    author: entry.author,
+    text: entry.text,
+    direct: entry.direct,
+    isOwner: entry.isOwner,
+    ref: refs.register(key, entry.id),
+    // 補句如果是回覆別人，模型至少要看得到在回誰；引用內容留給正常批次。
+    replyName: entry.message ? repliedName(entry.message) : '',
+    hasImage: entry.hasImage,
+  }));
+  return {
+    taken,
+    notice: `剛剛有新訊息，這則先沒送出。請看完後重新決定要不要回、怎麼回：\n${formatBatch(entries, { guild: Boolean(taken.at(-1)?.guildId) })}`,
+  };
 }

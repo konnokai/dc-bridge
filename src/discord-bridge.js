@@ -166,7 +166,7 @@ import { fetchStreamUrl, videoLinks } from './core/discord-video-link.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
-import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, triggerUsers, visibleName } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, takeFollowups, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { createUrgentTyping } from './core/discord-typing.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
@@ -798,6 +798,9 @@ async function main() {
   // 模型要對哪一則訊息按 ❌ 用：跟著批次排隊，回合開始時取出，避免拿到別批的訊息。
   const pendingDirectMessages = new Map(); // key -> {{userId,id}[]}[]（已投遞、回合還沒開始）
   const turnDirectMessages = new Map(); // key -> 目前這個回合直接叫 bot 的訊息
+  const turnStartedAt = new Map(); // key -> 這一輪 turn/start 的時間（攔補句的 log 用）
+  const turnFollowupTaken = new Set(); // key：這一輪已經攔過補句，一個回合只攔一次
+  const turnFollowupHeld = new Set(); // key：這一步已經攔過補句，同一步的其他 send 也先不送
   // 自由參與的回合沒有「直接叫 bot」的訊息，退而記這批最後一則，回饋才追得回上下文。
   const pendingLastMessages = new Map(); // key -> string[]（已投遞、回合還沒開始）
   const turnLastMessage = new Map(); // key -> 目前這個回合最後一則訊息 id
@@ -1064,6 +1067,9 @@ async function main() {
     turnDirect.delete(key);
     pendingDirectMessages.delete(key);
     turnDirectMessages.delete(key);
+    turnStartedAt.delete(key);
+    turnFollowupTaken.delete(key);
+    turnFollowupHeld.delete(key);
     pendingLastMessages.delete(key);
     turnLastMessage.delete(key);
     const entry = pending.get(key);
@@ -1700,6 +1706,23 @@ async function main() {
     return { replaced: { key, refs: [], notice: '已用 ❌ 反應代替這一則重複的拒絕回覆（同一個人短時間內重複踩線）。' } };
   }
 
+  /**
+   * 模型送純文字前，先把同一個觸發者還沒進模型的補句取出來交回去，讓它在同一個回合重新決定。
+   * 一個回合只攔一次；補句都登記 #編號，模型可以 reply_to。
+   */
+  function takeFollowupNotice(key) {
+    if (turnFollowupTaken.has(key)) return null;
+    const userIds = [...new Set((turnDirectMessages.get(key) ?? []).map((entry) => entry.userId))];
+    const result = takeFollowups({ batcher, key, userIds, refs: messageRefs });
+    if (!result) return null;
+    turnFollowupTaken.add(key);
+    // 同一個 step 的其他 send 也不能送：只送出後半句，群裡會看到缺一段的回覆。
+    turnFollowupHeld.add(key);
+    const seconds = Math.round((Date.now() - (turnStartedAt.get(key) ?? Date.now())) / 1000);
+    log(`send 前攔到補句 ${key}（${result.taken.length} 則，user=${userIds.join(',')}，距回合開始 ${seconds} 秒）`);
+    return { key, refs: [], notice: result.notice };
+  }
+
   const sendMessage = createAgentSendHandler({
     agentSender,
     turnUsers,
@@ -1804,6 +1827,15 @@ async function main() {
       const quietAt = quietUntil(key);
       if (quietSendBlocked({ quietUntil: quietAt, file: body.file })) {
         throw toolError(`安靜中（到 ${formatQuietUntil(quietAt)}），只能用 add_reaction 回；要恢復說話先 set_quiet minutes=0`, 409);
+      }
+      // 這一步剛攔過補句：其他 send 也先壓住，模型看完補句後在同一個回合重新決定。
+      if (turnFollowupHeld.has(key)) {
+        return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
+      }
+      // 純文字才攔補句：帶圖片或貼圖的訊息照常送，補句的圖留給正常批次。
+      if (!textArg(body.file, 500) && !textArg(body.sticker)) {
+        const followup = takeFollowupNotice(key);
+        if (followup) return followup;
       }
       const refusal = await prepareRefusal(body);
       if (refusal?.replaced) return refusal.replaced;
@@ -2975,6 +3007,9 @@ async function main() {
     const key = reverse.get(frame.sessionId);
     if (!key) return;
 
+    // 新的 step 才放掉補句 hold：同一個 step 的其他 send 不能只送出後半句。
+    if (event.type === 'step/start') turnFollowupHeld.delete(key);
+
     // 模型已經開始輸出或跑工具、或這一輪結束了：停掉等第一個 token 的計時器。
     if (event.type === 'assistant/first-token') {
       const entry = ttftTimers.get(frame.sessionId);
@@ -3063,6 +3098,9 @@ async function main() {
       turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
       const queuedMessages = pendingDirectMessages.get(key);
       turnDirectMessages.set(key, queuedMessages?.length ? queuedMessages.shift() : []);
+      turnStartedAt.set(key, Date.now());
+      turnFollowupTaken.delete(key);
+      turnFollowupHeld.delete(key);
       sandboxRuns.delete(key);
       const queuedLast = pendingLastMessages.get(key);
       turnLastMessage.set(key, queuedLast?.length ? (queuedLast.shift()?.id ?? '') : '');
@@ -3095,6 +3133,9 @@ async function main() {
     turnUsers.delete(key);
     sandboxRuns.delete(key);
     turnDirectMessages.delete(key);
+    turnStartedAt.delete(key);
+    turnFollowupTaken.delete(key);
+    turnFollowupHeld.delete(key);
     turnLastMessage.delete(key);
     turnTriggerRecorded.delete(key);
 
@@ -3223,6 +3264,9 @@ async function main() {
         turnUsers.clear();
         pendingDirectMessages.clear();
         turnDirectMessages.clear();
+        turnStartedAt.clear();
+        turnFollowupTaken.clear();
+        turnFollowupHeld.clear();
         pendingLastMessages.clear();
         turnLastMessage.clear();
         turnTriggerRecorded.clear();
@@ -3358,7 +3402,7 @@ async function main() {
       skipped.push(...(entry.media?.skipped ?? []));
       const entryRef = messageRefs.register(key, entry.id);
       // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
-      // 到這裡才讀 message.embeds：批次至少等過幾秒（有人 @ 時 4 秒），多半拿到了。沒有就只剩網址。
+      // 到這裡才讀 message.embeds：批次至少等過幾秒（有人 @ 時 8 秒），多半拿到了。沒有就只剩網址。
       // 轉發的預覽圖在快照裡，一起算。
       const attachments = entry.media?.accepted ?? [];
       const items = cfg.discord.media.enabled
@@ -4463,7 +4507,7 @@ async function main() {
       // 黑話比對用原文：表情描述是目錄產生的字，不該被當成群友講的話。
       rawText: [fullText, stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       direct,
-      // 頻道裡有人 @ 或回覆 bot：這批改用短等待（urgentMs，4 秒），不用等滿 debounce。
+      // 頻道裡有人 @ 或回覆 bot：這批改用短等待（urgentMs，8 秒），不用等滿 debounce。
       // 只 @ 不說話的那則不算：他補下一則時整批才升成 urgent（discord-batch.mjs 的 followsDirect）。
       // 私聊每則都算 direct；跟著 urgent 的話每則各自開回合，反而把分句拆開。
       urgent: addressedToBot && !emptyDirect,
