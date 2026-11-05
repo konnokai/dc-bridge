@@ -5174,7 +5174,18 @@ async function main() {
     try {
       const channel = await client.channels.fetch(channelId);
       if (!channel?.isTextBased?.()) return;
-      await channel.send({ content: text, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
+      // 復盤可能被模型寫爆；最多兩則，避免公告頻道被洗版。
+      const parts = splitDiscordMessage(text, cfg.discord.maxMessageChars);
+      if (parts.length > 2) {
+        const suffix = '…（內容過長，已省略）';
+        let tail = parts[1].slice(0, cfg.discord.maxMessageChars - suffix.length);
+        if (/[\uD800-\uDBFF]$/.test(tail)) tail = tail.slice(0, -1);
+        parts.length = 2;
+        parts[1] = `${tail}${suffix}`;
+      }
+      for (const part of parts) {
+        await channel.send({ content: part, allowedMentions: { parse: [] }, flags: MessageFlags.SuppressEmbeds });
+      }
     } catch (error) {
       log(`模擬股票通知失敗（${channelId}）：${error?.message ?? error}`);
     }
@@ -5415,7 +5426,7 @@ async function main() {
           } else {
             tradeDb.saveDailyReview({ date: market.date, createdAt: new Date().toISOString(), summary: publicSummary, tokens: sink.tokens });
             if (cfg.discord.trade.bot.announceChannelId) {
-              await sendTradeNotice(cfg.discord.trade.bot.announceChannelId, formatReviewNotice(market.date, publicSummary).slice(0, 1900));
+              await sendTradeNotice(cfg.discord.trade.bot.announceChannelId, formatReviewNotice(market.date, publicSummary));
             }
           }
         }
