@@ -8,6 +8,10 @@
 //    （那份是逐個對賬 DSH 0.2.1 實際工具名的權威清單）。DSH 升級後新增危險工具時，
 //    兩邊都要補；scripts/test-discord-bridge.mjs 會檢查關鍵名字還在不在。
 //    兩個 bundle 各自獨立安裝，所以這裡只能是複本，不能 import 另一包。
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 export const name = 'dc-tool-restrict'
 
 export const inject = ['tools']
@@ -95,6 +99,52 @@ const SLANG_TOOLS = [
   'mcp__slang__record_channel_tag',
 ]
 
+// 模擬股票：玩家端與 Bot 端看到的工具不一樣。Bot 只能替自己下單，玩家永遠看不到
+// bot_place_order；dc-learner 兩邊都不給。註冊期先藏，guard 再擋一次。
+const TRADE_ALL_TOOLS = [
+  'mcp__trade__get_quote',
+  'mcp__trade__place_order',
+  'mcp__trade__get_portfolio',
+  'mcp__trade__get_leaderboard',
+  'mcp__trade__get_bot_portfolio',
+  'mcp__trade__bot_place_order',
+]
+const TRADE_PLAYER_TOOLS = [
+  'mcp__trade__get_quote',
+  'mcp__trade__place_order',
+  'mcp__trade__get_portfolio',
+  'mcp__trade__get_leaderboard',
+  'mcp__trade__get_bot_portfolio',
+]
+const TRADE_BOT_TOOLS = [
+  'mcp__trade__get_quote',
+  'mcp__trade__get_bot_portfolio',
+  'mcp__trade__bot_place_order',
+]
+
+// Bot 的搜尋／抓取上限放在橋接的 config，preset 只寫硬上限。橋接啟動與改設定時把
+// 實際數字寫進 state/discord-trade-limits.json；這裡同步讀，避免 preset 與 config 各說各話。
+const MODULE_FILE = fs.realpathSync(fileURLToPath(import.meta.url))
+const LIMITS_FILE = process.env.DC_TRADE_LIMITS_FILE
+  || path.resolve(path.dirname(MODULE_FILE), '../../state/discord-trade-limits.json')
+let limitsCache = { mtime: -1, value: null }
+
+function readTradeLimits() {
+  try {
+    const stat = fs.statSync(LIMITS_FILE)
+    if (limitsCache.mtime === stat.mtimeMs) return limitsCache.value
+    const doc = JSON.parse(fs.readFileSync(LIMITS_FILE, 'utf8'))
+    const value = {
+      maxWebSearchesPerTurn: Number(doc.maxWebSearchesPerTurn),
+      maxWebFetchesPerTurn: Number(doc.maxWebFetchesPerTurn),
+    }
+    limitsCache = { mtime: stat.mtimeMs, value }
+    return value
+  } catch {
+    return null
+  }
+}
+
 const SAFE_EXACT = new Set([
   'ask_user_question', // 提問轉到 Discord
   'todo_write',        // 只維護任務列表
@@ -116,10 +166,15 @@ export function apply(ctx, config = {}) {
   const allowWebSearch = config?.allowWebSearch !== false
   const allowDiscordSend = config?.allowDiscordSend !== false
   const allowImageGen = config?.allowImageGen === true
+  const tradeMode = config?.trade === 'player' || config?.trade === 'bot' ? config.trade : 'none'
+  const allowedTrade = new Set(tradeMode === 'player' ? TRADE_PLAYER_TOOLS : (tradeMode === 'bot' ? TRADE_BOT_TOOLS : []))
+  const ceilingSearches = Number.isInteger(config?.maxWebSearchesPerTurn) ? Math.max(0, config.maxWebSearchesPerTurn) : 3
+  const ceilingFetches = Number.isInteger(config?.maxWebFetchesPerTurn) ? Math.max(0, config.maxWebFetchesPerTurn) : 2
   const denyList = [
     ...DANGEROUS,
     ...(allowWebSearch ? [] : WEB_SEARCH_TOOLS),
     ...(allowDiscordSend ? [] : [...DISCORD_TOOLS, ...SLANG_TOOLS]),
+    ...TRADE_ALL_TOOLS.filter((tool) => !allowedTrade.has(tool)),
     // 不能在這裡 restrict generate_image：preset 的 scoped 安全版和這條 restrict
     // 同屬 preset generation layer，restrict 會連安全版一起藏掉。allowImageGen
     // 時改用 guard 檢查 scoped 版的 description；沒有安全版就 fail closed。
@@ -128,6 +183,7 @@ export function apply(ctx, config = {}) {
   const exact = new Set(SAFE_EXACT)
   if (allowImageGen) exact.add('generate_image')
   if (allowDiscordSend) for (const tool of [...DISCORD_TOOLS, ...SLANG_TOOLS]) exact.add(tool)
+  for (const tool of allowedTrade) exact.add(tool)
   const failed = []
   for (const tool of denyList) {
     try {
@@ -151,9 +207,38 @@ export function apply(ctx, config = {}) {
     timer?.unref?.()
   }
 
+  // Bot 的一次性會話等於一回合：用 sessionId 計數，回合結束會話就歸檔，不需要歸零。
+  const webCounts = new Map()
+  function countWeb(agentId, kind) {
+    let counts = webCounts.get(agentId)
+    if (!counts) {
+      if (webCounts.size >= 500) webCounts.delete(webCounts.keys().next().value)
+      counts = { search: 0, fetch: 0 }
+      webCounts.set(agentId, counts)
+    }
+    counts[kind] += 1
+    return counts[kind]
+  }
+
   ctx.tools.guard((exec) => {
     const named = exec?.name
     if (typeof named !== 'string' || named.length === 0) return '工具名無效，已拒絕'
+    if (tradeMode === 'bot' && (named === 'mcp__web-search-safe__web_search' || named === 'mcp__web-search-safe__web_fetch')) {
+      const agentId = String(exec?.agent?.id ?? exec?.agentId ?? 'unknown')
+      const kind = named.endsWith('web_search') ? 'search' : 'fetch'
+      const bridgeLimits = readTradeLimits()
+      const configured = kind === 'search' ? bridgeLimits?.maxWebSearchesPerTurn : bridgeLimits?.maxWebFetchesPerTurn
+      const ceiling = kind === 'search' ? ceilingSearches : ceilingFetches
+      const limit = Number.isFinite(configured) ? Math.min(ceiling, configured) : ceiling
+      const used = countWeb(agentId, kind)
+      if (used > limit) {
+        return `這一輪最多${kind === 'search' ? '搜尋' : '抓取'} ${limit} 次，已用完；用現有資料做決定`
+      }
+    }
+    if (named.startsWith('mcp__trade__')) {
+      if (allowedTrade.has(named)) return
+      return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
+    }
     // 畫圖的參數鎖在 dc-draw-image（tools/execute）；這裡先擋一次原始參數，
     // 外掛萬一沒載入也不會變成「讀主機任一張圖／寫任意目錄」的通道。
     if (named === 'generate_image' && allowImageGen) {

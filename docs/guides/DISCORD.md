@@ -23,7 +23,7 @@ Discord 訊息 ──► src/discord-bridge.js ──► DSH Web API（127.0.0.1
 1. 執行中的 DSH Web（預設 `http://127.0.0.1:3080`），而且**跟橋接同一台機器**——橋接要用
    `~/.dsh/.credentials.yaml` 的簽名金鑰在本機鑄造 Cookie。DSH 用 `--host <LAN IP>` 啟動、只監聽
    那個網卡時，`dsh.baseUrl` 直接寫那個 IP 也可以：本機網卡 IP 同樣算「本機」。
-2. Node.js ≥ 22.13。
+2. Node.js ≥ 26.0（交易域用內建 `node:sqlite`）。
 3. 一個 Discord 應用程式與 bot token。
 4. （選用）`ffmpeg`：解析度／體積太大的圖片要靠它在本地縮小。沒裝也能跑，只是大圖會被跳過並說明原因。
 5. Discord Developer Portal → Bot → **Message Content Intent**。不開也能跑（見下方
@@ -67,8 +67,8 @@ pm2 logs dc-bridge
 
 看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
 
-> `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-learner` preset（`plugins/dc-agent-presets`）與
-> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` 三個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
+> `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
+> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` 四個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
 > profile 裡你自己加的其它 MCP。
 
 ## 設定（`config.json` 的 `discord` 段）
@@ -149,6 +149,22 @@ pm2 logs dc-bridge
 | `slang.maxCandidates` / `slang.maxConfirmed` | 詞庫上限，預設 200 / 500 |
 | `slang.learnerPreset` | 學習會話用的 preset，預設 `dc-learner`（沒有工具、短 prompt） |
 | `slang.timeoutMs` | 學習回合逾時，預設 90000 |
+| `trade.enabled` | 模擬股票開關，預設 `false`。開啟後才能查價、下單、看 `/portfolio` 與控制台「股盤」分頁；工具仍可能出現在模型清單，呼叫時會回「沒有開啟」 |
+| `trade.allowedGuilds` / `trade.allowedChannels` | 開放交易的伺服器／頻道 id；留空＝不額外限制。下單與排行榜都看這兩份名單 |
+| `trade.extraHolidays` | 額外休市日（`YYYY-MM-DD` 陣列），給颱風或臨時停市用；平日休市不會排隊下單或結算 |
+| `trade.startingCash` | 新帳戶的起始資金（NT$），預設 1000000；只在第一次建立帳戶時使用 |
+| `trade.maxOrderPct` | 單筆買入不得超過帳戶淨值的百分比，預設 30 |
+| `trade.fees.twFeeRate` / `twTaxRate` / `minFee` | 台股手續費率、證交稅率與最低手續費（元），預設 0.001425／0.003／0 |
+| `trade.settlement.twCheckMinutes` | 19:00 後每幾分鐘檢查一次收盤資料，預設 10 |
+| `trade.settlement.twSettleAfter` | 幾點後才開始結算，預設 `19:00`（等收盤價、法人與晚報齊） |
+| `trade.bot.enabled` | Bot 交易員開關，預設 `false` |
+| `trade.bot.announceChannelId` | Bot 成交／未成交公告頻道 id；留空就不公告 |
+| `trade.bot.maxTurnsPerDay` / `maxTradesPerDay` | Bot 每日決策／下單上限，預設 1／1 |
+| `trade.bot.minIntervalMin` | 兩次決策最短間隔（分鐘），預設 60 |
+| `trade.bot.maxTokensPerDay` | Bot 每日 token 上限，預設 20000 |
+| `trade.bot.maxWebSearchesPerTurn` / `maxWebFetchesPerTurn` | Bot 每回合搜尋／抓取上限，預設 3／2 |
+| `trade.bot.review.enabled` | 收盤後要不要跑當日復盤，預設 `true` |
+| `trade.bot.review.after` | 復盤幾點後開始，預設 `19:10` |
 | `console.enabled` | 是否啟動控制台，預設 `true` |
 | `console.host` | 綁定位址，預設 `127.0.0.1`。填 LAN IP（例如 `192.168.1.1`）或 `0.0.0.0` 才能從別台開 |
 | `console.port` | 控制台埠，預設 `3110` |
@@ -317,11 +333,12 @@ urgent 的批次只認叫 bot 的那個人，旁人打字不會拖慢回答；�
 | `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**；個別頻道的 `requireMentionInChannel` 優先。沒開 Message Content 意圖時不能切換（一定得 @bot） |
 | `/ask text:...` | 管理員 | 把一句話送進這個頻道對應的 DSH 會話，讓模型用它目前的上下文回答，回覆只有自己看得到。前面還有回合時會排進同一條會話佇列，不會直接拒絕；等待期間這個頻道的一般訊息排到問完才送。問題會留在會話上下文裡，之後的對話仍可能提到，這點只能靠提示詞約束。模型這一輪所有 Discord 工具都會被擋下（含讀歷史），這一輪的回答不會公開。額度與一般對話共用 |
 | `/memory` | 所有人 | 列出 bot 記下的關於自己的事（群友記憶，所有伺服器共用），回覆只有自己看得到 |
-| `/forget` | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶與觸發統計，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
+| `/forget` | 所有人 | 刪除 bot 記下的關於自己的全部事（群友記憶、觸發統計與模擬股票帳戶，所有伺服器一起刪）；不影響目前頻道的對話上下文 |
+| `/portfolio` | 所有人 | 查自己的模擬股票帳戶（現金、持股、損益、淨值、報酬率與最近訂單），回覆只有自己看得到 |
 | `/blacklist` | 所有人 | 切換自己的 `deny.self`：每次執行都會切換（不在名單 → 加入，已在名單 → 移出），立即生效並寫回 `config.json`，所有伺服器共用。加入後 bot 不回你的訊息、不按你訊息的表情；沒在叫 bot 的訊息不進批次、不學黑話、不進每日摘要，但會當成頻道背景進【最近頻道訊息】（標 `⊘`），所以對話上下文不會缺。唯一例外是 @bot 或回覆 bot 的那一則照正常流程處理（那一則 `view_message`、`user_info`、讀歷史與搜尋都看得到，跟一般訊息一樣；伺服器頻道的搜尋 API 認不出回覆對象，那邊只有 @bot 的一則認得）。`view_message` 是例外：只要知道頻道 ID 與訊息 ID，這份名單（和 `deny.users`）裡的訊息照樣讀得到，只有模型自己的不理名單會擋。別人引用你的訊息時，引用內文照常附上。在 `deny.users`（管理員封鎖）裡的人不能自己解除，會回一句請找管理員。私聊仍然全擋。只能改自己，回覆只有自己看得到。別人把你的訊息轉發出去時，轉發的內容不受這份名單影響（`deny.users`、模型不理名單、頻道白名單也一樣管不到快照裡的內容） |
 | 其他 `/` 開頭 | 管理員 | 文字原樣送給 DSH（例如 `/model`）。Discord 客戶端可能不讓你送未註冊的 `/` 指令，送不出去就改用 DSH WebUI |
 
-`/reset`、`/reload-system-prompt`、`/status`、`/invite`、`/console`、`/mention`、`/ask`、`/memory`、`/forget`、`/blacklist`
+`/reset`、`/reload-system-prompt`、`/status`、`/invite`、`/console`、`/mention`、`/ask`、`/memory`、`/forget`、`/portfolio`、`/blacklist`
 都是**已註冊的 Discord slash command**（回覆只有自己看得到）。
 只用**全域指令**（不做 per-guild 註冊，否則 `/` 選單會同時出現兩份）；代價是 Discord 端最多要等一小時才生效。
 橋接**沒有訊息指令**：`!reset`、`!forget` 這類文字一律當一般聊天送進模型。
@@ -329,16 +346,41 @@ urgent 的批次只認叫 bot 的那個人，旁人打字不會拖慢回答；�
 - **誰看得到選單**：管理指令（`/reset`、`/reload-system-prompt`、`/status`、`/invite`、`/console`、`/mention`、`/ask`）
   都是 `default_member_permissions: Administrator`（有 Administrator 權限的人看得到）。
   Discord 沒辦法把指令選單只開給某一個人，所以用權限縮小範圍。
-  這個欄位**只在伺服器裡生效**；私聊的選單每個人看得到 `/reset`、`/reload-system-prompt`、`/status`、`/forget`，能不能執行還是看下一條。
+  這個欄位**只在伺服器裡生效**；私聊的選單每個人看得到 `/reset`、`/reload-system-prompt`、`/status`、`/forget`、`/portfolio`，能不能執行還是看下一條。
 - **誰能執行**：`/reset`、`/reload-system-prompt` 認 `ownerIds`，或那個伺服器裡有 Administrator 權限的人。
   bot 開放給別人管的伺服器時，那邊的 Administrator 可以自己清掉 bot 在自己頻道的上下文，不用找 bot 擁有者。
   其他管理指令執行時只認 `ownerIds`：它們會動到所有伺服器共用的設定（`/mention`）、
   露出擁有者的後台與 token（`/console`）或額度（`/status`），伺服器管理員看得到選單也會被拒絕。
 
-> 私聊只有 `/reset`、`/reload-system-prompt`、`/status`、`/forget` 會出現；`/reset`、`/reload-system-prompt`、`/status` 只認 `ownerIds`，其他指令只在伺服器頻道。
+> 私聊只有 `/reset`、`/reload-system-prompt`、`/status`、`/forget`、`/portfolio` 會出現；`/reset`、`/reload-system-prompt`、`/status` 只認 `ownerIds`，其他指令只在伺服器頻道。
 > DSH 的斜線命令（`/model` 等）沒有 slash command 版本，只能由管理員當文字打給 bot。
 
 非管理員對 bot 打 `/` 開頭會被拒絕，不會送進模型。
+
+### 模擬股票
+
+`trade.enabled` 打開後，玩家可以跟 bot 查台股最近收盤價、排隊買賣、看自己的模擬帳戶與排行榜；
+Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
+
+- **A 模式**：盤中下單只建立 `pending` 訂單，19:00 後才用當日官方收盤價結算。查價顯示的是最近一次收盤價，
+  不是盤中即時價；回覆會標 `asOf`，不要把它當成即時報價。
+- **只有台股**：上市與上櫃的一般普通股白名單（`src/core/trade-symbols.mjs`），ETF、處置股、
+  全額交割、暫停交易都不開放。美股、匯率、金額下單、每日 snapshots、滑價是第二階段。
+- **交易資料**：`state/discord-trade.sqlite`（Node 內建 `node:sqlite`），現金、持倉、訂單、
+  現金流水與 Bot 回合都在這裡；控制台「股盤」分頁唯讀，不能改餘額或持倉。
+- **下單身分**：只有這一輪明確觸發 bot 的玩家能下單；`place_order` 的 `message` 要填 ★ 那則訊息的
+  `#編號`。自由參與、回訪、`/ask`、重連補建都不能下單。
+- **Bot**：`trade.bot.enabled` 打開後，橋接每 5 分鐘檢查一次，盤中、間隔夠、每日次數還沒用完才開一個
+  一次性會話。它只能查價、看自己的持股、讀新聞、替自己下一筆單；成交後在 `announceChannelId` 公告。
+- **當日復盤**：`trade.bot.review.enabled` 打開後，19:10 後跑一次；收盤價、法人與最近交易日的重大訊息由橋接先抓，
+  Bot 只補新聞，輸出短摘要後發到 `announceChannelId`。這一輪不能下單；資料 19:40 還缺就照跑並標查不到。
+  復盤摘要會存進 `daily_reviews`，隔天 09:00 後的第一次決策會帶入當背景。
+- **`/forget`**：會把玩家的模擬帳戶、持倉、訂單、現金流水與 `account_guilds` 一起刪除；Bot 帳戶不動。
+  每日備份最多保留 7 份，刪除前的資料仍可能留在 `state/backups/discord-trade-*.sqlite`；
+  要完全清除，備份檔也要一起刪。
+
+> 這是模擬遊戲，不連接券商、不執行真實交易。報價來源與費率設定的細節見
+> `docs/design/PLAN_STOCK.md`。
 
 ### 重載 system prompt
 

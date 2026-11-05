@@ -253,6 +253,15 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         }
         return;
       }
+      if (req.method === 'GET' && url.pathname.startsWith('/api/trade/')) {
+        const name = url.pathname.slice('/api/trade/'.length);
+        if (!handlers.trade || !['overview', 'accounts', 'orders', 'quotes', 'bot'].includes(name)) {
+          sendJson(res, 404, { error: 'not found' });
+          return;
+        }
+        sendJson(res, 200, await handlers.trade(name));
+        return;
+      }
       if (req.method === 'POST' && url.pathname === '/api/emojis/rebuild') {
         const body = await readJson(req);
         const started = await handlers.rebuildEmojis({

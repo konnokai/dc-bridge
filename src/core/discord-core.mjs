@@ -202,6 +202,7 @@ export function normalizeDiscordConfig(raw) {
       enabled: src.followup?.enabled === true,
     },
     sandbox: normalizeSandboxConfig(src.sandbox),
+    trade: normalizeTradeConfig(src.trade),
     slang: {
       // 黑話學習：從允許的頻道收集語料，學習會話產生候選，人工確認後才注入。
       // 預設關閉：會把頻道文字送去模型（成本 + 隱私），要開再開。
@@ -219,12 +220,95 @@ export function normalizeDiscordConfig(raw) {
   };
 }
 
-/** 控制台綁定位址：只擋空白/超長；IP 或 hostname 都交給 listen() 解析。 */function consoleHost(value) {
+/** 控制台綁定位址：只擋空白/超長；IP 或 hostname 都交給 listen() 解析。 */
+function consoleHost(value) {
   if (value === undefined || value === null || value === '') return '127.0.0.1';
   if (typeof value !== 'string') throw new TypeError('discord.console.host 必須是字串');
   const host = value.trim();
   if (!host || host.length > 255 || /\s/.test(host)) throw new TypeError('discord.console.host 不是合法位址');
   return host;
+}
+
+/**
+ * 模擬股票設定。
+ *
+ * 交易參數寫錯就拋，不默默套預設值：費率或起始資金錯一次，整批帳都會算錯。
+ * 第一版只做台股，所以 bot.market 只收 TW；US／alternate 是第二階段。
+ */
+function normalizeTradeConfig(raw) {
+  const src = raw ?? {};
+  if (typeof src !== 'object' || Array.isArray(src)) throw new TypeError('config.json 的 discord.trade 必須是物件');
+  const strict = (value, fallback, label, { min = 0, max = Number.MAX_SAFE_INTEGER, integer = false } = {}) => {
+    if (value === undefined || value === null) return fallback;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < min || number > max || (integer && !Number.isInteger(number))) {
+      throw new TypeError(`${label} 必須是 ${min}~${max} 的${integer ? '整數' : '數字'}：${JSON.stringify(value)}`);
+    }
+    return number;
+  };
+  const hhmm = (value, fallback, label) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim())) {
+      throw new TypeError(`${label} 必須是 HH:MM：${JSON.stringify(value)}`);
+    }
+    return value.trim();
+  };
+  for (const [label, value] of [['fees', src.fees], ['bot', src.bot], ['settlement', src.settlement], ['fx', src.fx]]) {
+    if (value !== undefined && value !== null && (typeof value !== 'object' || Array.isArray(value))) {
+      throw new TypeError(`config.json 的 discord.trade.${label} 必須是物件`);
+    }
+  }
+  const fees = src.fees ?? {};
+  const bot = src.bot ?? {};
+  const settlement = src.settlement ?? {};
+  const announceChannelId = typeof bot.announceChannelId === 'string' ? bot.announceChannelId.trim() : '';
+  if (announceChannelId && !/^\d{5,25}$/.test(announceChannelId)) {
+    throw new TypeError(`discord.trade.bot.announceChannelId 必須是 Discord 頻道 ID：${JSON.stringify(announceChannelId)}`);
+  }
+  const botMarket = typeof bot.market === 'string' && bot.market.trim() ? bot.market.trim() : 'TW';
+  if (botMarket !== 'TW') {
+    throw new TypeError(`discord.trade.bot.market 第一版只支援 TW（US／alternate 是第二階段）：${JSON.stringify(botMarket)}`);
+  }
+  return {
+    enabled: src.enabled === true,
+    allowedGuilds: idList(src.allowedGuilds, 'discord.trade.allowedGuilds'),
+    allowedChannels: idList(src.allowedChannels, 'discord.trade.allowedChannels'),
+    extraHolidays: dateList(src.extraHolidays, 'discord.trade.extraHolidays'),
+    startingCash: strict(src.startingCash, 1_000_000, 'discord.trade.startingCash', { min: 1_000, max: 1_000_000_000 }),
+    maxOrderPct: strict(src.maxOrderPct, 30, 'discord.trade.maxOrderPct', { min: 1, max: 100 }),
+    reserveBufferPct: strict(src.reserveBufferPct, 5, 'discord.trade.reserveBufferPct', { min: 0, max: 100 }),
+    fees: {
+      twFeeRate: strict(fees.twFeeRate, 0.001425, 'discord.trade.fees.twFeeRate', { min: 0, max: 0.1 }),
+      twTaxRate: strict(fees.twTaxRate, 0.003, 'discord.trade.fees.twTaxRate', { min: 0, max: 0.1 }),
+      minFee: strict(fees.minFee, 0, 'discord.trade.fees.minFee', { min: 0, max: 10_000 }),
+    },
+    slippageRate: strict(src.slippageRate, 0, 'discord.trade.slippageRate', { min: 0, max: 0.1 }),
+    fx: {
+      source: typeof src.fx?.source === 'string' ? src.fx.source.trim() : 'daily',
+      spreadRate: strict(src.fx?.spreadRate, 0.001, 'discord.trade.fx.spreadRate', { min: 0, max: 0.1 }),
+    },
+    settlement: {
+      twCheckMinutes: strict(settlement.twCheckMinutes, 10, 'discord.trade.settlement.twCheckMinutes', { min: 1, max: 120, integer: true }),
+      twSettleAfter: hhmm(settlement.twSettleAfter, '19:00', 'discord.trade.settlement.twSettleAfter'),
+    },
+    bot: {
+      enabled: bot.enabled === true,
+      market: botMarket,
+      announceChannelId,
+      preset: typeof bot.preset === 'string' && bot.preset.trim() ? bot.preset.trim() : 'dc-trader',
+      maxTurnsPerDay: strict(bot.maxTurnsPerDay, 1, 'discord.trade.bot.maxTurnsPerDay', { min: 1, max: 24, integer: true }),
+      maxTradesPerDay: strict(bot.maxTradesPerDay, 1, 'discord.trade.bot.maxTradesPerDay', { min: 1, max: 24, integer: true }),
+      minIntervalMin: strict(bot.minIntervalMin, 60, 'discord.trade.bot.minIntervalMin', { min: 1, max: 1440, integer: true }),
+      maxOutputTokens: strict(bot.maxOutputTokens, 500, 'discord.trade.bot.maxOutputTokens', { min: 100, max: 10_000, integer: true }),
+      maxTokensPerDay: strict(bot.maxTokensPerDay, 20_000, 'discord.trade.bot.maxTokensPerDay', { min: 1_000, max: 10_000_000, integer: true }),
+      maxWebSearchesPerTurn: strict(bot.maxWebSearchesPerTurn, 3, 'discord.trade.bot.maxWebSearchesPerTurn', { min: 0, max: 10, integer: true }),
+      maxWebFetchesPerTurn: strict(bot.maxWebFetchesPerTurn, 2, 'discord.trade.bot.maxWebFetchesPerTurn', { min: 0, max: 10, integer: true }),
+      review: {
+        enabled: bot.review?.enabled !== false,
+        after: hhmm(bot.review?.after, '19:10', 'discord.trade.bot.review.after'),
+      },
+    },
+  };
 }
 
 /**
@@ -243,6 +327,23 @@ function idList(value, label) {
     const id = item.trim();
     if (!/^\d{5,25}$/.test(id)) throw new TypeError(`${label} 含非法 Discord ID：${JSON.stringify(item)}`);
     return id;
+  });
+}
+
+/** config 的額外休市日：YYYY-MM-DD，颱風或臨時停市用。 */
+function dateList(value, label) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new TypeError(`${label} 必須是陣列`);
+  return value.map((item) => {
+    if (typeof item !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.trim())) {
+      throw new TypeError(`${label} 的每一項都必須是 YYYY-MM-DD 字串：${JSON.stringify(item)}`);
+    }
+    const text = item.trim();
+    const date = new Date(`${text}T00:00:00Z`);
+    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+      throw new TypeError(`${label} 含不存在的日期：${JSON.stringify(item)}`);
+    }
+    return text;
   });
 }
 
@@ -468,6 +569,12 @@ const PROGRESS_LABELS = {
   'mcp__discord__search_notes': ['📝 查頻道筆記', (args) => args.query],
   'mcp__discord__forget_note': ['🗑️ 刪頻道筆記'],
   'mcp__discord__run_script': ['🧮 跑程式', (args) => (args.language === 'node' ? 'Node' : 'Python')],
+  'mcp__trade__get_quote': ['📈 查股價', (args) => args.query],
+  'mcp__trade__place_order': ['📝 模擬下單', (args) => `${args.side === 'sell' ? '賣' : '買'} ${args.symbol} ${args.quantity} 股`],
+  'mcp__trade__get_portfolio': ['💼 查模擬持股'],
+  'mcp__trade__get_leaderboard': ['🏆 查模擬排行'],
+  'mcp__trade__get_bot_portfolio': ['🤖 查 Bot 持股'],
+  'mcp__trade__bot_place_order': ['🤖 模擬下單'],
   // 生圖要一兩分鐘，進度至少讓頻道知道在畫，不是卡住。
   'generate_image': ['🎨 畫圖'],
 };

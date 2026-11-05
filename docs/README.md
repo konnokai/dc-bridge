@@ -27,7 +27,7 @@
 
 | 目錄 | 內容 |
 | --- | --- |
-| `design/` | Discord 線的計畫與設計：`PLAN_AGENT_GAPS.md`、`PLAN_SLANG.md`、`PLAN_EMOJI.md`、`PLAN_TOKEN_DASHBOARD.md`，另有 QQ 時代的設計文件 |
+| `design/` | Discord 線的計畫與設計：`PLAN_AGENT_GAPS.md`、`PLAN_SLANG.md`、`PLAN_EMOJI.md`、`PLAN_TOKEN_DASHBOARD.md`、`PLAN_STOCK.md`，另有 QQ 時代的設計文件 |
 | `research/` | 調研記錄（SnowLuma、免打擾、表情包、本地模型選型） |
 | `audits/` | 審查與體檢報告，最新的在 `AUDIT_FIXES_2026-09-20.md` |
 | `legacy/` | 已被取代的舊報告，**不要照著做** |

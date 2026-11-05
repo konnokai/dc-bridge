@@ -30,3 +30,4 @@
             config:
               allowWebSearch: false
               allowDiscordSend: false
+              trade: none

@@ -6,7 +6,7 @@
   "description": "Bridge between Discord and the DeepSeek Harness Web API: Discord messages become DSH agent prompts, agent replies, questions and approvals go back to the same channel. The repository still carries the original QQ (SnowLuma / OneBot) bridge, but the Discord entry point (src/discord-bridge.js) does not use it.",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=26.0.0"
   },
   "scripts": {
     "start": "node src/discord-bridge.js",

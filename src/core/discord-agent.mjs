@@ -172,8 +172,8 @@ export function createAgentSender({
 
   const alive = (key, sessionId) => sessions[key] === sessionId && reverse.get(sessionId) === key;
 
-  /** 令牌 → 會話與頻道。每個工具都先過這一關。 */
-  async function resolve(token) {
+  /** 令牌 → 會話與頻道。每個工具都先過這一關。allowBot 只給 Bot 交易端點用。 */
+  async function resolve(token, { allowBot = false } = {}) {
     const given = String(token ?? '').trim();
     const sessionId = sessionForToken(given);
     // 令牌由 DSH 外掛自動帶入（plugins/dc-agent-presets/dc-session-token.mjs），
@@ -187,7 +187,13 @@ export function createAgentSender({
     // 後台提問（/ask）要獨佔這一輪：模型只能輸出文字，任何工具動作都不該公開。
     if (muted.has(key)) throw statusError('這個會話正在後台提問：這一輪所有 Discord 工具都不能用，直接輸出文字回答', 403);
     const kind = key.split(':')[0];
-    if (kind !== 'ch' && kind !== 'dm') throw statusError('會話 key 格式不對', 400);
+    if (kind !== 'ch' && kind !== 'dm' && kind !== 'bot') throw statusError('會話 key 格式不對', 400);
+    // Bot 交易員的一次性會話沒有 Discord 頻道：只有明講 allowBot 的交易端點能拿到，
+    // 其他工具一律拒絕，避免 channel:null 流進 send、記憶或沙箱 handler。
+    if (kind === 'bot') {
+      if (!allowBot) throw statusError('這個會話是背景工作，不能使用 Discord 工具', 403);
+      return { sessionId, key, kind, channel: null };
+    }
 
     const channel = await resolveChannel(key);
     if (!isAllowed(key, channel)) throw statusError(`頻道 ${key} 不在白名單內，不送出`, 403);

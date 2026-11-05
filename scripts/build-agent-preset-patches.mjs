@@ -29,7 +29,7 @@ export const REPO_ROOT = path.resolve(__dirname, '..');
  * 綁在同一個 bundle 只會讓兩邊的邊界互相牽扯。
  */
 export const PRESETS = ['qq-chat', 'qq-chat-v2'];
-export const DISCORD_PRESETS = ['dc-chat', 'dc-learner'];
+export const DISCORD_PRESETS = ['dc-chat', 'dc-learner', 'dc-trader'];
 export const ALL_PRESETS = [...PRESETS, ...DISCORD_PRESETS];
 
 /** preset 行 id：与 config.id（桥接解析的 preset 名）区分开，方便在 profile patch 里按行定位。 */

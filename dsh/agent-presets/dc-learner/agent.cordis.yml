@@ -29,3 +29,4 @@
     # web-search 與 discord 發送 MCP 工具一起移除。
     allowWebSearch: false
     allowDiscordSend: false
+    trade: none
