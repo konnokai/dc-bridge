@@ -21,6 +21,15 @@ export function isChallengePage(body) {
   return CHALLENGE_TITLES.some((pattern) => pattern.test(title));
 }
 
+// 二進位內容（影片、PDF、沒解開的壓縮流）當文字交給模型只會是亂碼。
+// 只看開頭，正常文字偶爾夾一個控制字元不算。
+export function looksBinary(body) {
+  const sample = String(body ?? '').slice(0, 2000);
+  if (!sample) return false;
+  const bad = (sample.match(/[\u0000-\u0008\u000e-\u001f\ufffd]/g) ?? []).length;
+  return bad > sample.length * 0.02;
+}
+
 /**
  * @param result safeFetch 的回傳 { url, statusCode, truncated, body }
  * @param options.expectText 這個網址原本要求純文字（例如 Google export）
@@ -55,6 +64,12 @@ export function fetchVerdict(result, { expectText = false } = {}) {
   }
   if (!body.trim()) {
     return { isError: false, text: JSON.stringify({ ...base, text: '', note: '没有正文' }, null, 2) };
+  }
+  if (looksBinary(body)) {
+    return {
+      isError: true,
+      text: `抓到的不是可读文字（编码无法识别或是二进制内容），无法解析正文（HTTP ${status || '未知'}）。需要就换来源，或直接说打不开。`,
+    };
   }
   if (!isHtml(body)) {
     return { isError: false, text: JSON.stringify({ ...base, text: body }, null, 2) };
