@@ -115,8 +115,40 @@ console.log('## 5. 當日復盤');
   ok(prompt.includes('外資 -2,160 張') && prompt.includes('投信 +371 張'), '復盤 prompt 帶法人資料');
   ok(prompt.includes('重大訊息') && prompt.includes('公告第三季財報'), '復盤 prompt 帶重大訊息');
   ok(prompt.includes('web_search'), '復盤 prompt 指示補新聞');
-  ok(prompt.includes('5~8 句'), '復盤 prompt 限制長度');
+  ok(prompt.includes('4~8 行') && prompt.includes('一行一個重點'), '復盤 prompt 要求一行一個重點');
+  ok(prompt.includes('粗體'), '復盤 prompt 要求粗體數字');
   ok(formatReviewNotice('2026-11-05', '今天小賠').startsWith('🤖 當日復盤'), '復盤公告有標題');
+
+  // 2026-11-05 實際復盤的形狀：一整段、沒有換行。
+  const blob = '今日大盤重挫，加權指數收在 41,574.72 點，下跌 1,374.19 點、跌幅約 3.2%。我這邊目前是全現金、沒有持股，所以今天損益為 NT$0.00，報酬率 0.00%。法人動向方面，外資賣超約 1,024.6 億元，投信則逆勢買超約 225 億元。';
+  const notice = formatReviewNotice('2026-11-05', blob);
+  const body = notice.split('\n').slice(1);
+  ok(body.length === 3, '一整段復盤拆成一句一行');
+  ok(body[0].includes('**41,574.72 點**') && body[0].includes('**3.2%**'), '點數與百分比用粗體');
+  ok(body[1]?.includes('**NT$0.00**') === true, '金額用粗體');
+  ok(!notice.includes('****'), '粗體標記不會疊在一起');
+  ok(notice.replace(/\*\*/g, '').replace(/\n/g, '') === `🤖 當日復盤（2026-11-05）${blob}`, '拆行與加粗沒有增刪文字');
+
+  const kept = formatReviewNotice('2026-11-05', '**今日損益**：NT$0.00\n**持股**：目前全現金\n- 2330 台積電：**+1,425 元**');
+  ok(kept === '🤖 當日復盤（2026-11-05）\n**今日損益**：NT$0.00\n**持股**：目前全現金\n- 2330 台積電：**+1,425 元**', '模型已經用粗體時原樣保留');
+
+  // 行首是 ** 或負數時，不能被當成清單記號而整行不拆。
+  const boldStart = '**今日損益**：NT$0.00，報酬率 0.00%。今日大盤重挫，加權指數收在 41,574.72 點。法人動向方面，外資賣超約 1,024.6 億元。';
+  const boldStartNotice = formatReviewNotice('2026-11-05', boldStart);
+  ok(boldStartNotice.split('\n').length === 4, '行首是 ** 的整段還是會拆句');
+
+  const negative = '-1,374 點，大盤收在 41,574.72 點。法人賣超 1,024.6 億元。投信買超 225 億元。';
+  const negativeNotice = formatReviewNotice('2026-11-05', negative);
+  ok(negativeNotice.split('\n').length === 4, '行首是負數的整段會拆句');
+  ok(negativeNotice.includes('**-1,374 點**'), '負數開頭的數字會加粗');
+
+  const quoted = '有人說「今天跌 3%。」然後市場繼續走弱，外資賣超約 1,024.6 億元。投信買超 225 億元。大盤收在 41,574.72 點。';
+  const quotedNotice = formatReviewNotice('2026-11-05', quoted);
+  ok(quotedNotice.split('\n').every((line) => !line.startsWith('」')), '拆句不會把引號丟到下一行');
+
+  const repeated = '外資狂賣！！！投信也賣。大盤跌破 42K，收在 41,574.72 點。';
+  const repeatedNotice = formatReviewNotice('2026-11-05', repeated);
+  ok(repeatedNotice.split('\n').every((line) => !/^[。！？]+$/.test(line)), '重複標點不會拆出只有標點的行');
 }
 
 console.log(failures ? `\n❌ ${failures} 項失敗` : '\n✅ 全部通過');
