@@ -64,6 +64,7 @@ const DISCORD_TOOLS = [
   'mcp__discord__send_message',
   'mcp__discord__send_image',
   'mcp__discord__send_prts_artwork',
+  'mcp__discord__get_prts_artwork',
   'mcp__discord__send_sticker',
   'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction',
@@ -274,8 +275,16 @@ export function apply(ctx, config = {}) {
       return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
     }
     if (named.startsWith('mcp__prts__')) {
-      if (allowPrts && exact.has(named)) return
-      return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
+      if (!allowPrts || !exact.has(named)) return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
+      // operator_artwork 的 large 在 prts-mcp 3.2.3 有 1 MiB 硬上限，超過就整張失敗；
+      // 要看 1024px 走橋接的 get_prts_artwork（同一張圖，不受 container 上限影響）。
+      if (named === 'mcp__prts__operator_artwork') {
+        const args = exec?.arguments ?? {}
+        if (args.action === 'get' && args.variant !== 'preview') {
+          return 'operator_artwork 的 large 會被上游 1MB 上限擋掉；要看 1024px 立繪用 mcp__discord__get_prts_artwork，要生圖參考直接在 generate_image 填 prts:<幹員>/<檔名>'
+        }
+      }
+      return
     }
     // 畫圖的參數鎖在 dc-draw-image（tools/execute）；這裡先擋一次原始參數，
     // 外掛萬一沒載入也不會變成「讀主機任一張圖／寫任意目錄」的通道。

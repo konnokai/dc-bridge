@@ -1968,15 +1968,38 @@ async function main() {
       enabled: cfg.discord.media.enabled,
     }),
     // PRTS 立繪參考圖：外掛用檔名向橋接要 large（1024px）圖片；公開資料，不需要會話。
+    // get_prts_artwork 走 MCP 的 snake_case（artwork_id），外掛走 camelCase（artworkId）；
+    // 沒給 variant 時也要 large。貼圖走 /prtsArtwork，預設仍是 preview。
     prtsImage: async (body) => {
-      const art = await resolvePrtsArtwork({ artworkId: body?.artworkId, variant: body?.variant });
+      const art = await resolvePrtsArtwork({
+        artworkId: body?.artworkId ?? body?.artwork_id,
+        variant: body?.variant ?? 'large',
+        proxyUrl: cfg.discord.prts?.proxyUrl,
+        proxyToken: cfg.discord.prts?.proxyToken,
+      });
+      let data = art.buffer.toString('base64');
+      let mimeType = art.mimeType;
+      let name = art.name;
+      let note = '';
+      // 模型看圖走跟 Discord 附件同一套縮圖（maxModelBytes／maxLongEdge）；
+      // 生圖參考（dc-draw-image）不帶 forModel，拿原檔給 Codex。
+      if (body?.forModel === true) {
+        const prepared = await prepareMediaBlock(art.buffer, art.name, cfg.discord.media);
+        if (prepared.error) throw toolError(`立繪太大，模型看不了：${prepared.error}`, 413);
+        data = prepared.block.data;
+        mimeType = prepared.block.mediaType;
+        name = prepared.block.name ?? art.name;
+        note = prepared.note ?? '';
+      }
       return {
-        data: art.buffer.toString('base64'),
-        mimeType: art.mimeType,
-        name: art.name,
+        data,
+        mimeType,
+        name,
+        variant: art.variant,
         width: art.width,
         height: art.height,
         url: art.url,
+        note,
       };
     },
     // PRTS 立繪貼圖：橋接抓圖、存進圖片目錄，再走一般送出流程（安靜／補句／重複拒絕照樣管）。
@@ -1990,7 +2013,12 @@ async function main() {
       if (turnFollowupHeld.has(key)) {
         return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
       }
-      const art = await resolvePrtsArtwork({ artworkId: body?.artwork_id, variant: body?.variant });
+      const art = await resolvePrtsArtwork({
+        artworkId: body?.artwork_id,
+        variant: body?.variant,
+        proxyUrl: cfg.discord.prts?.proxyUrl,
+        proxyToken: cfg.discord.prts?.proxyToken,
+      });
       fs.mkdirSync(AGENT_IMAGE_DIR, { recursive: true });
       const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[art.mimeType] ?? 'png';
       const name = `prts-${randomUUID()}.${ext}`;

@@ -1,0 +1,14 @@
+{
+  "name": "prts-artwork-cache",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "r2_buckets": [
+    {
+      "binding": "PRTS_CACHE",
+      "bucket_name": "prts-artwork-cache"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

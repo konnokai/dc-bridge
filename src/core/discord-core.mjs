@@ -137,6 +137,11 @@ export function normalizeDiscordConfig(raw) {
       // 影片只抽前面這麼多秒的畫面：後面再多也只是白解碼。6 格最多蓋住 120 秒（fps 下限）。
       maxVideoSeconds: clamp(src.media?.maxVideoSeconds, 60, 5, 120),
     },
+    // 選用：Cloudflare Worker + R2 的 PRTS 圖片快取。留空就直連。
+    prts: {
+      proxyUrl: typeof src.prts?.proxyUrl === 'string' ? src.prts.proxyUrl.trim() : '',
+      proxyToken: typeof src.prts?.proxyToken === 'string' ? src.prts.proxyToken.trim() : '',
+    },
     videoLinks: {
       // 群友貼 YouTube 這類連結時，view_message 用 yt-dlp 取直連網址再抽格。預設關閉：
       // 多一支外部程式、一次外部請求，而且 yt-dlp 沒更新就會整條失效。
@@ -555,6 +560,7 @@ const PROGRESS_LABELS = {
   'mcp__web-search-safe__web_search': ['🔍 搜尋', (args) => args.query],
   'mcp__web-search-safe__web_fetch': ['🌐 讀取網頁', (args) => { try { return new URL(args.url).host; } catch { return ''; } }],
   'mcp__discord__send_prts_artwork': ['🖼️ 送立繪', (args) => args.artwork_id],
+  'mcp__discord__get_prts_artwork': ['🖼️ 看立繪', (args) => args.artwork_id],
   'mcp__discord__read_history': ['📜 翻聊天紀錄'],
   'mcp__discord__search_history': ['🔎 搜尋聊天紀錄', (args) => args.query],
   'mcp__discord__view_message': ['🔎 看一則訊息'],

@@ -139,7 +139,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'send_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
@@ -154,6 +154,10 @@ console.log('## 1. 設定收斂');
   ok(cfg.allowAllWhenEmpty === false, '白名單空時預設全擋（fail-closed）');
   ok(cfg.requireMentionInGuild === true, '頻道預設要 @bot');
   ok(Object.keys(cfg.requireMentionInChannel).length === 0, '單頻道覆寫預設空');
+  ok(cfg.prts.proxyUrl === '' && cfg.prts.proxyToken === '', 'PRTS proxy 預設關閉');
+  const prtsProxy = normalizeDiscordConfig({ prts: { proxyUrl: ' https://proxy.example ', proxyToken: ' secret ' } });
+  ok(prtsProxy.prts.proxyUrl === 'https://proxy.example' && prtsProxy.prts.proxyToken === 'secret',
+    'PRTS proxy 設定會 trim');
   const override = normalizeDiscordConfig({
     requireMentionInChannel: { '111111111111111111': true, '222222222222222222': false },
   });
@@ -3102,6 +3106,11 @@ console.log('## 7e. Discord MCP 發送工具');
         res.end(JSON.stringify({ error: '會話令牌不對' }));
         return;
       }
+      if (req.url === '/prtsImage' && !parsed.artwork_id && !parsed.artworkId) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: '缺少 artwork_id' }));
+        return;
+      }
       received.push({ url: req.url, ...parsed });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
@@ -3110,6 +3119,12 @@ console.log('## 7e. Discord MCP 發送工具');
         text: `來自 ${req.url}`,
         ...(req.url === '/user' ? { avatar: { data: 'iVBORw0KGgo=', mimeType: 'image/png' } } : {}),
         ...(req.url === '/view' ? { images: [{ data: 'AAAA', mimeType: 'image/png' }, { data: 'BBBB', mimeType: 'image/jpeg' }] } : {}),
+        ...(req.url === '/prtsImage' ? {
+          data: 'iVBORw0KGgo=',
+          mimeType: 'image/png',
+          name: parsed.artwork_id ?? parsed.artworkId,
+          variant: parsed.variant ?? 'large',
+        } : {}),
         ...(['/send', '/poll', '/prtsArtwork'].includes(req.url) ? { refs: ['k7f3ab'] } : {}),
       }));
     });
@@ -3159,6 +3174,10 @@ console.log('## 7e. Discord MCP 發送工具');
       && !sendPrtsTool.inputSchema?.required?.includes('token')
       && !sendPrtsTool.inputSchema?.required?.includes('variant')
       && !sendPrtsTool.inputSchema?.required?.includes('content'), 'send_prts_artwork：artwork_id 必填，token／variant／content 可省略');
+    const getPrtsTool = tools.find((t) => t.name === 'get_prts_artwork');
+    ok(getPrtsTool.inputSchema?.required?.includes('artwork_id')
+      && !getPrtsTool.inputSchema?.required?.includes('token')
+      && !getPrtsTool.inputSchema?.required?.includes('variant'), 'get_prts_artwork：artwork_id 必填，token／variant 可省略');
     const result = await client.callTool({
       name: 'send_message',
       arguments: { token: 't', content: '嗨', reply_to: '#k7f3ab' },
@@ -3177,6 +3196,16 @@ console.log('## 7e. Discord MCP 發送工具');
       && received.at(-1)?.file === 'exec-1.png'
       && received.at(-1)?.content === '畫好了', 'send_image 打到 /send 並帶 file 與 content');
     ok(String(imageResult.content?.[0]?.text).includes('#k7f3ab'), 'send_image 的結果帶送出那則的 #編號');
+    const prtsResult = await client.callTool({
+      name: 'get_prts_artwork',
+      arguments: { token: 't', artwork_id: '立绘_阿米娅_1.png' },
+    });
+    ok(prtsResult.isError !== true
+      && received.at(-1)?.url === '/prtsImage'
+      && received.at(-1)?.artwork_id === '立绘_阿米娅_1.png'
+      && received.at(-1)?.forModel === true, 'get_prts_artwork 打到 /prtsImage 並標記 forModel');
+    ok(prtsResult.content?.some((item) => item.type === 'image' && item.mimeType === 'image/png'),
+      'get_prts_artwork 把 1024px 圖回給模型');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
       send_prts_artwork: ['/prtsArtwork', { artwork_id: '立绘_阿米娅_1.png', variant: 'preview' }],
