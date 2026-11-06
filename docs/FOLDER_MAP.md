@@ -39,6 +39,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-slang.mjs` | 黑話收集與注入 |
 | `core/discord-emoji.mjs` | 表情目錄與使用次數 |
 | `core/discord-media.mjs` | 圖片與連結預覽、`send_image` 的本機生圖檔案解析 |
+| `core/prts-artwork.mjs` | PRTS 立繪解析：MediaWiki 網址、檔名驗證、preview／large 下載 |
 | `core/discord-gif.mjs` | GIPHY 搜尋（不落地、只留 https 的 giphy.com 媒體網址） |
 | `core/discord-security.mjs` | 白名單、敏感詞 |
 | `core/discord-usage.mjs` | 用量統計 |

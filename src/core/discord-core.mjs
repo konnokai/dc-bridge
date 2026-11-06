@@ -554,6 +554,7 @@ const PROGRESS_SILENT = new Set([
 const PROGRESS_LABELS = {
   'mcp__web-search-safe__web_search': ['🔍 搜尋', (args) => args.query],
   'mcp__web-search-safe__web_fetch': ['🌐 讀取網頁', (args) => { try { return new URL(args.url).host; } catch { return ''; } }],
+  'mcp__discord__send_prts_artwork': ['🖼️ 送立繪', (args) => args.artwork_id],
   'mcp__discord__read_history': ['📜 翻聊天紀錄'],
   'mcp__discord__search_history': ['🔎 搜尋聊天紀錄', (args) => args.query],
   'mcp__discord__view_message': ['🔎 看一則訊息'],

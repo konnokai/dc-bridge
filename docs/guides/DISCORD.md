@@ -68,8 +68,12 @@ pm2 logs dc-bridge
 看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
 
 > `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
-> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` 四個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
+> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
 > profile 裡你自己加的其它 MCP。
+>
+> `mcp-prts` 由 `npx` 拉起外部套件，第一次會下載約 600MB（原生 binary＋離線資料）。用跑 DSH 的同一個使用者先跑一次
+> `PRTS_TRANSPORT=stdio npx -y --package=prts-mcp@3.2.3 prts-mcp --help` 預熱；npx 快取在該使用者的
+> `~/.npm/_npx`，換使用者要重跑。沒預熱時 DSH 的 60 秒初始化逾時會讓它這次沒有工具。
 
 ## 設定（`config.json` 的 `discord` 段）
 
@@ -955,6 +959,11 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道。
   `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖；
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
+- `mcp__discord__send_prts_artwork`（`artwork_id`、`variant`／`content`／`reply_to` 可省略）：把 PRTS 官方立繪送進頻道。
+  `artwork_id` 填 `mcp__prts__operator_artwork` 的 `action=list` 回傳檔名；`variant` 預設 `preview`（256px），
+  要清楚一點用 `large`（1024px）。圖由橋接從 `prts.wiki` 抓、暫存到 `state/discord-images` 後送出，
+  送出失敗（例如沒有 Attach Files 權限）時會回直連網址，模型可以改用 `send_message` 貼連結；PRTS 抓不到就只回錯誤。
+  佔「一輪 5 則」的名額，不計入畫圖次數
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
 - `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
   （送出時橋接記下的，每個頻道最近 200 則，橋接重啟就清空）；進度、壓縮提示、審批、提問、錯誤、指令回覆這些橋接自己發的不能改。
@@ -1069,18 +1078,28 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   Google Docs／Slides／Sheets 的 `/edit`、`/view` 會自動改寫成 `export?format=txt`／`csv`（公開文件才有效；私人文件回登入頁時明確說打不開）。
   HTML 會抽 `og:title`／`og:description`／`<title>` 與可見文字；只有標題、沒有正文時明講「只有標題」。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
+- `mcp__prts__*`（24 個，全部唯讀）：明日方舟 PRTS Wiki 與遊戲資料。`search_prts` 找詞條、`get_operator_basic_info`
+  查幹員（`action=basic`／`skills`／`stats`）、`list_stages`／`get_stage_info` 查關卡、`search` 查
+  operators／enemies／stages／items／skills、`read_story`／`get_story_summary` 查劇情。
+  幹員名要填遊戲內的簡體中文（`阿米娅`、`凯尔希`），填繁體會回「未找到干员」並提示正確名稱。
+  `operator_artwork` 用 `action=list` 拿立繪檔名（純文字，很便宜）；`action=get` 會把圖送進模型
+  （`preview` 256px 約 41KB、`large` 1024px 約 276KB）。貼圖用 `mcp__discord__send_prts_artwork`，
+  生圖參考用 `generate_image` 的 `inputImage: prts:<幹員>/<檔名>`；參考固定抓 `large`。
 - `mcp__discord__run_script`（`language`、`code`、`stdin` 可省略）：在一次性 Docker 容器裡跑一小段
   Python 或 Node（沒有網路、沒有主機檔案），回 stdout／stderr。預設關閉，只有 `sandbox.channels`
   裡的頻道能用；同一回合最多一次。詳細邊界見「執行程式」。
 - `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖或拿設定圖改圖。
   `prompt` 必填；畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
   多個角色用逗號串起來（`self,claude`，最多 4 個）；要用群友貼的圖當參考時填 `"ref:#編號/張數"`
-  （例如 `"self,ref:#k7f3ab/1"`）；不指定角色就不要填。參數由 `dc-draw-image` 鎖死（見「畫圖」）
+  （例如 `"self,ref:#k7f3ab/1"`）；要用 PRTS 立繪當參考時填 `"prts:阿米娅/立绘_阿米娅_1.png"`
+  （最多 2 張 PRTS 立繪，檔名先用 `operator_artwork` 的 `action=list` 拿，參考固定抓 `large`）；不指定角色就不要填。
+  參數由 `dc-draw-image` 鎖死（見「畫圖」）
 - `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 
 `mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__slang__*` 來自 `src/mcp-slang.js`，
-`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，三個都由
+`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__prts__*` 來自 npm 套件
+`prts-mcp@3.2.3`（`npx` 拉起的 Rust 原生 server，釘版本）。五個 MCP 都由
 `node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
@@ -1263,24 +1282,32 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
    改成對他的訊息按 ❌（第 1 次仍會回一句）。次數算在回覆對象上：有 `reply_to` 就用那一則的作者，
    沒有就算這一輪直接叫 bot 的最新一則。❌ 走模型自己的 reaction 額度（一輪 3 個），用完就照常送文字。
    判斷的是 persona 的固定拒絕句
-   （「這題我不碰，換一個」「這個不聊」「我只會當大肥魚」）；改 persona 時要同步
+   （「這題我不碰，換一個」「這個不聊」「這個我不寫」「這個我不畫」「我只會當大肥魚」）；改 persona 時要同步
    `src/core/discord-ignore.mjs` 的 `REFUSAL_LINES`。
+9. **第三方 MCP 以同一個使用者執行**：`mcp-prts`（`prts-mcp@3.2.3`）是外部 npm 套件，以跑 DSH 的 `jun`
+   身分執行，讀得到 `config.json`、`state/discord-agent.json` 與 `~/.dsh`。版本釘死，但沒有 uid／容器隔離；
+   要更嚴格的隔離得另外用獨立使用者或容器跑。開圖片後它也會下載更多遠端內容。
 
 ## 已知限制
 
 - 圖片附件（png/jpeg/webp/gif）與影片（mp4/webm/mov）會轉成 base64 送進模型；圖片超過
   `media.maxLongEdge` 或 `media.maxModelBytes` 時先用 ffmpeg 縮小，縮不動才跳過並告訴模型「附件未提供」。
   下載只認 `cdn.discordapp.com` / `media.discordapp.net` / `images-ext-*`，不跟隨轉址。
+- **PRTS 立繪是即時抓的**：`send_prts_artwork` 與 `prts:` 參考都會連 `prts.wiki`／`media.prts.wiki`；
+  preview 約 1~2 秒、large 約 1 秒（實測），沒有磁碟快取，同一張重複抓會再連一次。
+  送出失敗（例如沒有 Attach Files 權限）時才回直連網址；PRTS 抓不到就只回錯誤。
+  只認 `prts.wiki`／`media.prts.wiki`，轉址的每一跳也會檢查網域。
 - **語音訊息與音檔聽不到**：沒有 ASR，`audio/*` 一律不進模型；只 @bot 時回一句請對方打字。
 - **影片只看前 60 秒、只有畫面沒有聲音**：超過 `media.maxVideoSeconds` 的部分不看；要描述對話內容做不到。
   長影片、大檔案（超過 `media.maxBytes`，預設 20MB）會被跳過並回一句原因。
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 29 個，唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 31 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
-  `mcp__web-search-safe__web_search` / `web_fetch`。`dc-learner` 把這些 Discord 與黑話工具全部拿掉。
+  `mcp__web-search-safe__web_search` / `web_fetch` 與 24 個 `mcp__prts__*`（明日方舟資料）。
+  `dc-learner` 把這些 Discord 與黑話工具全部拿掉；`dc-learner` 與 `dc-trader` 也看不到 PRTS 工具。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - **畫圖要 1~3 分鐘**，而且吃 Codex 額度；生圖在背景跑，不卡會話。橋接重啟不影響（外掛最多等 3 分鐘），
   DSH 重啟時還沒完成的工作會消失（橋接約 2~3 分鐘沒收到進度會送一則【生圖失敗】）。
