@@ -107,7 +107,7 @@ pm2 logs dc-bridge
 | `media.maxCount` | 一則訊息與整批各最多處理幾張，預設 4（1 ~ 8）；影片抽格後算 1 張 |
 | `media.timeoutMs` | 單張縮圖／影片抽格的 ffmpeg 逾時，預設 25000 |
 | `media.maxVideoSeconds` | 影片只看前面幾秒，預設 60（5 ~ 120；6 格抽樣的上限就是 120 秒） |
-| `videoLinks.enabled` | 群友貼 YouTube 這類連結時，`view_message` 用 yt-dlp 抽幾格畫面，預設 `false` |
+| `videoLinks.enabled` | 群友貼 YouTube 這類連結時，`view_message` 用 yt-dlp 附字幕逐字稿、標題章節並抽幾格畫面，預設 `false` |
 | `videoLinks.ytDlpPath` | yt-dlp 的位置；留空就用 `YTDLP_PATH` 環境變數或 PATH 裡的 `yt-dlp` |
 | `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則）；有人用 `/blacklist` 退出後，下一批會再帶一次，把他們的訊息補進來 |
 | `context.messages` | 抓幾則，預設 12（0 = 關閉，上限 50） |
@@ -979,9 +979,17 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   因為批次 prompt 不讀 bot 訊息，這些預覽只有在 `view_message` 看得到；
   修復 bot 的訊息本文（換過網域的完整網址）也會一起列出
 - `view_message` 的影片連結：訊息文字裡有白名單連結（YouTube、`m.youtube.com`、`youtu.be`、`music.youtube.com`、`youtube-nocookie.com`）
-  且 `videoLinks.enabled`（而且 `media.enabled` 沒關）時，橋接用 `yt-dlp -g` 取**直連串流網址**（360p，拼圖一格才 240px 寬），再用同一套 ffmpeg 抽 6 格拼圖，
-  不會把整支影片下載下來。抽格窗口跟影片附件一樣（`media.maxVideoSeconds`）。
-  yt-dlp 失敗（私人影片、會員限定、地區鎖、直播、沒裝）只多一行「影片連結看不了：原因」，其它內容照回。
+  且 `videoLinks.enabled` 時，橋接跑**一次** yt-dlp（`--skip-download --write-subs --write-auto-subs --print ... --no-simulate`）：
+  取字幕檔（VTT）、標題、長度、章節、簡介，以及**直連串流網址**（360p，拼圖一格才 240px 寬），再用同一套 ffmpeg 抽 6 格拼圖。
+  字幕與影片資訊是文字，不受 `media.enabled` 與圖片名額限制；只有抽格受這兩個條件管。不會把整支影片下載下來；
+  抽格窗口跟影片附件一樣（`media.maxVideoSeconds`）。
+  `--print` 用欄位子集語法，缺章節的影片不會印出 `NA` 讓整份 JSON 壞掉；`--ignore-config` 擋掉使用者設定檔的 `-P`，
+  `-I 1` 讓純清單網址只處理第一支，`--ignore-no-formats-error` 讓抽格選不到格式時字幕仍拿得到。
+  字幕會去掉時間軸與標籤、把 YouTube 自動字幕的滾動重複句只留一次，語言偏好依序 `zh-TW` → `zh-Hant` → `zh-CN` → `zh-Hans` → `en`（逗號分隔才會照這個順序下載），
+  結果放在「影片字幕」這一行，每行縮排避免偽造橋接的結構行，超過 12000 字只取前段並註明。有人問「影片在講什麼」時直接用這段文字回答，不用再說看不到內容。
+  章節排成「00:00 標題；02:05 標題」當大綱，連同標題、簡介一起回；抓不到字幕時仍有這些與畫面可參考，並會明說看不到逐字內容。
+  部分字幕被 YouTube 429 擋下時退出碼不是 0，但已寫出的字幕照用，不影響其它內容。
+  yt-dlp 整支失敗（私人影片、會員限定、地區鎖、直播、沒裝）只多一行「影片連結看不了：原因」，其它內容照回。
   白名單是防 SSRF：yt-dlp 會連原站，不能讓群友丟任何網址就讓伺服器去抓。抓 YouTube 違反其服務條款，要不要開由管理員決定；
   預設關閉，而且 yt-dlp 要自己定期更新，沒更新就會整條失效。
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。

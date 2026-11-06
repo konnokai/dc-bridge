@@ -169,7 +169,7 @@ import {
   stickerLabel,
   viewMediaItems,
 } from './core/discord-media.mjs';
-import { fetchStreamUrl, videoLinks } from './core/discord-video-link.mjs';
+import { fetchVideoLink, formatChapters, formatVideoTime, videoLinks } from './core/discord-video-link.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
@@ -2500,11 +2500,9 @@ async function main() {
         ...settled.map((r, i) => (r.status === 'rejected' ? `${flat(media.accepted[i].name, 60)}（${flat(r.reason?.message ?? r.reason, 80)}）` : '')).filter(Boolean),
       ];
 
-      // 群友貼的影片連結（YouTube 等）：按需用 yt-dlp 取直連網址，跟附件同一套抽格。
-      // 只在這則訊息真的有白名單連結、media 沒關、而且還有圖片名額時才跑；失敗只多一行原因。
-      const linkUrl = cfg.discord.videoLinks.enabled && cfg.discord.media.enabled && images.length < cfg.discord.media.maxCount
-        ? videoLinks(targetParts.text)[0]
-        : '';
+      // 群友貼的影片連結（YouTube 等）：一次 yt-dlp 取字幕文字、標題／章節與直連網址，再跟附件同一套抽格。
+      // 字幕與影片資訊是文字，不受 media 開關與圖片名額限制；只有抽格受這兩個條件管。
+      const linkUrl = cfg.discord.videoLinks.enabled ? videoLinks(targetParts.text)[0] : '';
       if (linkUrl) {
         // 整個工具呼叫有 60 秒上限（mcp-discord 的逾時）；花光的話連前面那些文字都會被丟掉。
         // 所以 yt-dlp 與 ffmpeg 共用剩下的預算，不夠就放棄這次連結，保住其餘結果。
@@ -2512,19 +2510,36 @@ async function main() {
         if (55_000 - (Date.now() - viewStart) < 12_000) {
           lines.push('影片連結這次沒看：前面的內容已經花掉大部分時間，要看就再呼叫一次 view_message。');
         } else {
-          const stream = await fetchStreamUrl(linkUrl, {
+          const video = await fetchVideoLink(linkUrl, {
             ytDlpPath: cfg.discord.videoLinks.ytDlpPath,
-            timeoutMs: Math.min(20_000, budget()),
+            timeoutMs: Math.min(25_000, budget()),
           }).catch((error) => ({ ok: false, reason: error?.message ?? String(error) }));
-          if (!stream.ok) {
-            lines.push(`影片連結看不了：${flat(stream.reason, 120)}`);
+          if (!video.ok) {
+            lines.push(`影片連結看不了：${flat(video.reason, 120)}`);
           } else {
-            const sheet = await prepareVideoUrlBlock(stream.url, cfg.discord.media, { timeoutMs: budget(), deadline: viewStart + 55_000 });
-            if (sheet.block) {
-              images.push({ data: sheet.block.data, mimeType: sheet.block.mediaType });
-              if (sheet.note) videoNotes.push(sheet.note);
+            if (video.title || video.duration) {
+              lines.push(`影片標題：${flat(video.title, 200) || '（沒有標題）'}${video.duration ? `（${formatVideoTime(video.duration)}）` : ''}`);
+            }
+            const chapters = formatChapters(video.chapters);
+            if (chapters) lines.push(`影片章節：${flat(chapters, 1000)}`);
+            if (video.description) lines.push(`影片簡介：${flat(video.description, 500)}`);
+            if (video.transcript) {
+              // 每行縮排：字幕是外部內容，不能讓它偽造橋接自己的「生圖參考」「附上 N 張圖」這種行首結構。
+              const body = defang(video.transcript).replace(/\n/g, '\n  ');
+              lines.push(`影片字幕（${flat(video.transcriptLang, 20) || '不明語系'}${video.transcriptTruncated ? '，只取前段' : ''}，用這段文字回答影片在講什麼）：\n${body}\n（影片字幕結束）`);
             } else {
-              lines.push(`影片連結看不了：${flat(sheet.error, 120)}`);
+              lines.push('影片字幕：抓不到（影片可能沒有字幕，或 YouTube 擋下自動字幕）；請用上面的標題、章節與畫面回答，並明說看不到逐字內容。');
+            }
+            if (!video.url) {
+              lines.push('影片連結看不了畫面：yt-dlp 沒給出直連網址。');
+            } else if (cfg.discord.media.enabled && images.length < cfg.discord.media.maxCount) {
+              const sheet = await prepareVideoUrlBlock(video.url, cfg.discord.media, { timeoutMs: budget(), deadline: viewStart + 55_000 });
+              if (sheet.block) {
+                images.push({ data: sheet.block.data, mimeType: sheet.block.mediaType });
+                if (sheet.note) videoNotes.push(sheet.note);
+              } else {
+                lines.push(`影片連結看不了畫面：${flat(sheet.error, 120)}`);
+              }
             }
           }
         }

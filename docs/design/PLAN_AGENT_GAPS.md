@@ -404,11 +404,20 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 
 **延伸：影片連結（yt-dlp，2026-10-29，同一支分支）**
 - `view_message` 遇到訊息裡的 YouTube 白名單連結（`youtube.com`、`youtu.be`、`music.youtube.com`、`youtube-nocookie.com`）
-  且 `videoLinks.enabled` 時，用 `yt-dlp -g` 取**直連串流網址**（不落地整支片），交給同一套 ffmpeg 抽格。
+  且 `videoLinks.enabled` 時，用 yt-dlp 取**直連串流網址**（不落地整支片），交給同一套 ffmpeg 抽格。
 - 白名單是防 SSRF；yt-dlp 的 stdout/stderr 寫檔案（受限沙箱 pipe 會 EPERM）。失敗只多一行「影片連結看不了」。
 - `videoLinks.enabled` 預設 `false`，`videoLinks.ytDlpPath` 留空就用 `YTDLP_PATH` 或 PATH。
 - 測試伺服器實測：yt-dlp 2026.10.21、`-g` 約 2 秒、ffmpeg 7.1.3 讀 googlevideo 的 AV1 串流 60 秒窗抽格成功（736×282 JPEG）。
-  還沒開、還沒部署。
+
+**延伸：影片字幕（開發回饋 `df_mw4ids1l351981`，2026-11-06）**
+- 問題：群友貼 24 分鐘對談影片問「裡面講什麼」，`view_message` 只給前 60 秒 6 格畫格，沒有聲音也沒有文字，模型讀不到談話內容。
+- 改成一次 yt-dlp（`--skip-download --write-subs --write-auto-subs --print ... --no-simulate --ignore-config -I 1 --ignore-no-formats-error`）同時拿字幕 VTT、標題／長度／章節／簡介與直連網址；
+  `--print` 自帶 `--simulate`（不寫檔），要 `--no-simulate` 字幕才會落地，再用 `--skip-download` 擋掉影片本身。
+  `--print` 必須用欄位子集 `%(.{...})j`：逐欄位寫 `%(chapters)j` 時，沒有章節的影片會印成 `"chapters":NA`，整份 JSON 失效，連畫格都跟著不見。
+- VTT 去掉時間軸與標籤、連續重複句只留一次（YouTube 自動字幕會回帶上一句）；偏好繁中→簡中→英文，逐字稿上限 12000 字、每行縮排避免偽造結構行。
+  章節排成可讀大綱，抓不到字幕時仍回標題／章節／簡介與畫面。字幕與影片資訊不受 `media.enabled`／圖片名額限制，只有抽格受限。
+- 實測 yt-dlp 2026.10.26：單次約 7 秒、同時寫出 `zh-TW`／`zh-CN`／`en` 字幕與 3KB 的 `--print` JSON；
+  部分字幕 429 時退出碼 1，但已寫出的檔照用。還沒部署。
 
 ### K：常用表情（低優先，可以不做）
 
