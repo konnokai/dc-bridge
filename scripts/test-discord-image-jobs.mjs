@@ -8,6 +8,7 @@ import {
   IMAGE_JOB_STALE_MS,
   IMAGE_JOB_STALE_TEXT,
   IMAGE_JOB_TTL_MS,
+  cancelImageJobs,
   createImageJobHandler,
   drawUsersForFile,
   loadImageJobs,
@@ -92,6 +93,30 @@ const emptyTextAlive = await handler({ phase: 'poll', sessionId: 's1', jobId: 'j
 ok(emptyTextAlive.cancel === false, '沒有通知文字被拒絕後工作還在，外掛可以重試');
 await rejects(handler({ phase: 'start', sessionId: 'gone', jobId: 'j4' }), 403, '會話已經結束就拒絕');
 await rejects(handler({ phase: 'bogus', sessionId: 's1', jobId: 'j5' }), 400, 'phase 不認得就拒絕');
+
+// 取消生圖：只刪這個會話的工作；外掛下一次 poll 拿到 cancel，逾時掃描不會再送失敗通知。
+{
+  const cancelJobs = new Map([
+    ['c1', { key: 'ch:1', users: [], at: 1000 }],
+    ['c2', { key: 'ch:2', users: [], at: 1000 }],
+  ]);
+  const canceled = cancelImageJobs({ jobs: cancelJobs, key: 'ch:1' });
+  ok(canceled.join() === 'c1' && !cancelJobs.has('c1') && cancelJobs.has('c2'),
+    '取消只刪這個會話的生圖工作');
+  ok(cancelImageJobs({ jobs: cancelJobs, key: 'ch:1' }).length === 0, '沒有工作時取消回空');
+}
+await handler({ phase: 'start', sessionId: 's1', jobId: 'cancel-me' });
+const canceledIds = cancelImageJobs({ jobs, key: 'ch:1' });
+const canceledPoll = await handler({ phase: 'poll', sessionId: 's1', jobId: 'cancel-me' });
+ok(canceledIds.includes('cancel-me') && canceledPoll.cancel === true, '取消後 poll 回 cancel');
+{
+  const beforeDone = enqueued.length;
+  await rejects(handler({ phase: 'done', sessionId: 's1', jobId: 'cancel-me', file: 'cancel.png', text: '【生圖完成】' }),
+    404, '取消後才完成的 done 回 404');
+  ok(enqueued.length === beforeDone && !pendingDraws.has('cancel.png'), '取消後完成的通知不排進會話，也不記畫圖歸屬');
+  ok(sweepStaleImageJobs({ jobs, now: () => clock + IMAGE_JOB_STALE_MS + 1 }).length === 0,
+    '取消後逾時掃描不會送假的失敗通知');
+}
 
 // done 重送第二次拿到 404，不會重複排進會話；重試才不會送兩張圖。
 await handler({ phase: 'start', sessionId: 's1', jobId: 'dup' });

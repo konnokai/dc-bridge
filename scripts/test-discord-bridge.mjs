@@ -139,7 +139,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
@@ -696,6 +696,7 @@ console.log('## 7c. 畫圖參數鎖');
   ok(registered?.parameters?.required?.[0] === 'prompt' && typeof registered?.execute === 'function', 'scoped 工具有 prompt 與 execute');
   ok(registered?.isConcurrencySafe?.() === false, 'scoped 工具標成不可並行（避免兩個頻道撿到對方的圖）');
   ok(registered?.description?.includes('shell and file writes disabled'), 'scoped 工具描述帶安全標記（守衛用它判斷）');
+  ok(registered?.parameters?.properties?.animated?.type === 'boolean', 'scoped 工具有 animated 參數（要求 GIF）');
   {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-quota-'));
     const file = path.join(dir, 'quota.json');
@@ -740,6 +741,23 @@ console.log('## 7c. 畫圖參數鎖');
   ok(draw.CODEX_SANDBOX === 'read-only', 'Codex 用 read-only 沙箱');
   ok(draw.CODEX_EXTRA_ARGS.join(' ') === '--disable shell_tool --disable unified_exec --disable view_image --ignore-user-config --ignore-rules --ephemeral',
     'Codex 關掉 shell、unified_exec、view_image，並忽略使用者設定/rules、用 ephemeral session');
+  ok(draw.hasGifFeature('image_generation                         stable             true\nimage_generation_animation               under development  false\n'),
+    'features list 有 image_generation_animation 才認得 GIF');
+  ok(draw.hasGifFeature('\u001b[32mimage_generation_animation\u001b[0m under development false\n'),
+    'features list 帶 ANSI 色碼也認得 GIF');
+  ok(!draw.hasGifFeature('image_generation                         stable             true\n'),
+    '沒有 image_generation_animation 就當不支援 GIF');
+  let featureCalls = 0;
+  ok(draw.codexSupportsGif('fake-codex-gif', {
+    spawnSyncImpl: () => {
+      featureCalls += 1;
+      return { status: 0, stdout: 'image_generation_animation               under development  false\n' };
+    },
+  }) === true && featureCalls === 1, 'codexSupportsGif 讀 features list');
+  ok(draw.codexSupportsGif('fake-codex-gif', { spawnSyncImpl: () => { throw new Error('不該再問一次'); } }) === true,
+    'codexSupportsGif 問過就快取');
+  ok(draw.codexSupportsGif('fake-codex-no-gif', { spawnSyncImpl: () => ({ status: 1, stdout: '' }) }) === false,
+    'features list 失敗時當不支援');
   const codexOpts = draw.codexOptions({ prompt: 'a cat', inputImage: null, signal: 'sig' });
   ok(codexOpts.sandbox === 'read-only'
     && codexOpts.workdir === path.join(REPO_ROOT, 'state', 'discord-imagegen-work')
@@ -755,6 +773,12 @@ console.log('## 7c. 畫圖參數鎖');
   ok(fs.existsSync(exec.arguments.inputImage), '角色設定圖真的存在');
   ok(/canonical character sheet/.test(exec.arguments.prompt), '畫自己時 prompt 補上設定圖說明');
   ok(/follow the sheet/.test(exec.arguments.prompt), '單角色也要求外觀衝突時依設定圖');
+  ok(!/animated GIF/.test(exec.arguments.prompt), '一般生圖不會被補成 GIF');
+  const animated = { name: 'generate_image', arguments: { prompt: 'a cat waving', animated: true } };
+  await listener(animated, async () => {});
+  ok(animated.arguments.animated === true, 'animated:true 傳到 scoped 工具');
+  ok(/animated GIF/.test(animated.arguments.prompt), 'animated:true 補上 GIF 指示');
+  ok(animated.arguments.outputDir === draw.IMAGE_DIR, 'GIF 的 outputDir 一樣鎖在 state/discord-images');
   const duo = { name: 'generate_image', arguments: { prompt: 'draw both', inputImage: 'self,claude' } };
   await listener(duo, async () => {});
   const duoRefs = duo.arguments.inputImage.split(',');
@@ -895,9 +919,11 @@ const multi = await tool.execute({ prompt: 'multi', inputImage: multiRefs.join('
   .then(() => 'ok', () => 'rejected');
 const bad = await tool.execute({ prompt: 'x', inputImage: ${JSON.stringify(path.join(REPO_ROOT, 'assets', 'ai-chan-sheets', 'README.md'))} }, { agent: { id: 'sess-bad' } })
   .then(() => 'ok', () => 'rejected');
+const gif = await tool.execute({ prompt: 'x', animated: true }, { agent: { id: 'sess-gif' } })
+  .then(() => 'ok', (error) => error.message);
 await new Promise((resolve) => setTimeout(resolve, 200));
 const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
-console.log(JSON.stringify({ ...fake.stats(), multi, bad, statuses: started.map((result) => result.status) }));
+console.log(JSON.stringify({ ...fake.stats(), multi, bad, gif, statuses: started.map((result) => result.status) }));
 `;
     const run = await runAsync(script, {
       DC_AI_CODEX_MODULE: fakeModule, FAKE_IMAGE_FILE: fakeImage, DC_AGENT_FILE: bridge.file,
@@ -917,10 +943,14 @@ console.log(JSON.stringify({ ...fake.stats(), multi, bad, statuses: started.map(
       '成功時回報圖片路徑');
     ok(failed[0]?.text.startsWith('【生圖失敗】'), '失敗時回報失敗原因');
     ok(stats?.bad === 'rejected', 'execute 只接受 manifest 裡的設定圖（README 也不行）');
+    ok(String(stats?.gif).includes('還沒支援 GIF') && stats?.calls?.length === 3
+      && reports.filter((report) => report.phase === 'start').length === 3,
+      'Codex 不支援 GIF 時，animated:true 直接拒絕，不會 spawn 也不會回報 start');
     ok(stats?.calls?.[0]?.sandbox === 'read-only'
       && stats?.calls?.[0]?.extraArgs?.includes('shell_tool')
+      && !stats?.calls?.[0]?.extraArgs?.includes('--enable')
       && String(stats?.calls?.[0]?.workdir).endsWith(path.join('state', 'discord-imagegen-work')),
-      'execute 真的把唯讀、關 shell、安全 workdir 傳給 Codex');
+      'execute 真的把唯讀、關 shell、安全 workdir 傳給 Codex，靜態生圖不加 --enable');
     const multiArgs = stats?.calls?.[2]?.extraArgs ?? [];
     const expectedArgs = [
       '-i', fs.realpathSync(draw.characterImage(draw.resolveCharacter('claude'))),
@@ -3196,6 +3226,14 @@ console.log('## 7e. Discord MCP 發送工具');
       && received.at(-1)?.file === 'exec-1.png'
       && received.at(-1)?.content === '畫好了', 'send_image 打到 /send 並帶 file 與 content');
     ok(String(imageResult.content?.[0]?.text).includes('#k7f3ab'), 'send_image 的結果帶送出那則的 #編號');
+    const cancelResult = await client.callTool({
+      name: 'cancel_image',
+      arguments: { token: 't' },
+    });
+    ok(cancelResult.isError !== true
+      && received.at(-1)?.url === '/cancelImage'
+      && received.at(-1)?.token === 't', 'cancel_image 打到 /cancelImage');
+    ok(String(cancelResult.content?.[0]?.text).includes('已取消'), 'cancel_image 回已取消');
     const prtsResult = await client.callTool({
       name: 'get_prts_artwork',
       arguments: { token: 't', artwork_id: '立绘_阿米娅_1.png' },
@@ -3743,11 +3781,15 @@ console.log('## 8. 附件（圖片與影片）');
     const genDir = path.join(parent, 'generated');
     fs.mkdirSync(genDir);
     fs.writeFileSync(path.join(genDir, 'exec-1.png'), makePng(8, 8));
+    const gifBytes = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    fs.writeFileSync(path.join(genDir, 'exec-2.gif'), gifBytes);
     fs.writeFileSync(path.join(parent, 'secret.png'), makePng(8, 8));
     const found = resolveGeneratedImage(genDir, '/home/jun/dc-bridge/state/discord-images/exec-1.png');
     ok(found.path === path.join(genDir, 'exec-1.png') && found.name === 'exec-1.png' && Buffer.isBuffer(found.buffer),
       '完整 path 只取檔名，不信任模型給的目錄');
     ok(resolveGeneratedImage(genDir, 'exec-1.png').path === path.join(genDir, 'exec-1.png'), '只給檔名也可以');
+    const foundGif = resolveGeneratedImage(genDir, 'exec-2.gif');
+    ok(foundGif.name === 'exec-2.gif' && foundGif.buffer.equals(gifBytes), 'GIF 圖片可以送');
     throws(() => resolveGeneratedImage(genDir, '../secret.png'), /找不到/, '上層目錄的圖不給送');
     throws(() => resolveGeneratedImage(genDir, 'nope.png'), /找不到/, '找不到的檔名回清楚原因');
     fs.writeFileSync(path.join(genDir, 'fake.png'), 'not an image');

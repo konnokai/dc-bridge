@@ -185,6 +185,7 @@ import { createAgentSendHandler } from './core/discord-send-handler.mjs';
 import {
   IMAGE_JOB_STALE_TEXT,
   IMAGE_JOB_TTL_MS,
+  cancelImageJobs,
   createImageJobHandler,
   drawUsersForFile,
   loadImageJobs,
@@ -1948,6 +1949,16 @@ async function main() {
   }
 
   const agentHandlers = {
+    // 模型自己取消生圖：使用者說「不要畫了」或發現參數填錯時用。
+    // 直接刪掉工作，外掛下一次 poll 會拿到 cancel 並中止 Codex；逾時掃描也不會再送失敗通知。
+    cancelImage: async (body) => {
+      const { key } = await agentSender.resolve(body.token);
+      const canceled = cancelImageJobs({ jobs: imageJobs, key });
+      if (canceled.length === 0) throw toolError('目前沒有正在跑或排隊中的生圖', 404);
+      persistImageJobs();
+      log(`取消生圖 ${key}：${canceled.length} 個工作`);
+      return { canceled: canceled.length };
+    },
     // 每次回報（含 poll 續命）後存檔；存檔失敗只寫 log，不能讓回報變成 5xx。
     imageJob: async (body) => {
       try {

@@ -63,6 +63,7 @@ const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-sa
 const DISCORD_TOOLS = [
   'mcp__discord__send_message',
   'mcp__discord__send_image',
+  'mcp__discord__cancel_image',
   'mcp__discord__send_prts_artwork',
   'mcp__discord__get_prts_artwork',
   'mcp__discord__send_sticker',

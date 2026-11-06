@@ -52,7 +52,7 @@
 Discord 的 `dc-chat` 多了一个 `generate_image`，但它**不是**把 `dsh-generate-image` 的全局工具直接放给模型：
 
 - `plugins/dc-agent-presets/dc-draw-image.mjs` 注册一个同名的 **scoped** `generate_image`，盖掉 profile 里的全局版本。
-- scoped 工具调用 Codex 时用 `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（没有 write 规则；`image_gen` 的存图走 `LOCAL_FS`，不需要 profile 写入权）；同时加 `--disable shell_tool --disable unified_exec --disable view_image`。工作目录是 `state/discord-imagegen-work`，不是 DSH 的安装目录。
+- scoped 工具调用 Codex 时用 `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（没有 write 规则；`image_gen` 的存图走 `LOCAL_FS`，不需要 profile 写入权）；同时加 `--disable shell_tool --disable unified_exec --disable view_image`。工作目录是 `state/discord-imagegen-work`，不是 DSH 的安装目录。GIF 只在 Codex 的 `features list` 有 `image_generation_animation` 时才加 `--enable`；没有这个 feature（例如 0.167）时 `animated` 直接拒绝，不会 spawn Codex。
 - 模型只能传角色代号（`self`、`gpt`…）、或 `ref:#编号/张数`（用户贴在频道里的附件）；`outputDir` 由外挂固定到 `state/discord-images`。
 - `/imageRef` 用 `x-agent-token` + `sessionId` 认身分：`sessionId` 必须还是这个频道的活动会话，`#编号` 只查得到本频道登记过的消息；别的服务器、私聊、已删除的消息一律拿不到。图片字节经 `fetchDiscordMedia`（白名单 host、大小上限）与 `prepareMediaBlock`（缩图）后才回传，插件写成单次生图专用的暂存档，工作结束就删。
 - prompt 里出现 URL、绝对路径、`../`、`.dsh`、`credentials.yaml`、`discord-agent.json` 或明显的指令字样时直接拒绝。

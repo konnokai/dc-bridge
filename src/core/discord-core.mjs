@@ -584,6 +584,7 @@ const PROGRESS_LABELS = {
   'mcp__trade__bot_place_order': ['🤖 模擬下單'],
   // 生圖要一兩分鐘，進度至少讓頻道知道在畫，不是卡住。
   'generate_image': ['🎨 畫圖'],
+  'mcp__discord__cancel_image': ['🛑 取消生圖'],
 };
 
 /** 一次工具呼叫在 Discord 進度訊息裡的那一行；不用列的回 null。args 是 DSH 事件裡的 JSON 字串。 */
