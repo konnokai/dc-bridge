@@ -139,7 +139,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
@@ -605,6 +605,18 @@ console.log('## 7. dc-chat preset 與守衛');
       '參考圖編號夾路徑要擋');
     ok(typeof imageGuard(imageExec({ inputImage: 'ref:#k7f3ab/1,ref:#k7f3ab/2,ref:#k7f3ab/3' })) === 'string',
       '使用者參考圖最多 2 張');
+    ok(imageGuard(imageExec({ inputImage: 'prts:阿米娅/立绘_阿米娅_1.png' })) === undefined,
+      'PRTS 立繪參考放行');
+    ok(imageGuard(imageExec({ inputImage: 'self,prts:阿米娅/立绘_阿米娅_1.png' })) === undefined,
+      '角色代號和 PRTS 立繪可以混用');
+    ok(imageGuard(imageExec({ inputImage: 'prts:立绘_阿米娅_1.png' })) === undefined,
+      'PRTS 立繪可以省略幹員名');
+    ok(typeof imageGuard(imageExec({ inputImage: 'prts:../secret.png' })) === 'string',
+      'PRTS 參考夾路徑要擋');
+    ok(typeof imageGuard(imageExec({ inputImage: 'prts:阿米娅/立绘_阿米娅_1.exe' })) === 'string',
+      'PRTS 參考只收圖片');
+    ok(typeof imageGuard(imageExec({ inputImage: 'prts:a/x.png,prts:b/y.png,prts:c/z.png' })) === 'string',
+      'PRTS 參考最多 2 張');
     ok(typeof imageGuard(imageExec({ outputDir: '/tmp/x' })) === 'string',
       '守衛自己就擋自填 outputDir');
     ok(typeof imageGuard({ name: 'write' }) === 'string', '開畫圖不放寬其他本機工具');
@@ -663,6 +675,12 @@ console.log('## 7c. 畫圖參數鎖');
   const drawPath = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-draw-image.mjs');
   const draw = await import(pathToFileURL(drawPath).href);
   ok(draw.name === 'dc-draw-image', '畫圖外掛導出 name');
+  assert.deepEqual(draw.parsePrtsRef('prts:阿米娅/立绘_阿米娅_1.png'),
+    { operator: '阿米娅', artworkId: '立绘_阿米娅_1.png' }, 'PRTS 參考圖帶幹員名可解析');
+  assert.deepEqual(draw.parsePrtsRef('prts:立绘_阿米娅_1.png'),
+    { operator: '', artworkId: '立绘_阿米娅_1.png' }, 'PRTS 參考圖可省略幹員名');
+  assert.equal(draw.parsePrtsRef('prts:../secret.png'), null, 'PRTS 參考圖夾路徑不認');
+  assert.equal(draw.parsePrtsRef('self'), null, '角色代號不是 PRTS 參考圖');
   let listener;
   let registered = null;
   draw.apply({
@@ -795,6 +813,15 @@ console.log('## 7c. 畫圖參數鎖');
           res.end(good
             ? JSON.stringify({ ok: true, name: 'ref.png', mimeType: 'image/png', data: refPng })
             : '{"error":"no such ref"}');
+          return;
+        }
+        // PRTS 立繪參考圖：只有這張固定的立繪回圖。
+        if (req.url === '/prtsImage') {
+          const good = Boolean(refPng) && body?.artworkId === '立绘_阿米娅_1.png' && body?.variant === 'large';
+          res.writeHead(good ? 200 : 404, { 'content-type': 'application/json' });
+          res.end(good
+            ? JSON.stringify({ ok: true, name: '立绘_阿米娅_1.png', mimeType: 'image/png', data: refPng, url: 'https://media.prts.wiki/x.png' })
+            : '{"error":"no such artwork"}');
           return;
         }
         if (body) reports.push(body);
@@ -949,6 +976,7 @@ const run = async (args) => {
 const solo = await run({ prompt: 'add a party hat', inputImage: 'ref:#abc123/1' });
 const mixed = await run({ prompt: 'draw us together', inputImage: 'self,ref:#abc123/1' });
 const reversed = await run({ prompt: 'draw us together', inputImage: 'ref:#abc123/1,self' });
+const prts = await run({ prompt: 'draw amiya', inputImage: 'prts:阿米娅/立绘_阿米娅_1.png' });
 const missing = await run({ prompt: 'x', inputImage: 'ref:#nope/1' });
 const tooMany = await run({ prompt: 'x', inputImage: 'ref:#abc123/1,ref:#abc123/1,ref:#abc123/1' });
 // 直接在 REF_DIR 根目錄放一個檔案：形狀不對，execute 自己就要擋。
@@ -960,7 +988,7 @@ fs.rmSync(strayPath, { force: true });
 await new Promise((resolve) => setTimeout(resolve, 400));
 const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
 const leftover = fs.existsSync(${JSON.stringify(refRoot)}) ? fs.readdirSync(${JSON.stringify(refRoot)}) : [];
-console.log(JSON.stringify({ solo, mixed, reversed, missing, tooMany, stray, stats: fake.stats(), leftover }));
+console.log(JSON.stringify({ solo, mixed, reversed, prts, missing, tooMany, stray, stats: fake.stats(), leftover }));
 `;
     const run = await runAsync(script, {
       DC_AI_CODEX_MODULE: fakeModule,
@@ -971,9 +999,13 @@ console.log(JSON.stringify({ solo, mixed, reversed, missing, tooMany, stray, sta
     await bridge.close();
     let result = null;
     try { result = JSON.parse(run.stdout.trim()); } catch {}
-    const { solo, mixed, reversed, missing, tooMany, stray, stats, leftover } = result ?? {};
+    const { solo, mixed, reversed, prts, missing, tooMany, stray, stats, leftover } = result ?? {};
     ok(run.status === 0 && solo?.ok && mixed?.ok && reversed?.ok,
       `使用者參考圖會向橋接要圖並開始生圖${run.status === 0 ? '' : `（${(run.stderr ?? '').slice(0, 200)}）`}`);
+    ok(prts?.ok && typeof prts.args?.inputImage === 'string' && prts.args.inputImage.startsWith(refRoot),
+      'PRTS 立繪換成這次工作的暫存檔路徑');
+    ok(/official PRTS artwork of 阿米娅/.test(prts?.args?.prompt ?? ''),
+      'PRTS 立繪的 prompt 有參考說明');
     ok(typeof solo?.args?.inputImage === 'string' && solo.args.inputImage.startsWith(refRoot),
       'ref:#編號/張數 換成這次工作的暫存檔路徑');
     ok(/the picture the user supplied/.test(solo?.args?.prompt ?? ''),
@@ -992,7 +1024,7 @@ console.log(JSON.stringify({ solo, mixed, reversed, missing, tooMany, stray, sta
       '順序反過來也照模型給的排');
     ok(/image 1 = the picture the user supplied/.test(reversed?.args?.prompt ?? ''),
       '順序反過來時 image 1 就是使用者的圖');
-    ok(stats?.calls?.length === 3 && stats.calls.every((call) => call.exists),
+    ok(stats?.calls?.length === 4 && stats.calls.every((call) => call.exists),
       '每個工作開跑時參考圖都還在');
     ok(stats?.calls?.[1]?.refArgs?.length === 1 && stats.calls[1].refArgsExist === 1,
       '第二張之後的參考圖走 -i，而且檔案真的存在');
@@ -1471,6 +1503,9 @@ console.log('## 7c1. MCP /send 統計');
   await send({ token: 't', content: '再一張', file: 'b.png' });
   ok(store.users[userId].count === 1 && store.users[userId].drawCount === 2,
     '同一輪兩張圖只加一次對話、畫圖加兩次');
+  await send({ token: 't', content: '立繪', file: 'prts.png' }, { draw: false });
+  ok(store.users[userId].count === 1 && store.users[userId].drawCount === 2,
+    '送 PRTS 立繪不加畫圖次數');
   await send({ token: 't', content: 'fail' }).then(() => { throw new Error('should fail'); }, () => {});
   ok(store.users[userId].count === 1 && store.users[userId].drawCount === 2,
     '送出失敗不記對話也不記畫圖');
@@ -1478,7 +1513,7 @@ console.log('## 7c1. MCP /send 統計');
   await send({ token: 't', content: '畫好了', file: 'c.png' });
   ok(store.users[userId].count === 1 && store.users[userId].drawCount === 3 && pendingDraws.size === 0,
     '背景生圖完成後才送圖，用檔名對應的觸發者補記畫圖');
-  ok(botMessages === 4, '只有成功送出才記 bot 發言');
+  ok(botMessages === 5, '只有成功送出才記 bot 發言');
   ok(dirty === 4, '統計有變更才標記存檔');
   ok(sent[1].file === '/tmp/state/discord-images/a.png' && sent[1].replyTo === '' && sent[1].sticker === '',
     '/send 的參數原樣傳給 agentSender');
@@ -1489,10 +1524,20 @@ console.log('## 7c2. 不理名單與重複拒絕');
   ok(isRefusalMessage('這題我不碰，換一個'), '認得「這題我不碰，換一個」');
   ok(isRefusalMessage('  這個不聊。'), '認得加了空白與句號的固定拒絕句');
   ok(isRefusalMessage('這題不回'), '認得「這題不回」');
+  ok(isRefusalMessage('這個我不寫。'), '認得「這個我不寫」');
+  ok(isRefusalMessage('這個我不畫。'), '認得「這個我不畫」');
   ok(isRefusalMessage('這個不聊 😅'), '句尾帶 emoji 也認得');
   ok(isRefusalMessage('我只會當大肥魚 :kekw:'), '句尾帶伺服器表情也認得');
   ok(!isRefusalMessage('這題我不碰，換一個話題聊別的'), '有額外內容就不算固定拒絕句');
   ok(!isRefusalMessage('這個不聊了我要去吃飯'), '一般聊天不算拒絕句');
+  ok(!isRefusalMessage('這個我不寫，換成虛構角色可以'), '拒絕句後面加料就不算固定拒絕句');
+
+  // persona 的固定拒絕句要跟橋接的清單同步；只改一邊會讓重複拒絕失效。
+  const persona = fs.readFileSync(new URL('../dsh/agent-presets/dc-chat/agent.cordis.yml', import.meta.url), 'utf8');
+  for (const line of ['這題我不碰，換一個', '這個不聊', '這個我不寫', '這個我不畫', '我只會當大肥魚']) {
+    ok(persona.includes(`「${line}」`), `persona 有固定拒絕句「${line}」`);
+    ok(isRefusalMessage(line), `橋接認得固定拒絕句「${line}」`);
+  }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-ignore-'));
   const file = path.join(dir, 'discord-ignore.json');
@@ -3065,7 +3110,7 @@ console.log('## 7e. Discord MCP 發送工具');
         text: `來自 ${req.url}`,
         ...(req.url === '/user' ? { avatar: { data: 'iVBORw0KGgo=', mimeType: 'image/png' } } : {}),
         ...(req.url === '/view' ? { images: [{ data: 'AAAA', mimeType: 'image/png' }, { data: 'BBBB', mimeType: 'image/jpeg' }] } : {}),
-        ...(['/send', '/poll'].includes(req.url) ? { refs: ['k7f3ab'] } : {}),
+        ...(['/send', '/poll', '/prtsArtwork'].includes(req.url) ? { refs: ['k7f3ab'] } : {}),
       }));
     });
   });
@@ -3109,6 +3154,11 @@ console.log('## 7e. Discord MCP 發送工具');
       && !sendImageTool.inputSchema?.required?.includes('token')
       && !sendImageTool.inputSchema?.required?.includes('content')
       && !sendImageTool.inputSchema?.required?.includes('reply_to'), 'send_image：file 必填，token／content／reply_to 可省略');
+    const sendPrtsTool = tools.find((t) => t.name === 'send_prts_artwork');
+    ok(sendPrtsTool.inputSchema?.required?.includes('artwork_id')
+      && !sendPrtsTool.inputSchema?.required?.includes('token')
+      && !sendPrtsTool.inputSchema?.required?.includes('variant')
+      && !sendPrtsTool.inputSchema?.required?.includes('content'), 'send_prts_artwork：artwork_id 必填，token／variant／content 可省略');
     const result = await client.callTool({
       name: 'send_message',
       arguments: { token: 't', content: '嗨', reply_to: '#k7f3ab' },
@@ -3129,6 +3179,7 @@ console.log('## 7e. Discord MCP 發送工具');
     ok(String(imageResult.content?.[0]?.text).includes('#k7f3ab'), 'send_image 的結果帶送出那則的 #編號');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
+      send_prts_artwork: ['/prtsArtwork', { artwork_id: '立绘_阿米娅_1.png', variant: 'preview' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
       set_quiet: ['/quiet', { minutes: 30 }],

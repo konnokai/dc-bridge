@@ -126,6 +126,21 @@ tool(
 );
 
 tool(
+  'send_prts_artwork',
+  '把 PRTS 官方立繪送進目前的 Discord 會話。artwork_id 先用 mcp__prts__operator_artwork 的 action=list 取得；variant 預設 preview（256px），要清楚一點用 large（1024px）。',
+  {
+    token: sessionToken,
+    artwork_id: z.string().describe('operator_artwork action=list 回傳的立繪檔名（例如 立绘_阿米娅_1.png）'),
+    variant: z.enum(['preview', 'large']).optional().describe('preview = 256px（預設），large = 1024px'),
+    content: z.string().optional().describe('跟圖片一起送的文字，可省略'),
+    reply_to: messageRef('要回覆的那則訊息').optional(),
+  },
+  '/prtsArtwork',
+  (result) => sentDetail(result, '送出立繪'),
+  120_000,
+);
+
+tool(
   'send_sticker',
   '送一張這個伺服器的貼圖（名稱先用 search_stickers 查）。私聊與別的伺服器的貼圖送不了。',
   {

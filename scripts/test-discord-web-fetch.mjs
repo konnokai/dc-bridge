@@ -23,6 +23,14 @@ test('callers without the allowlist keep the old behaviour', async () => {
   await validateFetchUrl('https://1.1.1.1:8443/');
 });
 
+test('allowHosts rejects other hosts before DNS', async () => {
+  await validateFetchUrl('https://1.1.1.1/', { ...WEB_FETCH_OPTS, allowHosts: ['1.1.1.1'] });
+  await assert.rejects(
+    validateFetchUrl('https://1.1.1.1/', { ...WEB_FETCH_OPTS, allowHosts: ['prts.wiki'] }),
+    /仅允许 prts\.wiki/,
+  );
+});
+
 /** 假 transport：不開 socket，只回一份固定回應。 */
 function mockTransport(t, script) {
   const request = (options, callback) => {

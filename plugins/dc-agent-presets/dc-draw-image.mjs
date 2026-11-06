@@ -197,6 +197,17 @@ const MAX_USER_REFERENCES = 2
 const REF_SEPARATOR = /[,，]/
 // 群友貼的圖：ref:#k7f3ab/1。實際格式由橋接的 parseDrawRef 驗，這裡只認字首。
 const REF_TOKEN = /^ref:(.+)$/i
+// PRTS 立繪：prts:<幹員>/<檔名> 或 prts:<檔名>；檔名由 operator_artwork action=list 提供。
+const PRTS_TOKEN = /^prts:(?:([^\s/\\:：]{1,40})\/)?([^/\\:：]{1,160}\.(?:png|jpe?g|webp))$/i
+const MAX_PRTS_REFERENCES = 2
+
+/** 解析 `prts:<幹員>/<檔名>`；不認得回 null。 */
+export function parsePrtsRef(value) {
+  const match = PRTS_TOKEN.exec(String(value ?? '').trim())
+  if (!match) return null
+  if (match[1]?.includes('..') || match[2].includes('..')) return null
+  return { operator: String(match[1] ?? '').trim(), artworkId: match[2] }
+}
 
 /** 模型用逗號把角色代號串起來（`self,claude`）；單一角色也走這裡。 */
 function splitReferences(value) {
@@ -230,10 +241,17 @@ function referenceNote(plan) {
       + 'Draw a single new illustration. Keep each character\'s face, hair, outfit, colors, and distinctive accessories consistent with its own sheet. '
       + 'If the prompt describes any character differently, follow that character\'s sheet.'
   }
-  // 群友的圖：每張一行寫清楚保留什麼、忽略什麼，再要求不要把兩個人的特徵混在一起。
-  const lines = plan.map((entry, index) => (entry.kind === 'character'
-    ? `image ${index + 1} = ${entry.character.promptName}: canonical character sheet; keep that character's face, hair, outfit, colors, and distinctive accessories consistent with it, and do not reproduce the sheet layout.`
-    : `image ${index + 1} = the picture the user supplied: keep its subject's identity, face, hair, outfit, and pose; ignore its background, lighting, and photo style.`))
+  // 群友的圖與 PRTS 立繪：每張一行寫清楚保留什麼、忽略什麼，再要求不要把特徵混在一起。
+  const lines = plan.map((entry, index) => {
+    if (entry.kind === 'character') {
+      return `image ${index + 1} = ${entry.character.promptName}: canonical character sheet; keep that character's face, hair, outfit, colors, and distinctive accessories consistent with it, and do not reproduce the sheet layout.`
+    }
+    if (entry.kind === 'prts') {
+      const who = entry.operator ? ` of ${entry.operator}` : ''
+      return `image ${index + 1} = official PRTS artwork${who}: use it only as a design reference for the character's face, hair, outfit, colors, and distinctive accessories; do not reproduce its background, text, UI, or composition.`
+    }
+    return `image ${index + 1} = the picture the user supplied: keep its subject's identity, face, hair, outfit, and pose; ignore its background, lighting, and photo style.`
+  })
   return `\n\nThe attached images are references, one line each:\n${lines.join('\n')}\n`
     + 'These are separate subjects: do not merge their features or swap their clothes or hair. '
     + 'Draw them together in one scene unless the prompt says otherwise. '
@@ -312,6 +330,34 @@ async function fetchUserReference(raw, dir, sessionId) {
   const file = path.join(dir, `ref-${randomUUID()}.${REF_EXT[body.mimeType] ?? 'jpg'}`)
   fs.writeFileSync(file, Buffer.from(body.data, 'base64'), { mode: 0o600 })
   return file
+}
+
+/**
+ * PRTS 立繪：外掛向橋接要 large（1024px）版本，寫成這次工作的暫存檔。
+ * 256px 的 preview 當參考會掉太多細節，所以這裡固定 large；貼圖才用 preview。
+ */
+async function fetchPrtsReference(parsed, dir) {
+  const { operator, artworkId } = parsed
+  const endpoint = readAgentEndpoint()
+  if (!endpoint?.url || !endpoint?.token) throw new Error('讀不到橋接端點，拿不到 PRTS 立繪：回報管理員')
+  let res
+  try {
+    res = await fetch(`${endpoint.url}/prtsImage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-agent-token': endpoint.token },
+      body: JSON.stringify({ artworkId, variant: 'large' }),
+      signal: AbortSignal.timeout(60_000),
+    })
+  } catch (error) {
+    throw new Error(`連不上橋接，拿不到 PRTS 立繪：${error?.message ?? error}`)
+  }
+  let body = null
+  try { body = await res.json() } catch { body = null }
+  if (!res.ok) throw new Error(body?.error || `拿不到 PRTS 立繪（HTTP ${res.status}）`)
+  if (!body?.data) throw new Error('橋接沒有回傳 PRTS 立繪')
+  const file = path.join(dir, `ref-${randomUUID()}.${REF_EXT[body.mimeType] ?? 'png'}`)
+  fs.writeFileSync(file, Buffer.from(body.data, 'base64'), { mode: 0o600 })
+  return { path: file, operator, artworkId }
 }
 
 // Codex 的引擎用「$CODEX_HOME/generated_images 前後快照」找新圖；兩個頻道同時
@@ -512,7 +558,7 @@ export function apply(ctx) {
 
     const rawRef = args.inputImage
     const refs = splitReferences(rawRef)
-    const hint = 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen）或 ref:#編號/張數，不要填路徑'
+    const hint = 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen）、ref:#編號/張數，或 prts:<幹員>/<立繪檔名>，不要填路徑'
     if (rawRef !== undefined && rawRef !== null && rawRef !== '' && refs.length === 0) throw new Error(hint)
     if (refs.length > MAX_REFERENCES) throw new Error(`generate_image 一次最多帶 ${MAX_REFERENCES} 張參考圖`)
     const sessionId = exec.agent?.id
@@ -524,6 +570,15 @@ export function apply(ctx) {
     try {
       const plan = []
       for (const ref of refs) {
+        const prtsRef = parsePrtsRef(ref)
+        if (prtsRef) {
+          if (plan.filter((entry) => entry.kind === 'prts').length >= MAX_PRTS_REFERENCES) {
+            throw new Error(`generate_image 一次最多 ${MAX_PRTS_REFERENCES} 張 PRTS 立繪`)
+          }
+          refDir ??= createRefDir()
+          plan.push({ kind: 'prts', ...(await fetchPrtsReference(prtsRef, refDir)) })
+          continue
+        }
         const userRef = REF_TOKEN.exec(ref)
         if (userRef) {
           if (plan.filter((entry) => entry.kind === 'user').length >= MAX_USER_REFERENCES) {
@@ -547,7 +602,7 @@ export function apply(ctx) {
       const nextArgs = { prompt, outputDir: IMAGE_DIR }
       if (plan.length > 0) {
         nextArgs.inputImage = plan
-          .map((entry) => (entry.kind === 'user' ? entry.path : characterImage(entry.character)))
+          .map((entry) => (entry.kind === 'character' ? characterImage(entry.character) : entry.path))
           .join(',')
         nextArgs.prompt += referenceNote(plan)
       }
@@ -576,7 +631,7 @@ export function apply(ctx) {
       + 'Returns immediately; the image arrives later in a follow-up message, then send it with send_image. '
       + 'The tool runs with shell and file writes disabled; '
       + 'inputImage is a character code (self, gpt, qwen, ...), a user image reference (ref:#messageId/1), '
-      + 'several of them comma-separated, or omitted.',
+      + 'a PRTS artwork reference (prts:<operator>/<artwork file>), several of them comma-separated, or omitted.',
     parameters: {
       type: 'object',
       properties: {
@@ -590,7 +645,7 @@ export function apply(ctx) {
         },
         inputImage: {
           type: 'string',
-          description: 'Character code (self, gpt, qwen, ... or a Chinese character name), or ref:#messageId/n for the nth image the user attached. Separate several with commas, for example "self,claude" or "self,ref:#k7f3ab/1"; up to 4 total and at most 2 user images. Omit for a generic image.',
+          description: 'Character code (self, gpt, qwen, ... or a Chinese character name), ref:#messageId/n for the nth image the user attached, or prts:<operator>/<artwork file> for an official PRTS artwork. Separate several with commas, for example "self,claude", "self,ref:#k7f3ab/1", or "prts:阿米娅/立绘_阿米娅_1.png"; up to 4 total, at most 2 user images and 2 PRTS artworks. Omit for a generic image.',
         },
       },
       required: ['prompt'],

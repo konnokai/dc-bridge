@@ -9,6 +9,7 @@
 // 拆平台介面的成本高於重寫一個只做 chat 的入口，而且上游 DSH 協議還在動。
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ActivityType, ButtonStyle, ChannelType, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
@@ -169,6 +170,7 @@ import {
   stickerLabel,
   viewMediaItems,
 } from './core/discord-media.mjs';
+import { resolvePrtsArtwork } from './core/prts-artwork.mjs';
 import { fetchVideoLink, formatChapters, formatVideoTime, videoLinks } from './core/discord-video-link.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
@@ -1358,7 +1360,9 @@ async function main() {
     try {
       sent = await sendLong(key, content, { replyTo: replyMessage?.id ?? null, stickerId, file: image });
     } catch (error) {
-      if (image && error?.code === 50013) throw toolError('bot 在這個頻道沒有「附加檔案」權限，圖片送不出去', 403);
+      if (image && error?.code === 50013) {
+        throw Object.assign(toolError('bot 在這個頻道沒有「附加檔案」權限，圖片送不出去', 403), { uploadFailure: true });
+      }
       throw error;
     }
     return sent.map((message) => message.id);
@@ -1963,6 +1967,47 @@ async function main() {
       limits: cfg.discord.media,
       enabled: cfg.discord.media.enabled,
     }),
+    // PRTS 立繪參考圖：外掛用檔名向橋接要 large（1024px）圖片；公開資料，不需要會話。
+    prtsImage: async (body) => {
+      const art = await resolvePrtsArtwork({ artworkId: body?.artworkId, variant: body?.variant });
+      return {
+        data: art.buffer.toString('base64'),
+        mimeType: art.mimeType,
+        name: art.name,
+        width: art.width,
+        height: art.height,
+        url: art.url,
+      };
+    },
+    // PRTS 立繪貼圖：橋接抓圖、存進圖片目錄，再走一般送出流程（安靜／補句／重複拒絕照樣管）。
+    async prtsArtwork(body) {
+      // 先擋安靜與補句，避免白抓一張圖。
+      const { key } = await agentSender.resolve(body.token);
+      const quietAt = quietUntil(key);
+      if (quietSendBlocked({ quietUntil: quietAt })) {
+        throw toolError(`安靜中（到 ${formatQuietUntil(quietAt)}），只能用 add_reaction 回；要恢復說話先 set_quiet minutes=0`, 409);
+      }
+      if (turnFollowupHeld.has(key)) {
+        return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
+      }
+      const art = await resolvePrtsArtwork({ artworkId: body?.artwork_id, variant: body?.variant });
+      fs.mkdirSync(AGENT_IMAGE_DIR, { recursive: true });
+      const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[art.mimeType] ?? 'png';
+      const name = `prts-${randomUUID()}.${ext}`;
+      const file = path.join(AGENT_IMAGE_DIR, name);
+      fs.writeFileSync(file, art.buffer, { mode: 0o600 });
+      try {
+        return await agentHandlers.send({ ...body, file: name }, { prts: true });
+      } catch (error) {
+        const status = Number(error?.statusCode);
+        // 只有「圖送不出去」才給直連網址；403／409／429 這類規則性拒絕不要教模型繞路。
+        const uploadFailure = error?.uploadFailure === true || error?.code === 40005 || status === 413 || status >= 500 || !Number.isFinite(status);
+        const hint = uploadFailure ? `。可以直接貼這個連結：${art.url}` : '';
+        throw toolError(`${error?.message ?? error}${hint}`, status || 500);
+      } finally {
+        fs.rmSync(file, { force: true });
+      }
+    },
     async 'trade-quote'(body) {
       const service = requireTrade();
       try {
@@ -2061,25 +2106,25 @@ async function main() {
         throw tradeFailure(error);
       }
     },
-    async send(body) {
-      // 安靜期間只准 reaction 與生圖的檔案；文字與貼圖會變成新的噪音。
+    async send(body, options = {}) {
+      // 安靜期間只准 reaction 與生圖的檔案；PRTS 立繪是新發言，不算生圖檔案。
       const { key } = await agentSender.resolve(body.token);
       const quietAt = quietUntil(key);
-      if (quietSendBlocked({ quietUntil: quietAt, file: body.file })) {
+      if (quietSendBlocked({ quietUntil: quietAt, file: options.prts ? '' : body.file })) {
         throw toolError(`安靜中（到 ${formatQuietUntil(quietAt)}），只能用 add_reaction 回；要恢復說話先 set_quiet minutes=0`, 409);
       }
       // 這一步剛攔過補句：其他 send 也先壓住，模型看完補句後在同一個回合重新決定。
       if (turnFollowupHeld.has(key)) {
         return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
       }
-      // 純文字才攔補句：帶圖片或貼圖的訊息照常送，補句的圖留給正常批次。
-      if (!textArg(body.file, 500) && !textArg(body.sticker)) {
+      // 純文字才攔補句：帶圖片或貼圖的訊息照常送，補句的圖留給正常批次；PRTS 立繪是新發言，照純文字規則。
+      if (options.prts || (!textArg(body.file, 500) && !textArg(body.sticker))) {
         const followup = takeFollowupNotice(key);
         if (followup) return followup;
       }
       const refusal = await prepareRefusal(body);
       if (refusal?.replaced) return refusal.replaced;
-      const result = await sendMessage(body);
+      const result = await sendMessage(body, { draw: options.prts ? false : true });
       // 真的送出成功才累加：第一則失敗時，下一次仍然是第一次拒絕。
       if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
       return result;

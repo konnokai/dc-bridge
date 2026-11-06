@@ -27,7 +27,7 @@ export function createAgentSendHandler({
   takeDrawUsers = () => [],
   log = () => {},
 }) {
-  function recordSent(key, file) {
+  function recordSent(key, file, { draw = true } = {}) {
     const users = turnUsers.get(key) ?? [];
     const drawUsers = file ? takeDrawUsers(key, file) : [];
     let changed = false;
@@ -37,11 +37,11 @@ export function createAgentSendHandler({
     }
     // 背景生圖完成後送圖的回合不一定有觸發者；有先記下檔名對應的人就用那組。
     const credited = drawUsers.length > 0 ? drawUsers : users;
-    if (file && credited.length > 0 && recordDraws(triggerStore, { users: credited, at: Date.now() }) > 0) changed = true;
+    if (draw && file && credited.length > 0 && recordDraws(triggerStore, { users: credited, at: Date.now() }) > 0) changed = true;
     if (changed) markTriggerDirty();
   }
 
-  return async function send(body) {
+  return async function send(body, { draw = true } = {}) {
     const content = typeof body.content === 'string' ? body.content : '';
     const file = textArg(body.file, 500);
     const result = await agentSender.send({
@@ -51,7 +51,7 @@ export function createAgentSendHandler({
       sticker: textArg(body.sticker),
       file,
     });
-    recordSent(result.key, file);
+    recordSent(result.key, file, { draw });
     recordBotMessages(result.key, result.refs?.length);
     log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}${file ? `，圖片 ${path.basename(file)}` : ''}）`);
     return result;

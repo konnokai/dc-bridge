@@ -194,6 +194,10 @@ export async function validateFetchUrl(raw, opts = {}) {
       throw new Error(`端口 ${port} 不在允许列表（${opts.allowPorts.join('/')}）内，已阻止`);
     }
   }
+  // 可选網域白名單：轉址的每一跳都會再呼叫 validateFetchUrl，所以也會逐跳檢查。
+  if (Array.isArray(opts.allowHosts) && opts.allowHosts.length && !opts.allowHosts.includes(url.hostname)) {
+    throw new Error(`仅允许 ${opts.allowHosts.join('/')}，已阻止`);
+  }
   const addresses = await resolveSafeAddresses(url.hostname);
   return { url, ip: addresses[0], addresses };
 }

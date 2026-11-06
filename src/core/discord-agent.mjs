@@ -414,9 +414,10 @@ const MAX_BODY_BYTES = 64 * 1024;
  * - sessionToken：它就是拿會話令牌的入口。
  * - imageJob：DSH 外掛回報背景生圖狀態；它用 x-agent-token 認身分，帶的是 sessionId。
  * - imageRef：DSH 外掛拿群友貼的圖當生圖參考；同樣用 x-agent-token 與 sessionId。
- * 三者都仍然要 x-agent-token。
+ * - prtsImage：DSH 外掛拿 PRTS 立繪當生圖參考；公開資料，只需要 x-agent-token。
+ * 這些路徑都仍然要 x-agent-token。
  */
-const SESSIONLESS_ROUTES = new Set(['sessionToken', 'imageJob', 'imageRef']);
+const SESSIONLESS_ROUTES = new Set(['sessionToken', 'imageJob', 'imageRef', 'prtsImage']);
 
 function tokenEquals(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;

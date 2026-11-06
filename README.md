@@ -15,7 +15,7 @@
 ```bash
 npm install
 cp config.example.json config.json     # 填 discord.token 與 discord.ownerIds
-node scripts/setup-dsh.mjs --discord   # 安裝 dc-chat / dc-learner preset 與三個 MCP
+node scripts/setup-dsh.mjs --discord   # 安裝 dc-chat / dc-learner / dc-trader preset 與五個 MCP（含 PRTS）
 npm start                              # 只啟動 Discord 橋接
 ```
 

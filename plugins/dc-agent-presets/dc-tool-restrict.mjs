@@ -53,8 +53,8 @@ const DANGEROUS = [
   'dev_stage_promote', 'dev_uninject_plugin',
 ]
 
-// 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）、mcp-discord（發訊息與頻道動作）
-// 與 mcp-slang（自己查詞、收黑話與頻道標籤）；新增 MCP 時把命名空間前綴或精確工具名加在這裡，
+// 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）、mcp-discord（發訊息與頻道動作）、
+// mcp-slang（自己查詞、收黑話與頻道標籤）與 mcp-prts（只讀 PRTS 資料）；新增 MCP 時把命名空間前綴或精確工具名加在這裡，
 // 並同步更新 docs/guides/DISCORD.md。
 const SAFE_PREFIXES = ['mcp__web-search-safe__']
 const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-safe__web_search']
@@ -63,6 +63,7 @@ const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-sa
 const DISCORD_TOOLS = [
   'mcp__discord__send_message',
   'mcp__discord__send_image',
+  'mcp__discord__send_prts_artwork',
   'mcp__discord__send_sticker',
   'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction',
@@ -97,6 +98,36 @@ const SLANG_TOOLS = [
   'mcp__slang__lookup_slang',
   'mcp__slang__record_slang',
   'mcp__slang__record_channel_tag',
+]
+
+// 明日方舟 PRTS：全部是唯讀 wiki／遊戲資料查詢，沒有寫入或主機能力。
+// 只在 dc-chat 放行；dc-learner 與 dc-trader 不需要這 24 個 schema。
+// prts-mcp 升版新增工具時要同步這份清單（IMAGES_ENABLED=true 含 operator_artwork）。
+const PRTS_TOOLS = [
+  'mcp__prts__search_prts',
+  'mcp__prts__prts_page',
+  'mcp__prts__get_operator_archives',
+  'mcp__prts__get_operator_voicelines',
+  'mcp__prts__get_operator_basic_info',
+  'mcp__prts__list_story_events',
+  'mcp__prts__list_stories',
+  'mcp__prts__get_story_summary',
+  'mcp__prts__read_story',
+  'mcp__prts__read_activity',
+  'mcp__prts__search',
+  'mcp__prts__search_stories',
+  'mcp__prts__list_enemies',
+  'mcp__prts__get_enemy_info',
+  'mcp__prts__get_stage_enemies',
+  'mcp__prts__get_enemy_appearances',
+  'mcp__prts__list_stages',
+  'mcp__prts__get_stage_info',
+  'mcp__prts__list_items',
+  'mcp__prts__get_item_info',
+  'mcp__prts__get_operator_memoirs',
+  'mcp__prts__find_character_appearances',
+  'mcp__prts__find_speakers_in',
+  'mcp__prts__operator_artwork',
 ]
 
 // 模擬股票：玩家端與 Bot 端看到的工具不一樣。Bot 只能替自己下單，玩家永遠看不到
@@ -166,6 +197,7 @@ export function apply(ctx, config = {}) {
   const allowWebSearch = config?.allowWebSearch !== false
   const allowDiscordSend = config?.allowDiscordSend !== false
   const allowImageGen = config?.allowImageGen === true
+  const allowPrts = config?.allowPrts === true
   const tradeMode = config?.trade === 'player' || config?.trade === 'bot' ? config.trade : 'none'
   const allowedTrade = new Set(tradeMode === 'player' ? TRADE_PLAYER_TOOLS : (tradeMode === 'bot' ? TRADE_BOT_TOOLS : []))
   const ceilingSearches = Number.isInteger(config?.maxWebSearchesPerTurn) ? Math.max(0, config.maxWebSearchesPerTurn) : 3
@@ -174,6 +206,7 @@ export function apply(ctx, config = {}) {
     ...DANGEROUS,
     ...(allowWebSearch ? [] : WEB_SEARCH_TOOLS),
     ...(allowDiscordSend ? [] : [...DISCORD_TOOLS, ...SLANG_TOOLS]),
+    ...(allowPrts ? [] : PRTS_TOOLS),
     ...TRADE_ALL_TOOLS.filter((tool) => !allowedTrade.has(tool)),
     // 不能在這裡 restrict generate_image：preset 的 scoped 安全版和這條 restrict
     // 同屬 preset generation layer，restrict 會連安全版一起藏掉。allowImageGen
@@ -183,6 +216,7 @@ export function apply(ctx, config = {}) {
   const exact = new Set(SAFE_EXACT)
   if (allowImageGen) exact.add('generate_image')
   if (allowDiscordSend) for (const tool of [...DISCORD_TOOLS, ...SLANG_TOOLS]) exact.add(tool)
+  if (allowPrts) for (const tool of PRTS_TOOLS) exact.add(tool)
   for (const tool of allowedTrade) exact.add(tool)
   const failed = []
   for (const tool of denyList) {
@@ -239,6 +273,10 @@ export function apply(ctx, config = {}) {
       if (allowedTrade.has(named)) return
       return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
     }
+    if (named.startsWith('mcp__prts__')) {
+      if (allowPrts && exact.has(named)) return
+      return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
+    }
     // 畫圖的參數鎖在 dc-draw-image（tools/execute）；這裡先擋一次原始參數，
     // 外掛萬一沒載入也不會變成「讀主機任一張圖／寫任意目錄」的通道。
     if (named === 'generate_image' && allowImageGen) {
@@ -252,14 +290,22 @@ export function apply(ctx, config = {}) {
       const args = exec?.arguments ?? {}
       const ref = args.inputImage
       if (ref !== undefined && ref !== null && ref !== '') {
-        // 只放行短代號（self、gpt、大肥魚…）與群友貼的圖（ref:#編號/張數）；多個用逗號串起來。
-        // 路徑一定含 / \ : 或 ..。上限跟 dc-draw-image 一致，外掛沒載入時也要擋。
+        // 只放行短代號（self、gpt、大肥魚…）、群友貼的圖（ref:#編號/張數）與 PRTS 立繪（prts:幹員/檔名）；
+        // 多個用逗號串起來。路徑一定含 / \ : 或 ..。上限跟 dc-draw-image 一致，外掛沒載入時也要擋。
         const refs = typeof ref === 'string' ? ref.split(/[,，]/).map((part) => part.trim()).filter(Boolean) : []
-        const hint = 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen）或 ref:#編號/張數，不要填路徑'
+        const hint = 'generate_image 的 inputImage 只接受角色代號（例如 self、gpt、qwen）、ref:#編號/張數，或 prts:<幹員>/<立繪檔名>，不要填路徑'
         if (refs.length === 0) return hint
-        if (refs.length > 4) return 'generate_image 的 inputImage 一次最多 4 個參考（角色代號或群友的圖）'
+        if (refs.length > 4) return 'generate_image 的 inputImage 一次最多 4 個參考（角色代號、群友的圖或 PRTS 立繪）'
         let userRefs = 0
+        let prtsRefs = 0
         for (const item of refs) {
+          if (/^prts:/i.test(item)) {
+            prtsRefs += 1
+            if (prtsRefs > 2) return 'generate_image 一次最多 2 張 PRTS 立繪'
+            if (item.includes('..')) return hint
+            if (!/^prts:(?:[^\s/\\:：]{1,40}\/)?[^/\\:：]{1,160}\.(?:png|jpe?g|webp)$/i.test(item)) return hint
+            continue
+          }
           if (/^ref:/i.test(item)) {
             userRefs += 1
             if (userRefs > 2) return 'generate_image 一次最多 2 張群友貼的圖'
