@@ -14,6 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -190,6 +191,11 @@ const ALLOWED_IMAGES = new Set(
 
 const PROMPT_MAX = 4000
 const KEEP_IMAGES = 100
+// Codex 的 GIF 輸出還是 under development：只有 image_generation_animation 存在的版本才打得開。
+// 模型要動圖時先問 Codex 有沒有這個 feature；沒有就明確拒絕，不要讓它以為畫了動圖。
+const GIF_FEATURE = 'image_generation_animation'
+const GIF_PROMPT = '\n\nThe user asked for an animated GIF. Call the image_gen tool with the gif option set '
+  + '(defaults are fine; keep it a short seamless loop), not a still image. Describe the motion clearly and keep it simple.'
 // 一張圖最多帶幾張設定圖；每張都是大圖，帶太多會拖慢生圖也吃 context。
 const MAX_REFERENCES = 4
 // 群友自己貼的圖最多 2 張：再多就會蓋掉角色設定圖的份量。
@@ -269,6 +275,29 @@ function pruneImages() {
       fs.rmSync(path.join(IMAGE_DIR, file), { force: true })
     }
   } catch {}
+}
+
+/** `codex features list` 的輸出裡有沒有 GIF feature；純函式，測試不用跑 codex。 */
+export function hasGifFeature(output) {
+  const text = String(output ?? '').replace(/\x1b\[[0-9;]*m/g, '')
+  return new RegExp(`^${GIF_FEATURE}(?:\\s|$)`, 'm').test(text)
+}
+
+let gifSupportCache = null
+/** 這個 codex 版本有沒有開 GIF 的能力；問一次就快取，DSH 重啟後才會重問。 */
+export function codexSupportsGif(codexBin, { spawnSyncImpl = spawnSync } = {}) {
+  if (gifSupportCache?.bin === codexBin) return gifSupportCache.supported
+  let supported = false
+  try {
+    const result = spawnSyncImpl(codexBin, ['features', 'list'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      windowsHide: true,
+    })
+    supported = result.status === 0 && hasGifFeature(result.stdout)
+  } catch { /* 問不到就當沒有，寧可拒絕也不要送出會壞的參數 */ }
+  gifSupportCache = { bin: codexBin, supported }
+  return supported
 }
 
 /** 橋接端點檔每次重讀：橋接重啟後埠會變。 */
@@ -449,7 +478,7 @@ async function reportImageJob(payload, { quiet = false } = {}) {
  * 完成或失敗都回報橋接，由橋接排進同一個會話的閘門；1~3 分鐘的生成不會卡住其他訊息。
  * queue 仍是一條：Codex 的 generated_images 共用，兩個行程同時畫會撿到對方的圖。
  */
-async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputImages, refDirs = [], codexBin, controller }) {
+async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputImages, refDirs = [], codexBin, controller, animated = false }) {
   const signal = controller?.signal
   let dest = null
   let text
@@ -489,6 +518,7 @@ async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputIma
         codexBin: CODEX_WRAPPER,
         extraArgs: [
           ...CODEX_EXTRA_ARGS,
+          ...(animated ? ['--enable', GIF_FEATURE] : []),
           ...inputImages.slice(1).flatMap((image) => ['-i', image]),
           '--dc-real-codex', codexBin,
         ],
@@ -503,10 +533,14 @@ async function runGenerationJob({ sessionId, jobId, prompt, inputImage, inputIma
       throw new Error(`codex failed (exit ${result.code}): ${detail}`)
     }
     if (!result.file) throw new Error('codex finished but produced no image file; check the Codex model supports image generation.')
+    // 模型可能忽略 gif 參數只回靜態圖；不要把它當成動圖送出去。
+    if (animated && path.extname(result.file).toLowerCase() !== '.gif') {
+      throw new Error('Codex 回傳的是靜態圖，不是 GIF；這次動圖沒做成')
+    }
 
     dest = path.join(IMAGE_DIR, path.basename(result.file))
     fs.copyFileSync(result.file, dest)
-    text = `【生圖完成】圖片已存到 ${dest}\n用 mcp__discord__send_image 送出（file 填這個路徑，content 帶一句話）。不要重新生圖。`
+    text = `【生圖完成】${animated ? 'GIF' : '圖片'}已存到 ${dest}\n用 mcp__discord__send_image 送出（file 填這個路徑，content 帶一句話）。不要重新生圖。`
   } catch (error) {
     // 會話被 /reset 或移除：不用回報，橋接也已經不認這個 session。
     if (signal?.aborted) return
@@ -555,6 +589,7 @@ export function apply(ctx) {
     if (!prompt) throw new Error('generate_image 需要 prompt（要畫什麼）')
     if (prompt.length > PROMPT_MAX) throw new Error(`generate_image 的 prompt 最多 ${PROMPT_MAX} 字`)
     if (PROMPT_DENY.test(prompt)) throw new Error('畫圖 prompt 含有路徑或指令字樣，已拒絕；只描述畫面')
+    const animated = args.animated === true
 
     const rawRef = args.inputImage
     const refs = splitReferences(rawRef)
@@ -599,17 +634,19 @@ export function apply(ctx) {
         plan.push({ kind: 'character', character })
       }
 
-      const nextArgs = { prompt, outputDir: IMAGE_DIR }
+      const nextArgs = { prompt, outputDir: IMAGE_DIR, animated }
       if (plan.length > 0) {
         nextArgs.inputImage = plan
           .map((entry) => (entry.kind === 'character' ? characterImage(entry.character) : entry.path))
           .join(',')
         nextArgs.prompt += referenceNote(plan)
       }
+      if (animated) nextArgs.prompt += GIF_PROMPT
       nextArgs.prompt += '\n\nUse only the attached input images when any are provided. Never pass referenced_image_paths or read any other local file.'
       exec.arguments = nextArgs
       const written = exec.arguments
-      if (written.outputDir !== IMAGE_DIR || (plan.length > 0 && written.inputImage !== nextArgs.inputImage)) {
+      if (written.outputDir !== IMAGE_DIR || (animated && written.animated !== true)
+        || (plan.length > 0 && written.inputImage !== nextArgs.inputImage)) {
         throw new Error('鎖定 generate_image 參數失敗（DSH 改了 tools/execute 的規則）：回報管理員')
       }
       return await next()
@@ -627,7 +664,8 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'generate_image',
     description:
-      'Start an image generation job from a text description, or use a reference image, with the local Codex image_gen tool. '
+      'Start an image or short animated GIF generation job from a text description, or use a reference image, with the local Codex image_gen tool. '
+      + 'Set animated to true only when the user asks for a GIF or animation. GIF output is experimental: if the installed Codex lacks it, the tool returns an error; tell the user the animation feature is not ready yet and offer a still image. '
       + 'Returns immediately; the image arrives later in a follow-up message, then send it with send_image. '
       + 'The tool runs with shell and file writes disabled; '
       + 'inputImage is a character code (self, gpt, qwen, ...), a user image reference (ref:#messageId/1), '
@@ -638,6 +676,10 @@ export function apply(ctx) {
         prompt: {
           type: 'string',
           description: 'Detailed description of the image to generate: scene, composition, style, colors, and expression. English works best.',
+        },
+        animated: {
+          type: 'boolean',
+          description: 'Set true only when the user asks for an animated image / GIF. Experimental: returns an error if this Codex version has no GIF support; tell the user the animation feature is not ready and offer a still image.',
         },
         outputDir: {
           type: 'string',
@@ -670,8 +712,14 @@ export function apply(ctx) {
       if (!codex) throw new Error('畫圖引擎沒載入（dsh-generate-image 沒裝或版本不相容）：回報管理員')
       if (typeof args?.prompt !== 'string' || !args.prompt.trim()) throw new Error('generate_image 需要 prompt（要畫什麼）')
       if (PROMPT_DENY.test(args.prompt)) throw new Error('畫圖 prompt 含有路徑或指令字樣，已拒絕；只描述畫面')
+      const animated = args?.animated === true
       const codexBin = codex.findCodexBin(process.env, {})
       if (!codexBin) throw new Error('找不到 codex CLI：先安裝並登入 Codex')
+      if (animated && !codexSupportsGif(codexBin)) {
+        throw new Error('目前 Codex 還沒支援 GIF 動圖（需要 image_generation_animation）；跟頻道說動圖功能還沒完善，問要不要改畫靜態圖，不要假裝畫了')
+      }
+      // 正常走 tools/execute middleware 時 GIF_PROMPT 已經補過；被繞過時這裡補，避免只改了 flag。
+      const prompt = animated && !args.prompt.includes(GIF_PROMPT) ? `${args.prompt}${GIF_PROMPT}` : args.prompt
 
       const refs = splitResolvedReferences(args?.inputImage)
       if (refs.length > MAX_REFERENCES) throw new Error(`inputImage 一次最多 ${MAX_REFERENCES} 張參考圖`)
@@ -709,11 +757,12 @@ export function apply(ctx) {
         releaseJob(sessionId, controller)
         throw new Error('橋接沒有受理這次生圖（沒開或會話已結束），先不畫圖：回報管理員')
       }
-      void runGenerationJob({ sessionId, jobId, prompt: args.prompt, inputImage, inputImages, refDirs, codexBin, controller })
+      void runGenerationJob({ sessionId, jobId, prompt, inputImage, inputImages, refDirs, codexBin, controller, animated })
       return {
         status: 'started',
         message: '生圖已在背景開始，約 1~3 分鐘。先用 send_message 跟頻道說一聲，然後結束這一輪；'
-          + '畫好後系統會送【生圖完成】給你，再用 send_image 送出。現在不要呼叫 send_image。',
+          + '畫好後系統會送【生圖完成】給你，再用 send_image 送出。現在不要呼叫 send_image。'
+          + '使用者要取消就用 mcp__discord__cancel_image。',
       }
     },
   })

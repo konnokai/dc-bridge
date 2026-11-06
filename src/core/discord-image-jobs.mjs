@@ -56,7 +56,7 @@ export function createImageJobHandler({
     const key = reverse.get(sessionId);
     if (phase === 'poll') {
       const job = jobs.get(jobId);
-      // 工作還在就續命；只有 /reset 或會話被移除才回 cancel。
+      // 工作還在就續命；只有 /reset、會話被移除或 cancel_image 刪掉工作才回 cancel。
       if (!job || !key || sessions[key] !== sessionId) return { cancel: true };
       job.at = at;
       return { cancel: false };
@@ -95,6 +95,22 @@ export function drawUsersForFile({ pendingDraws, key, file, ttlMs = IMAGE_JOB_TT
   const entry = pendingDraws.get(name);
   if (!entry) return [];
   return entry.key === key ? entry.users : [];
+}
+
+/**
+ * 取消這個會話所有還在跑或排隊中的生圖。
+ * 直接刪掉工作：外掛下一次 poll 拿到 cancel 就中止 Codex，逾時掃描也不會再送一則假的失敗通知。
+ * @returns {string[]} 被取消的 jobId
+ */
+export function cancelImageJobs({ jobs, key }) {
+  const canceled = [];
+  if (!key) return canceled;
+  for (const [jobId, job] of jobs) {
+    if (job.key !== key) continue;
+    jobs.delete(jobId);
+    canceled.push(jobId);
+  }
+  return canceled;
 }
 
 function backupCorrupt(file) {

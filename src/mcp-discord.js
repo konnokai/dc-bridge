@@ -126,6 +126,16 @@ tool(
 );
 
 tool(
+  'cancel_image',
+  '取消這個頻道所有還在跑或排隊中的生圖。使用者說「不要畫了」「取消畫圖」，或發現 prompt／參數填錯時用；取消後就不會再收到【生圖完成】。',
+  {
+    token: sessionToken,
+  },
+  '/cancelImage',
+  () => '已取消生圖',
+);
+
+tool(
   'send_prts_artwork',
   '把 PRTS 官方立繪送進目前的 Discord 會話。artwork_id 先用 mcp__prts__operator_artwork 的 action=list 取得；variant 預設 preview（256px），要清楚一點用 large（1024px）。要看圖用 get_prts_artwork，要生圖參考用 generate_image 的 prts:。',
   {

@@ -679,7 +679,11 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 流程：
 
 - 有人說「畫一張…」「幫我畫…」，persona 叫模型呼叫 `generate_image`。呼叫後工具立刻回「已開始」，
-  生圖在背景跑，不佔用會話；同一個會話的其他訊息照常處理。畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
+  生圖在背景跑，不佔用會話；同一個會話的其他訊息照常處理。
+  要動圖（「畫一張 GIF」「做個動圖」）時同一個呼叫多帶 `animated: true`。這個功能還沒完善：
+  外掛會先問 Codex 有沒有 `image_generation_animation`，沒有就回錯誤；persona 會照實說現在還不能畫動圖、
+  可以先用靜態圖，不要假裝畫了。支援的版本才會把 prompt 補成明確要求短循環動畫，並用 Codex 的 GIF 輸出。
+  畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
   畫別的 AI 娘時填角色代號（`glm`、`gpt`、`ernie`、`qwen`、`kimi`、`doubao`、`minimax`、`grok`、`gemini`、`claude`），
   打中文名也可以。一張圖有多個角色時用逗號串起來（`self,claude`），最多 4 個。畫一般插畫時不要填。
 - 群友可以帶自己的圖當參考圖。附件在 prompt 裡標成 `[圖 #k7f3ab/1]`（那則訊息的第 1 張），
@@ -696,6 +700,13 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   `assets/ai-chan-sheets/<角色>/便于查看/横版完整设定图_01_三视图_查看用.jpg`（多個角色就換成多張），`outputDir` 固定 `state/discord-images`。
   模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持每張設定圖的臉、髮色、服裝與配件。
   11 個角色的代號、中文名與資料夾對照在 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
+- GIF 是選用且還沒完整：只有 Codex 的 `features list` 出現 `image_generation_animation` 時，
+  外掛才會在該次生圖加 `--enable image_generation_animation`，讓 `image_gen` 自己回傳動畫。
+  目前 0.167 為止的穩定版都還沒有這個 feature；這時 `animated: true` 直接回錯誤，不會 spawn Codex。
+  0.168.0-alpha.7 的 client 已經有 feature，但 2026-11-07 實測後端回
+  `GIF output is not enabled for this request`：這是帳號還沒開 GIF preview，不是 CLI 參數問題。
+  支援後輸出檔名是 `.gif`，`send_image` 跟一般圖片一樣直接上傳；GIF 當生圖參考圖仍然不收。
+  更新 Codex 後要重啟 DSH，外掛才會重新偵測 feature。
 - 生圖用的 Codex 是受限版本：關掉 `shell_tool`、`unified_exec` 與 `view_image`，工作目錄在 `state/discord-imagegen-work`。
   `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（沒有 write 規則）；
   所以 `/mnt` 底下的掛載讀不到，其他本機路徑也一樣是唯讀。
@@ -704,6 +715,9 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - 畫好後外掛會把一則【生圖完成】提示（含圖片路徑）送回同一個會話，模型再用 `mcp__discord__send_image` 送圖：
   `file` 填提示裡的 `path`，`content` 可以帶一句話。
   橋接只認 `state/discord-images` 裡的檔名，會檢查是不是真的圖片、有沒有超過 10MB；不是就回錯誤，不會把主機其他檔案送出去。
+- 生圖中要取消（參數填錯、改變主意）：模型呼叫 `mcp__discord__cancel_image`，橋接把這個頻道還在跑或排隊中的
+  生圖工作全部刪掉；外掛下一次 poll（最多 15 秒）收到 cancel 就中止 Codex，不會再收到【生圖完成】或失敗通知。
+  群組頻道裡有人喊停，會連別人正在畫的一起取消。
 - 開始與完成記在 `state/discord-image-jobs.json`（原子寫、權限 0600）。橋接重啟時外掛還在本來的 DSH 行程裡，
   重啟後 poll 會接回同一個工作，完成提示照樣送回會話。
 - 這個目錄只留最近 100 張，舊的會自動刪掉。bot 需要 **Attach Files** 權限（`/invite` 的連結已包含）。
@@ -965,9 +979,12 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   已退出（`deny.self`）、管理員封鎖（`deny.users`）或模型不理名單的訊息不能當 `reply_to`，會回 403。
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
   `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
-- `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道。
+- `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道（含 GIF）。
   `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖；
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
+- `mcp__discord__cancel_image`（沒有參數）：取消這個頻道所有還在跑或排隊中的生圖。使用者說「不要畫了」
+  或發現 prompt 填錯時用；橋接刪掉工作後，外掛下一次 poll（最多 15 秒）中止 Codex，
+  不會再收到【生圖完成】或失敗通知。目前沒有生圖時回 404。
 - `mcp__discord__send_prts_artwork`（`artwork_id`、`variant`／`content`／`reply_to` 可省略）：把 PRTS 官方立繪送進頻道。
   `artwork_id` 填 `mcp__prts__operator_artwork` 的 `action=list` 回傳檔名；`variant` 預設 `preview`（256px），
   要清楚一點用 `large`（1024px）。圖由橋接從 `media.prts.wiki` 抓、暫存到 `state/discord-images` 後送出，
@@ -1102,8 +1119,9 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `mcp__discord__run_script`（`language`、`code`、`stdin` 可省略）：在一次性 Docker 容器裡跑一小段
   Python 或 Node（沒有網路、沒有主機檔案），回 stdout／stderr。預設關閉，只有 `sandbox.channels`
   裡的頻道能用；同一回合最多一次。詳細邊界見「執行程式」。
-- `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖或拿設定圖改圖。
-  `prompt` 必填；畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
+- `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖、GIF 或拿設定圖改圖。
+  `prompt` 必填；要 GIF 時 `animated: true`（還沒完善，Codex 沒有 `image_generation_animation` 時直接回錯誤）；
+  畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
   多個角色用逗號串起來（`self,claude`，最多 4 個）；要用群友貼的圖當參考時填 `"ref:#編號/張數"`
   （例如 `"self,ref:#k7f3ab/1"`）；要用 PRTS 立繪當參考時填 `"prts:阿米娅/立绘_阿米娅_1.png"`
   （最多 2 張 PRTS 立繪，檔名先用 `operator_artwork` 的 `action=list` 拿，參考固定抓 `large`）；不指定角色就不要填。
@@ -1322,7 +1340,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 32 個，唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 33 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch` 與 24 個 `mcp__prts__*`（明日方舟資料）。
@@ -1330,6 +1348,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - **畫圖要 1~3 分鐘**，而且吃 Codex 額度；生圖在背景跑，不卡會話。橋接重啟不影響（外掛最多等 3 分鐘），
   DSH 重啟時還沒完成的工作會消失（橋接約 2~3 分鐘沒收到進度會送一則【生圖失敗】）。
+  參數填錯或改變主意時用 `cancel_image`，外掛下一次 poll（最多 15 秒）會中止 Codex。
   DSH profile 沒裝 `dsh-generate-image` 或 Codex 沒登入時，`generate_image` 不存在或直接失敗。
   生成檔只留最近 100 張，上傳上限 10MB。
 - 沒有語音、沒有 QQ 版那種十頁控制台。表情包、reactions、群友記憶見上文。
@@ -1348,5 +1367,6 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 | 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但沒有呼叫發送工具」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
 | 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |
 | 叫它畫圖卻只回文字 | DSH profile 沒裝 `dsh-generate-image`，或 Codex CLI 沒登入。跑 `dsh plugin --profile web add github:zemul/dsh-generate-image`，終端機跑一次 `codex` 登入，再重啟 DSH |
+| 叫它畫動圖卻說不支援 | Codex 的 `features list` 沒有 `image_generation_animation`（0.167 為止的穩定版都沒有）。更新 Codex 後**重啟 DSH**；更新前先畫靜態圖。有 feature 但生圖失敗且訊息是 `GIF output is not enabled for this request`，代表帳號還沒開 GIF preview，等 OpenAI 開 |
 | 圖畫好了但送不出去 | bot 有沒有 **Attach Files** 權限？檔案有沒有超過 10MB？日誌看 `MCP 送出 ... 圖片` 那一行 |
 | 回合直接失敗 `session/model-unavailable` | `dsh.provider` / `dsh.model` 不在 DSH 的 `routableProviders`。用 `session/modelCatalog` 查可用組合，改 `config.json` |
