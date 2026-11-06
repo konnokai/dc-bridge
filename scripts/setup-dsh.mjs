@@ -131,7 +131,7 @@ function yamlSingleQuote(s) {
  * 由桥接托管的 MCP 条目 id。
  *
  * Discord 装 web-search-safe（只读搜索）、mcp-discord（发讯息）、mcp-slang（黑话／频道标签）、
- * mcp-trade（模拟股票）与 mcp-prts（明日方舟 PRTS 资料，npx 拉起外部包）；SnowLuma 的两个是
+ * mcp-trade（模拟股票）与 mcp-prts（明日方舟 PRTS 资料，独立 Docker container 提供 HTTP MCP）；SnowLuma 的两个是
  * QQ 专用，装进 Discord profile 只会多出一堆连不上的工具。
  */
 const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
@@ -140,10 +140,6 @@ const managedMcpIds = () => (DISCORD_ONLY ? DISCORD_MCP_IDS : MANAGED_MCP_IDS);
 
 function mcpEntries() {
   const node = process.execPath;
-  // 跟 node 同一個安裝目錄的 npx，避免 DSH 子程序的 PATH 換掉後找不到。
-  // Windows 的啟動器是 npx.cmd，MCP client 用 cross-spawn 可以處理。
-  const localNpx = path.join(path.dirname(node), process.platform === 'win32' ? 'npx.cmd' : 'npx');
-  const npx = fs.existsSync(localNpx) ? localNpx : 'npx';
   const servers = {
     ...(DISCORD_ONLY ? {
       // 模型要自己決定什麼時候發訊息：工具打回橋接的 loopback 發送 API。
@@ -152,14 +148,11 @@ function mcpEntries() {
       'mcp-slang': { serverName: 'slang', script: path.join(REPO_ROOT, 'src', 'mcp-slang.js') },
       // 模擬股票：查價、下單、持股、排行榜；身分與交易規則都在橋接。
       'mcp-trade': { serverName: 'trade', script: path.join(REPO_ROOT, 'src', 'mcp-trade.js') },
-      // 明日方舟 PRTS wiki／遊戲資料（唯讀）。外部 npm 包，npx 拉起 Rust 原生 server；
-      // 釘版本避免每次啟動被 latest 換掉。立繪工具也開（24 個）：貼圖與生圖參考都要先靠
-      // operator_artwork 的 action=list 拿檔名；真正抓圖由橋接的 send_prts_artwork／prts: 參考處理。
+      // 明日方舟 PRTS wiki／遊戲資料（唯讀）。獨立 Docker container 提供 HTTP MCP；
+      // 立繪工具（24 個）由 container 的 IMAGES_ENABLED=true 決定，這裡只寫 URL。
       'mcp-prts': {
         serverName: 'prts',
-        command: npx,
-        args: ['-y', '--package=prts-mcp@3.2.3', 'prts-mcp'],
-        env: { PRTS_TRANSPORT: 'stdio', IMAGES_ENABLED: 'true' },
+        url: 'http://127.0.0.1:3011/mcp',
       },
     } : {
       'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
@@ -177,13 +170,18 @@ function mcpEntries() {
     out += `      name: '@deepseek-ai/dsh-mcp-client'\n`;
     out += `      config:\n`;
     out += `        serverName: ${s.serverName}\n`;
-    out += `        transport: stdio\n`;
-    out += `        command: ${yamlSingleQuote(s.command ?? node)}\n`;
-    out += `        args:\n`;
-    for (const arg of s.args ?? [s.script]) out += `          - ${yamlSingleQuote(arg)}\n`;
-    if (s.env) {
-      out += `        env:\n`;
-      for (const [key, value] of Object.entries(s.env)) out += `          ${key}: ${yamlSingleQuote(value)}\n`;
+    if (s.url) {
+      out += `        transport: streamable-http\n`;
+      out += `        url: ${yamlSingleQuote(s.url)}\n`;
+    } else {
+      out += `        transport: stdio\n`;
+      out += `        command: ${yamlSingleQuote(s.command ?? node)}\n`;
+      out += `        args:\n`;
+      for (const arg of s.args ?? [s.script]) out += `          - ${yamlSingleQuote(arg)}\n`;
+      if (s.env) {
+        out += `        env:\n`;
+        for (const [key, value] of Object.entries(s.env)) out += `          ${key}: ${yamlSingleQuote(value)}\n`;
+      }
     }
     // qq_wait_for_messages 最长可等 10 分钟；DSH 默认 60s 会提前掐断工具调用。
     if (s.toolCallTimeoutMs) out += `        toolCallTimeoutMs: ${s.toolCallTimeoutMs}\n`;
