@@ -65,7 +65,18 @@ import {
 } from '../src/core/discord-media.mjs';
 import { searchGifs } from '../src/core/discord-gif.mjs';
 import { sniffImage } from '../src/media-normalize.js';
-import { fetchStreamUrl, parseStreamUrl, resolveYtDlp, videoLinks } from '../src/core/discord-video-link.mjs';
+import {
+  MAX_TRANSCRIPT_CHARS,
+  clipTranscript,
+  fetchVideoLink,
+  formatChapters,
+  formatVideoTime,
+  parseVideoMeta,
+  parseVtt,
+  pickSubtitleFile,
+  resolveYtDlp,
+  videoLinks,
+} from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
 import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, warmMemberCache } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
@@ -3378,13 +3389,73 @@ console.log('## 8. 附件（圖片與影片）');
   ok(videoLinks('https://youtube.com@evil.com/x').length === 0, 'userinfo 偽裝 host 也不算白名單');
   ok(videoLinks('看這個 https://youtu.be/xyz，很好笑')[0] === 'https://youtu.be/xyz', '句尾標點不會黏進網址');
   ok(videoLinks('（https://youtu.be/xyz）')[0] === 'https://youtu.be/xyz', '句尾括號不會黏進網址');
-  const noBinary = await fetchStreamUrl('https://youtu.be/xyz', { ytDlpPath: process.execPath, timeoutMs: 20_000 });
-  ok(noBinary.ok === false && /沒有給出直連網址/.test(noBinary.reason) && /退出碼/.test(noBinary.reason),
+  const noBinary = await fetchVideoLink('https://youtu.be/xyz', { ytDlpPath: process.execPath, timeoutMs: 20_000 });
+  ok(noBinary.ok === false && /沒給出影片資訊或字幕|找不到 yt-dlp|不可用/.test(noBinary.reason),
     'yt-dlp 跑錯 binary：回原因、不丟例外（寫檔→讀回→清理都走過）');
-  ok(parseStreamUrl('https://cdn.example/v.mp4\nhttps://cdn.example/a.m4a\n') === 'https://cdn.example/v.mp4', 'yt-dlp 多行輸出取第一條 https 網址');
-  ok(parseStreamUrl('') === '' && parseStreamUrl('http://insecure/x') === '', '沒有 https 網址就回空字串');
   ok(resolveYtDlp({}) === 'yt-dlp' || resolveYtDlp({}), '沒有設定時回候選路徑不會丟例外');
   ok(normalizeDiscordConfig({}).videoLinks.enabled === false, '影片連結預設關閉');
+
+  // 影片字幕：yt-dlp 的 --print JSON 只留需要的欄位，非 http(s) 的 url 不交給 ffmpeg。
+  const meta = parseVideoMeta('{"title":"對談","duration":1440,"chapters":[{"start_time":0,"title":"開場"},{"start_time":125,"title":"主題"}],"description":"簡介","url":"https://cdn.example/v.mp4"}\n');
+  ok(meta?.title === '對談' && meta.duration === 1440 && meta.chapters.length === 2 && meta.url.startsWith('https://'),
+    '--print 的 JSON 只取標題、長度、章節、簡介與直連網址');
+  ok(parseVideoMeta('') === null && parseVideoMeta('不是 JSON') === null, 'yt-dlp 沒印出 JSON 時回 null');
+  ok(parseVideoMeta('{"title":"x","url":"javascript:alert(1)"}').url === '', '非 http(s) 的 url 不交給 ffmpeg');
+  const sparse = parseVideoMeta('{"title": "短片", "duration": 213, "url": "https://cdn.example/v.mp4"}');
+  ok(sparse?.title === '短片' && sparse.chapters.length === 0 && sparse.description === '' && sparse.url.startsWith('https://'),
+    '欄位子集輸出缺少章節／簡介也能解析');
+  ok(parseVideoMeta('{"title":"x","chapters":NA,"url":NA}') === null, 'yt-dlp 舊模板印出 NA 時不當成有效資訊');
+
+  // 字幕檔挑選：先繁中、再簡中、最後英文。
+  ok(pickSubtitleFile(['meta.json', 'error.txt', 'sub.en.vtt', 'sub.zh-CN.vtt', 'sub.zh-TW.vtt']) === 'sub.zh-TW.vtt', '字幕先挑繁中');
+  ok(pickSubtitleFile(['sub.en.vtt', 'sub.zh-CN.vtt']) === 'sub.zh-CN.vtt', '沒有繁中時挑簡中');
+  ok(pickSubtitleFile(['sub.ja.vtt']) === 'sub.ja.vtt', '偏好都沒有時仍回一條字幕');
+  ok(pickSubtitleFile(['meta.json']) === '', '沒有字幕檔就回空');
+
+  // VTT → 逐字稿：時間軸、標籤、entity、自動字幕的滾動重複句。
+  const vtt = [
+    'WEBVTT', 'Kind: captions', 'Language: en', '',
+    'NOTE 這段是註解', '不要這行', '',
+    '00:00:00.000 --> 00:00:02.000 align:start position:0%', '[Music]', '',
+    '00:00:02.000 --> 00:00:04.000 align:start position:0%', 'hello<00:00:02.100><c> world</c>', '',
+    '00:00:04.000 --> 00:00:06.000 align:start position:0%', 'hello world', 'how are you', '',
+    '00:00:06.000 --> 00:00:08.000 align:start position:0%', 'how are you', '',
+  ].join('\n');
+  ok(parseVtt(vtt) === '[Music]\nhello world\nhow are you', 'VTT 去掉時間軸與標籤，滾動重複句只留一次');
+  ok(parseVtt('WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nA &amp; B&nbsp;C\n') === 'A & B C', 'VTT 的 HTML entity 會還原');
+  ok(parseVtt('') === '', '空字幕回空字串');
+
+  // 真實自動字幕：空白行、10ms 過渡 cue、行內時間標記與滾動重複。
+  const realVtt = [
+    'WEBVTT', 'Kind: captions', 'Language: en', '',
+    '00:00:06.260 --> 00:00:26.550 align:start position:0%', ' ', '[Music]', '',
+    '00:00:26.560 --> 00:00:28.390 align:start position:0%', 'good<00:00:26.720><c> morning</c>', '',
+    '00:00:28.390 --> 00:00:28.400 align:start position:0%', 'good morning', ' ', '',
+    '00:00:28.400 --> 00:00:32.950 align:start position:0%', 'good morning', 'how are you', '',
+  ].join('\n');
+  ok(parseVtt(realVtt) === '[Music]\ngood morning\nhow are you', '真實自動字幕的空白行與過渡 cue 不會混進逐字稿');
+
+  // 字幕內文剛好長得像 VTT 結構時不能被誤刪。
+  const tricky = [
+    'WEBVTT', '',
+    '00:00:00.000 --> 00:00:02.000', 'Note that this is important', 'and so is this', '',
+    '00:00:02.000 --> 00:00:03.000', '2024', '',
+    '00:00:03.000 --> 00:00:04.000', 'A --> B', '',
+    '00:00:04.000 --> 00:00:05.000', 'Language: is hard', '',
+  ].join('\n');
+  ok(parseVtt(tricky) === 'Note that this is important\nand so is this\n2024\nA --> B\nLanguage: is hard',
+    'Note／純數字／-->／Language: 開頭的字幕不會被誤刪');
+
+  const clip = clipTranscript('a'.repeat(MAX_TRANSCRIPT_CHARS + 100));
+  ok(clip.truncated === true && clip.text.length <= MAX_TRANSCRIPT_CHARS, '長逐字稿會截斷並標記');
+  ok(clipTranscript('短').truncated === false, '短逐字稿不截斷');
+  const longLines = Array.from({ length: 200 }, (_, i) => `L${String(i).padStart(3, '0')}${'x'.repeat(100)}`).join('\n');
+  const clippedLines = clipTranscript(longLines);
+  ok(clippedLines.truncated === true && clippedLines.text.endsWith('x'.repeat(100)) && clippedLines.text.length <= MAX_TRANSCRIPT_CHARS,
+    '逐字稿截斷會停在換行處，不留半行');
+  ok(formatVideoTime(0) === '00:00' && formatVideoTime(125) === '02:05' && formatVideoTime(3661) === '61:01', '影片時間用 mm:ss');
+  ok(formatChapters([{ start_time: 0, title: '開場' }, { start_time: 125, title: '主題' }]) === '00:00 開場；02:05 主題', '章節排成可讀大綱');
+  ok(formatChapters(null) === '' && formatChapters([]) === '', '沒有章節就回空');
   const tooBig = collectMediaAttachments([att({ size: limits.maxBytes + 1 })], limits);
   ok(tooBig.accepted.length === 0 && tooBig.skipped[0].reason.includes('上限'), '超過下載上限會跳過並說明原因');
 
