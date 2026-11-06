@@ -71,9 +71,12 @@ pm2 logs dc-bridge
 > `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
 > profile 裡你自己加的其它 MCP。
 >
-> `mcp-prts` 由 `npx` 拉起外部套件，第一次會下載約 600MB（原生 binary＋離線資料）。用跑 DSH 的同一個使用者先跑一次
-> `PRTS_TRANSPORT=stdio npx -y --package=prts-mcp@3.2.3 prts-mcp --help` 預熱；npx 快取在該使用者的
-> `~/.npm/_npx`，換使用者要重跑。沒預熱時 DSH 的 60 秒初始化逾時會讓它這次沒有工具。
+> `mcp-prts` 是獨立的 Docker container（`ghcr.io/3akhp/prts-mcp:3.2.3`），DSH 連 `http://127.0.0.1:3011/mcp`。
+> compose 在 `/root/bot/nadeko-docker/docker-compose.yml`，資料在 `prts-data` volume（掛到 `/data`），restart policy 是 `unless-stopped`。
+> 先 `docker compose up -d prts-mcp`，再 `curl http://127.0.0.1:3011/health` 確認回 `{"status":"ok"}`；
+> container 的 `IMAGES_ENABLED=true` 決定 `operator_artwork` 在不在。`GITHUB_TOKEN` 放在 container 的環境變數，
+> 讓 GitHub API 用 authenticated 額度；沒設會吃 60 次/小時的匿名上限，SQLite 同步會失敗。
+> DSH 的 MCP client 連不上會自動重連（預設最多約 2.5 分鐘）；超過才移除工具，要重啟 DSH 才會再連。
 
 ## 設定（`config.json` 的 `discord` 段）
 
@@ -1098,8 +1101,8 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 
 `mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__slang__*` 來自 `src/mcp-slang.js`，
-`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__prts__*` 來自 npm 套件
-`prts-mcp@3.2.3`（`npx` 拉起的 Rust 原生 server，釘版本）。五個 MCP 都由
+`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__prts__*` 來自 Docker container
+`ghcr.io/3akhp/prts-mcp:3.2.3`（HTTP MCP，`http://127.0.0.1:3011/mcp`）。五個 MCP 都由
 `node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
@@ -1284,9 +1287,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
    判斷的是 persona 的固定拒絕句
    （「這題我不碰，換一個」「這個不聊」「這個我不寫」「這個我不畫」「我只會當大肥魚」）；改 persona 時要同步
    `src/core/discord-ignore.mjs` 的 `REFUSAL_LINES`。
-9. **第三方 MCP 以同一個使用者執行**：`mcp-prts`（`prts-mcp@3.2.3`）是外部 npm 套件，以跑 DSH 的 `jun`
-   身分執行，讀得到 `config.json`、`state/discord-agent.json` 與 `~/.dsh`。版本釘死，但沒有 uid／容器隔離；
-   要更嚴格的隔離得另外用獨立使用者或容器跑。開圖片後它也會下載更多遠端內容。
+9. **PRTS 是獨立 container**：`mcp-prts` 跑在 Docker container `ghcr.io/3akhp/prts-mcp:3.2.3`，不掛主機目錄，
+   看不到 `config.json`、`state/discord-agent.json` 與 `~/.dsh`。但 HTTP MCP 綁在 `0.0.0.0:3011` 且沒有認證，
+   內網任何裝置都能呼叫這些唯讀工具；目前是使用者接受這個風險。container 需要對外連 GitHub／prts.wiki。
 
 ## 已知限制
 

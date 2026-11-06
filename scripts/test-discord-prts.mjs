@@ -46,7 +46,7 @@ for (const name of ['dc-learner', 'dc-trader']) {
   assert.equal(typeof other.guard({ name: 'mcp__prts__operator_artwork' }), 'string', `${name} 執行期也要擋立繪`)
 }
 
-// setup --discord：連跑兩次只能有一條 mcp-prts，而且 env／版本／command 都要對。
+// setup --discord：連跑兩次只能有一條 mcp-prts，而且 transport／URL 都要對。
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-prts-setup-'))
 for (let i = 0; i < 2; i++) {
   const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/setup-dsh.mjs'), '--discord'], {
@@ -61,11 +61,11 @@ const doc = yaml.load(fs.readFileSync(path.join(home, 'profiles/web/cordis.patch
 const entries = doc.flatMap((operation) => operation.insert ?? [])
 const prts = entries.filter((entry) => entry.id === 'mcp-prts')
 assert.equal(prts.length, 1, 'mcp-prts 只能有一條')
-assert.deepEqual(prts[0].config.args, ['-y', '--package=prts-mcp@3.2.3', 'prts-mcp'], '版本要釘死')
-assert.equal(prts[0].config.env.PRTS_TRANSPORT, 'stdio', '要用 stdio')
-assert.equal(prts[0].config.env.IMAGES_ENABLED, 'true', '要開立繪工具')
-assert.ok(path.isAbsolute(prts[0].config.command), 'npx 要用絕對路徑')
-assert.match(prts[0].config.command, /npx(\.cmd)?$/, 'npx 要用 node 同目錄的 npx')
+assert.equal(prts[0].config.transport, 'streamable-http', 'PRTS 走 HTTP')
+assert.equal(prts[0].config.url, 'http://127.0.0.1:3011/mcp', 'PRTS URL 要對')
+assert.equal(prts[0].config.command, undefined, 'HTTP 不寫 command')
+assert.equal(prts[0].config.args, undefined, 'HTTP 不寫 args')
+assert.equal(prts[0].config.env, undefined, 'env 在 container，不在 DSH')
 assert.equal(entries.find((entry) => entry.id === 'mcp-discord').config.command, process.execPath, '本機 MCP 仍用同一個 node')
 
 try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* 清不掉就算了，不影響斷言 */ }
