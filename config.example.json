@@ -47,6 +47,10 @@
       "timeoutMs": 25000,
       "maxVideoSeconds": 60
     },
+    "prts": {
+      "proxyUrl": "",
+      "proxyToken": ""
+    },
     "videoLinks": {
       "enabled": false,
       "ytDlpPath": ""

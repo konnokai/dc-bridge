@@ -1,5 +1,5 @@
 // PRTS 工具白名單：dc-chat 放行清單內的工具，dc-learner／dc-trader 在註冊期隱藏、執行期再擋一次。
-// 另外驗證 setup-dsh --discord 產生的 mcp-prts 條目（env、釘版本、絕對路徑）與冪等性。
+// 另外驗證 setup-dsh --discord 產生的 mcp-prts 條目（transport、URL）與冪等性。
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -34,7 +34,11 @@ assert.equal(presetConfig('dc-chat').allowPrts, true, 'dc-chat 要開 allowPrts'
 assert.ok(!chat.denied.includes('mcp__prts__search_prts'), 'dc-chat 不該藏 PRTS 工具')
 assert.equal(chat.guard({ name: 'mcp__prts__search_prts' }), undefined, 'dc-chat 放行查詞條')
 assert.equal(chat.guard({ name: 'mcp__prts__get_operator_basic_info' }), undefined, 'dc-chat 放行查幹員')
-assert.equal(chat.guard({ name: 'mcp__prts__operator_artwork' }), undefined, 'dc-chat 放行立繪')
+assert.equal(chat.guard({ name: 'mcp__prts__operator_artwork', arguments: { action: 'list' } }), undefined, 'dc-chat 放行立繪清單')
+assert.equal(chat.guard({ name: 'mcp__prts__operator_artwork', arguments: { action: 'get', variant: 'preview' } }), undefined, 'dc-chat 放行 256px 立繪')
+assert.match(chat.guard({ name: 'mcp__prts__operator_artwork', arguments: { action: 'get', variant: 'large' } }), /get_prts_artwork/, 'large 要指路到橋接工具')
+assert.match(chat.guard({ name: 'mcp__prts__operator_artwork', arguments: { action: 'get' } }), /get_prts_artwork/, '省略 variant 等於 large，也要擋')
+assert.equal(chat.guard({ name: 'mcp__discord__get_prts_artwork' }), undefined, 'dc-chat 放行橋接的 1024px 立繪')
 // prts-mcp 升版多出工具時，沒在清單裡的一律拒絕（要有人看過才放行）。
 assert.equal(typeof chat.guard({ name: 'mcp__prts__future_tool' }), 'string', '名單外的 PRTS 工具要拒絕')
 

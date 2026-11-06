@@ -87,10 +87,10 @@ function sentDetail(result, verb) {
  * 每個工具都是：post 到橋接 → 成功回文字，失敗回 isError（模型才不會以為做成了）。
  * success 也可以回 content 陣列（文字加圖片）。
  */
-function tool(name, description, schema, pathname, success, timeoutMs = 30_000) {
+function tool(name, description, schema, pathname, success, timeoutMs = 30_000, transform = (value) => value) {
   server.tool(name, description, schema, async (args) => {
     try {
-      const result = await post(pathname, args, timeoutMs);
+      const result = await post(pathname, transform(args), timeoutMs);
       const out = success(result);
       return { content: Array.isArray(out) ? out : [{ type: 'text', text: out }] };
     } catch (error) {
@@ -127,7 +127,7 @@ tool(
 
 tool(
   'send_prts_artwork',
-  '把 PRTS 官方立繪送進目前的 Discord 會話。artwork_id 先用 mcp__prts__operator_artwork 的 action=list 取得；variant 預設 preview（256px），要清楚一點用 large（1024px）。',
+  '把 PRTS 官方立繪送進目前的 Discord 會話。artwork_id 先用 mcp__prts__operator_artwork 的 action=list 取得；variant 預設 preview（256px），要清楚一點用 large（1024px）。要看圖用 get_prts_artwork，要生圖參考用 generate_image 的 prts:。',
   {
     token: sessionToken,
     artwork_id: z.string().describe('operator_artwork action=list 回傳的立繪檔名（例如 立绘_阿米娅_1.png）'),
@@ -138,6 +138,23 @@ tool(
   '/prtsArtwork',
   (result) => sentDetail(result, '送出立繪'),
   120_000,
+);
+
+tool(
+  'get_prts_artwork',
+  '看 PRTS 官方立繪（預設 large 1024px）。只把圖回給你看，不會貼到頻道；要貼用 send_prts_artwork，要生圖參考直接在 generate_image 填 prts:<幹員>/<檔名>。',
+  {
+    token: sessionToken,
+    artwork_id: z.string().describe('operator_artwork action=list 回傳的立繪檔名（例如 立绘_阿米娅_1.png）'),
+    variant: z.enum(['preview', 'large']).default('large').describe('large = 1024px（預設），preview = 256px'),
+  },
+  '/prtsImage',
+  (result) => [
+    { type: 'text', text: `PRTS 立繪 ${result.name}（${result.variant}${result.note ? `；${result.note}` : ''}）` },
+    { type: 'image', data: result.data, mimeType: result.mimeType },
+  ],
+  120_000,
+  (args) => ({ ...args, forModel: true }),
 );
 
 tool(

@@ -77,6 +77,10 @@ pm2 logs dc-bridge
 > container 的 `IMAGES_ENABLED=true` 決定 `operator_artwork` 在不在。`GITHUB_TOKEN` 放在 container 的環境變數，
 > 讓 GitHub API 用 authenticated 額度；沒設會吃 60 次/小時的匿名上限，SQLite 同步會失敗。
 > DSH 的 MCP client 連不上會自動重連（預設最多約 2.5 分鐘）；超過才移除工具，要重啟 DSH 才會再連。
+>
+> 可選：`discord.prts.proxyUrl`／`proxyToken` 指向 `cloudflare/prts-artwork-cache` 的 Worker。
+> Worker 用 R2 快取立繪，抓不到就回 502，橋接會 fallback 回直連；部署方式見該目錄的 `README.md`。
+> 第一次抓取仍走 Cloudflare → PRTS CDN，R2 只快取成功的那一次。
 
 ## 設定（`config.json` 的 `discord` 段）
 
@@ -114,6 +118,8 @@ pm2 logs dc-bridge
 | `media.maxCount` | 一則訊息與整批各最多處理幾張，預設 4（1 ~ 8）；影片抽格後算 1 張 |
 | `media.timeoutMs` | 單張縮圖／影片抽格的 ffmpeg 逾時，預設 25000 |
 | `media.maxVideoSeconds` | 影片只看前面幾秒，預設 60（5 ~ 120；6 格抽樣的上限就是 120 秒） |
+| `prts.proxyUrl` | 選用：Cloudflare Worker 的網址（例如 `https://prts-artwork-cache.<account>.workers.dev`）。留空就直連 PRTS |
+| `prts.proxyToken` | 選用：Worker 的 `PRTS_PROXY_TOKEN`，要跟 Worker secret 一樣；`proxyUrl` 有值時才生效 |
 | `videoLinks.enabled` | 群友貼 YouTube 這類連結時，`view_message` 用 yt-dlp 附字幕逐字稿、標題章節並抽幾格畫面，預設 `false` |
 | `videoLinks.ytDlpPath` | yt-dlp 的位置；留空就用 `YTDLP_PATH` 環境變數或 PATH 裡的 `yt-dlp` |
 | `context.enabled` | 抓最近幾則頻道訊息一起送進 prompt，預設 `true`。自由參與時只在會話的第一批帶（之後模型本來就看得到每一則）；有人用 `/blacklist` 退出後，下一批會再帶一次，把他們的訊息補進來 |
@@ -964,9 +970,12 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
 - `mcp__discord__send_prts_artwork`（`artwork_id`、`variant`／`content`／`reply_to` 可省略）：把 PRTS 官方立繪送進頻道。
   `artwork_id` 填 `mcp__prts__operator_artwork` 的 `action=list` 回傳檔名；`variant` 預設 `preview`（256px），
-  要清楚一點用 `large`（1024px）。圖由橋接從 `prts.wiki` 抓、暫存到 `state/discord-images` 後送出，
+  要清楚一點用 `large`（1024px）。圖由橋接從 `media.prts.wiki` 抓、暫存到 `state/discord-images` 後送出，
   送出失敗（例如沒有 Attach Files 權限）時會回直連網址，模型可以改用 `send_message` 貼連結；PRTS 抓不到就只回錯誤。
   佔「一輪 5 則」的名額，不計入畫圖次數
+- `mcp__discord__get_prts_artwork`（`artwork_id`、`variant` 可省略）：把 PRTS 官方立繪回給模型看，不會貼到頻道。
+  `variant` 預設 `large`（1024px），`preview` 是 256px。走跟 `send_prts_artwork` 同一條橋接抓圖路徑，
+  不受 `prts-mcp` container 的 1 MiB 上限影響；要貼圖用 `send_prts_artwork`，要生圖參考直接填 `prts:`。
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
 - `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
   （送出時橋接記下的，每個頻道最近 200 則，橋接重啟就清空）；進度、壓縮提示、審批、提問、錯誤、指令回覆這些橋接自己發的不能改。
@@ -1085,9 +1094,11 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   查幹員（`action=basic`／`skills`／`stats`）、`list_stages`／`get_stage_info` 查關卡、`search` 查
   operators／enemies／stages／items／skills、`read_story`／`get_story_summary` 查劇情。
   幹員名要填遊戲內的簡體中文（`阿米娅`、`凯尔希`），填繁體會回「未找到干员」並提示正確名稱。
-  `operator_artwork` 用 `action=list` 拿立繪檔名（純文字，很便宜）；`action=get` 會把圖送進模型
-  （`preview` 256px 約 41KB、`large` 1024px 約 276KB）。貼圖用 `mcp__discord__send_prts_artwork`，
-  生圖參考用 `generate_image` 的 `inputImage: prts:<幹員>/<檔名>`；參考固定抓 `large`。
+  `operator_artwork` 用 `action=list` 拿立繪檔名（純文字，很便宜）；`action=get` 只建議用 `preview`
+  （256px，約 41KB）。`large`（1024px）可能超過 container 的 1 MiB 上限（例如佩佩 skin1 約 2.3MB），
+  會被擋成「image exceeds 1048576 byte cap」；要看 large 用 `mcp__discord__get_prts_artwork`。
+  貼圖用 `mcp__discord__send_prts_artwork`，生圖參考用 `generate_image` 的
+  `inputImage: prts:<幹員>/<檔名>`；參考固定抓 `large`。
 - `mcp__discord__run_script`（`language`、`code`、`stdin` 可省略）：在一次性 Docker 容器裡跑一小段
   Python 或 Node（沒有網路、沒有主機檔案），回 stdout／stderr。預設關閉，只有 `sandbox.channels`
   裡的頻道能用；同一回合最多一次。詳細邊界見「執行程式」。
@@ -1296,17 +1307,22 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - 圖片附件（png/jpeg/webp/gif）與影片（mp4/webm/mov）會轉成 base64 送進模型；圖片超過
   `media.maxLongEdge` 或 `media.maxModelBytes` 時先用 ffmpeg 縮小，縮不動才跳過並告訴模型「附件未提供」。
   下載只認 `cdn.discordapp.com` / `media.discordapp.net` / `images-ext-*`，不跟隨轉址。
-- **PRTS 立繪是即時抓的**：`send_prts_artwork` 與 `prts:` 參考都會連 `prts.wiki`／`media.prts.wiki`；
-  preview 約 1~2 秒、large 約 1 秒（實測），沒有磁碟快取，同一張重複抓會再連一次。
-  送出失敗（例如沒有 Attach Files 權限）時才回直連網址；PRTS 抓不到就只回錯誤。
-  只認 `prts.wiki`／`media.prts.wiki`，轉址的每一跳也會檢查網域。
+- **PRTS 立繪是即時抓的**：`send_prts_artwork`、`get_prts_artwork` 與 `prts:` 參考都先依 MediaWiki
+  規則直接組 `media.prts.wiki` 的縮圖網址，抓不到才回頭查 `prts.wiki/api.php`；preview 約 1~2 秒、
+  large 約 1~3 秒（實測），沒有磁碟快取，同一張重複抓會再連一次。large 的縮圖 404 時（原圖本來就
+  只有 1024px）會再試一次 `media.prts.wiki` 原圖；原圖可能大於 1024px，超過 8MB 才放棄。網路逾時
+  直接回錯，不再多查一次 API；只有 HTTP 4xx／5xx 才 fallback。送出失敗（例如沒有 Attach Files
+  權限）時才回直連網址；PRTS 抓不到就只回錯誤。只認 `prts.wiki`／`media.prts.wiki`，轉址的每一跳也會檢查網域。
+  `prts-mcp` container 的 `operator_artwork action=get` 有 1 MiB 硬上限，large 超過就整張失敗；
+  模型看 large 要走橋接的 `get_prts_artwork`（會先用 `media.maxModelBytes`／`maxLongEdge` 縮圖再進模型，
+  生圖參考的 `prts:` 仍拿原檔）。
 - **語音訊息與音檔聽不到**：沒有 ASR，`audio/*` 一律不進模型；只 @bot 時回一句請對方打字。
 - **影片只看前 60 秒、只有畫面沒有聲音**：超過 `media.maxVideoSeconds` 的部分不看；要描述對話內容做不到。
   長影片、大檔案（超過 `media.maxBytes`，預設 20MB）會被跳過並回一句原因。
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 31 個，唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 32 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch` 與 24 個 `mcp__prts__*`（明日方舟資料）。
