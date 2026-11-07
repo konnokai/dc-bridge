@@ -265,7 +265,7 @@ export function formatQuota(result, now = Date.now()) {
   if (!result || result.skipped) return '';
   const name = QUOTA_NAMES[result.provider] ?? '訂閱';
   if (!result.ok) return `${name} 額度：查不到（${result.error ?? '未知原因'}）`;
-  const parts = result.windows.map((w) => `${w.label}剩 ${Math.round(w.remainingPercent)}%`
+  const parts = result.windows.map((w) => `${w.label}剩 ${Number(w.remainingPercent.toFixed(1))}%`
     + (w.status && w.status !== 'ok' ? `（${w.status}）` : '')
     + (w.resetsAt ? `，${untilText(w.resetsAt - now)}後重置` : ''));
   return `${name} 額度：${parts.join('｜')}`;

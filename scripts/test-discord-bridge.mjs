@@ -1902,7 +1902,7 @@ console.log('## 7c3. Command Code 額度');
     }),
   }).get();
   ok(partial.ok && partial.windows.map((w) => w.key).join() === 'monthly,fiveHour', '沒有上限的視窗直接不畫，不顯示 0% 或 100%');
-  ok(formatQuota({ ...partial, provider: 'commandcode' }, NOW).includes('5 小時剩 93%'), '剩一個視窗時 /status 只寫那一個');
+  ok(formatQuota({ ...partial, provider: 'commandcode' }, NOW).includes('5 小時剩 92.9%'), '剩一個視窗時 /status 只寫那一個，小數留一位');
 
   const noUsed = await createCommandCodeQuota({
     getKey: () => 'k',
