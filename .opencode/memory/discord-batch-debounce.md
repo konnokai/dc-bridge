@@ -1,17 +1,18 @@
 ---
 name: discord-batch-debounce
-description: 批次去抖：預設 20 秒、maxWait 30 秒、@ 後改用 4 秒短等待（不立刻送）、私聊不設 urgent
+description: 批次去抖：預設 20 秒、maxWait 30 秒、@ 後改用 8 秒短等待（不立刻送）、私聊不設 urgent
 ---
 
-一般批次（沒人 @）的去抖從 5 秒改到 20 秒，maxWait 從 15 秒改到 30 秒；有人 @ 或回覆 bot 的那批不等滿 20 秒，改用 4 秒的短等待（`urgentMs`），後面補的句子照樣併進同一批。私聊沒有 @，一律照 debounce 合批。
+一般批次（沒人 @）的去抖從 5 秒改到 20 秒，maxWait 從 15 秒改到 30 秒；有人 @ 或回覆 bot 的那批不等滿 20 秒，改用 8 秒的短等待（`urgentMs`），後面補的句子照樣併進同一批。私聊沒有 @，一律照 debounce 合批。
 
 ## 實作
 
 - `src/core/discord-core.mjs`：`debounceMs` 預設 `20_000`、`maxWaitMs` 預設 `30_000`；clamp 範圍不變。
 - `config.example.json`：同步 `20000`／`30000`。
-- `src/core/discord-batch.mjs`：`createBatcher` 新增 `urgentMs = 4_000`；批次帶 `urgent` 時整批改用 `Math.min(debounceMs, urgentMs)` 的短等待，而且 urgent 一但出現，後續每一則 add 都用短值重設 timer，不會又變回 20 秒。`item.urgent` 本身不再立刻 flush。
+- `src/core/discord-batch.mjs`：`createBatcher` 的 `urgentMs` 預設 `8_000`；批次帶 `urgent` 時整批改用 `Math.min(debounceMs, urgentMs)` 的短等待，而且 urgent 一但出現，後續每一則 add 都用短值重設 timer，不會又變回 20 秒。`item.urgent` 本身不再立刻 flush。
+- `formatBatch` 新增 `preview` 欄位，輸出 `[連結預覽：…]`（embed title／author／provider），走 defang；詳見 [[discord-message-preview]]。
 - `src/discord-bridge.js`：`batcher.add(..., { urgent: addressedToBot })`；`addressedToBot` 是頻道裡真的 @ 或回覆 bot（`shouldHandleGuildMessage(..., requireMention=true)`），私聊 `Boolean(guildId)` 為 false，刻意不設 urgent，避免私聊每則訊息都獨立成回合、拆散分句。
-- 連結預覽圖註解改成「批次至少等過幾秒（有人 @ 時 4 秒）」，不再說等過 debounce。
+- 連結預覽圖註解改成「批次至少等過幾秒（有人 @ 時 8 秒）」，不再說等過 debounce。
 
 ## 修正歷史
 
@@ -19,12 +20,17 @@ description: 批次去抖：預設 20 秒、maxWait 30 秒、@ 後改用 4 秒�
 - 單獨一則「@bot」立刻送出，畫面只有「[沒有文字，只有叫你]」；後面補的句子一定變第二個回合。
 - @ 模式頻道（預設 `requireMentionInGuild=true`）每則都算 @，20 秒合批等於失效。
 
-所以改成「短等待 4 秒」而不是「立刻送」，並補測試 5 項（`scripts/test-discord-bridge.mjs`）。
+所以改成「短等待 8 秒」而不是「立刻送」，並補測試 5 項（`scripts/test-discord-bridge.mjs`）。
 
 ## ★ 標頭與幻覺防護
 
 - `formatBatch`（`src/core/discord-batch.mjs`）標頭：有 @／回覆 bot 的訊息時寫「★ = 在叫你：@你或回覆你」；**沒有任何 direct 訊息時改寫「這批沒有 ★，沒有人在叫你」**，防止模型自己補出 ★、把別人互相回覆的閒聊當成在叫它（實際遇過）。
 - reviewer 指出：標頭只應寫橋接知道的事實（@／回覆），叫名字算不算在叫它留給 persona；「沒有人在叫你」可能跟 persona「話題提到你可接」衝突。目前程式碼仍用較強的「沒有人在叫你」版本。
+
+## 空的 @／回覆訊息
+
+- 只 @bot 或只回覆 bot、沒有文字／貼圖／附件的訊息仍會送進批次，prompt 標成 `[沒有文字，只有叫你]`，不會被當成空訊息丟掉（`emptyDirect`）。
+- 這類訊息不算 pending question／approval 的答案：有掛起的提問或審批時，空訊息不回答，照常聊天；避免把「只叫你」的空訊息吃掉成答案。
 
 ## 已知取捨
 

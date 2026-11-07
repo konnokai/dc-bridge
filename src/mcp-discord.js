@@ -113,10 +113,10 @@ tool(
 
 tool(
   'send_image',
-  '把 generate_image 畫好的圖送進目前的 Discord 會話。file 填【生圖完成】提示裡的 path（或那個檔名）；可以順便帶一句話。只送得出放在橋接圖片目錄裡的圖。',
+  '把 generate_image 畫好的圖，或梗圖庫裡的梗圖送進目前的 Discord 會話。file 填【生圖完成】提示裡的 path（或那個檔名），或 meme:<梗圖名稱>（名稱看【常用梗圖】或 search_memes）；可以順便帶一句話。只送得出放在橋接圖片目錄或梗圖庫裡的圖。',
   {
     token: sessionToken,
-    file: z.string().describe('【生圖完成】提示裡的 path（完整路徑或檔名都可以）'),
+    file: z.string().describe('【生圖完成】提示裡的 path（完整路徑或檔名都可以），或 meme:<梗圖名稱>'),
     content: z.string().optional().describe('跟圖片一起送的文字，可省略'),
     reply_to: messageRef('要回覆的那則訊息').optional(),
   },
@@ -457,6 +457,47 @@ tool(
     number: z.number().int().min(1).describe('要刪第幾條（舊→新的編號）'),
   },
   '/note-forget',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
+  'save_meme',
+  '把頻道裡一則訊息的圖存進梗圖庫（縮成長邊 256px 以內的小圖），之後用 send_image 的 file="meme:名稱" 送出。'
+    + '自己畫的圖要先 send_image 送進頻道，再用那則回傳的 #編號存；群友貼的圖只有他本人或管理員叫你存的那一輪才存得了。'
+    + '用 when 寫清楚什麼情境下才貼這張；圖上有群友的姓名或長相、私事就不要設 shared。私聊不能用。',
+  {
+    token: sessionToken,
+    message: z.string().describe('圖所在訊息的 #編號，加 /張數指定第幾張，例如 #k7f3ab/1（沒寫張數就是第 1 張）；只能用這個頻道出現過的編號'),
+    name: z.string().max(40).describe('梗圖名稱，最多 20 字，同一個伺服器不能重名，例如「但是我拒絕」'),
+    when: z.string().max(120).describe('什麼情境下用這張，最多 60 字，例如「有人要你做越界的事、要拒絕時」'),
+    tags: z.array(z.string().max(30)).max(8).optional().describe('關鍵字，最多 5 個，查詢用，可省略'),
+    shared: z.boolean().optional().describe('true = 所有伺服器共用；只有你自己畫、而且不含群友姓名長相的圖才設，預設只有這個伺服器'),
+  },
+  '/meme-save',
+  (result) => String(result.text ?? ''),
+  90_000,
+);
+
+tool(
+  'search_memes',
+  '查梗圖庫（這個伺服器的，加上所有伺服器共用的）。query 的每個詞都要出現在名稱、情境或標籤；留空就列出全部。【常用梗圖】沒有合適的才查。',
+  {
+    token: sessionToken,
+    query: z.string().optional().describe('想表達的情境或情緒，短一點，例如「拒絕」「笑」'),
+  },
+  '/meme-search',
+  (result) => String(result.text ?? ''),
+  10_000,
+);
+
+tool(
+  'forget_meme',
+  '刪掉一張梗圖。只有當初要求存這張的人，或管理員叫你刪的那一輪才刪得了。',
+  {
+    token: sessionToken,
+    name: z.string().max(40).describe('要刪的梗圖名稱（search_memes 回傳的）'),
+  },
+  '/meme-forget',
   (result) => String(result.text ?? ''),
 );
 

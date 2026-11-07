@@ -57,6 +57,8 @@
   th[aria-sort] .sort { color: var(--text); }
   th .sort-mark { width: 1em; font-size: 10px; color: var(--accent); }
   td.mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .meme-thumb { display: block; width: 72px; height: 54px; object-fit: contain; background: var(--panel-2); border-radius: 6px; }
+  .meme-tags { font-size: 12px; margin-top: 2px; }
   .muted { color: var(--muted); }
   pre#logs { margin: 0; max-height: 320px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
   pre#emoji-log { margin: 10px 0 0; max-height: 180px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
@@ -453,6 +455,18 @@
         <colgroup><col style="width:16%"><col style="width:38%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
         <thead><tr><th>頻道</th><th>筆記</th><th>種類</th><th>記下</th><th>過期</th><th></th></tr></thead>
         <tbody id="note-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>梗圖 <span id="memes-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 save_meme 存下的小圖，用 send_image 的 meme:名稱 送出。刪掉後模型就送不出那張；共用的梗圖所有伺服器都看得到。</p>
+    <div class="table-wrap">
+      <table style="min-width:760px">
+        <colgroup><col style="width:11%"><col style="width:34%"><col style="width:15%"><col style="width:15%"><col style="width:12%"><col style="width:13%"></colgroup>
+        <thead><tr><th>預覽</th><th>名稱與情境</th><th>範圍</th><th>來源</th><th>使用／尺寸</th><th></th></tr></thead>
+        <tbody id="meme-rows"></tbody>
       </table>
     </div>
   </section>
@@ -1384,6 +1398,46 @@
     )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有筆記。'))]));
   }
 
+  // 縮圖要帶 Authorization 標頭，<img src> 帶不了：抓成 blob 再顯示，同一張只抓一次。
+  const memeThumbs = new Map(); // 梗圖 id -> blob 網址
+  async function loadMemeThumb(id, img) {
+    if (memeThumbs.has(id)) { img.src = memeThumbs.get(id); return; }
+    try {
+      const res = await fetch('/api/memes/image?id=' + encodeURIComponent(id), { headers: { authorization: 'Bearer ' + token } });
+      if (!res.ok) return;
+      const url = URL.createObjectURL(await res.blob());
+      memeThumbs.set(id, url);
+      img.src = url;
+    } catch { /* 下一次 refresh 會再試 */ }
+  }
+
+  function renderMemes(data) {
+    const rows = data?.memes ?? [];
+    $('memes-count').textContent = data?.enabled
+      ? `（${rows.length} 張）`
+      : '（已關閉：config.json 的 discord.memes.enabled）';
+    const alive = new Set(rows.map((meme) => meme.id));
+    for (const [id, url] of memeThumbs) {
+      if (!alive.has(id)) { URL.revokeObjectURL(url); memeThumbs.delete(id); }
+    }
+    $('meme-rows').replaceChildren(...(rows.length ? rows.map((meme) => {
+      const img = el('img', { className: 'meme-thumb', alt: meme.name, width: meme.width, height: meme.height });
+      loadMemeThumb(meme.id, img);
+      return el('tr', {},
+        el('td', {}, img),
+        el('td', {},
+          el('div', {}, meme.name),
+          el('div', { className: 'muted' }, meme.when),
+          meme.tags?.length ? el('div', { className: 'muted meme-tags' }, meme.tags.join('、')) : null,
+        ),
+        el('td', {}, meme.scope === 'global' ? '所有伺服器共用' : meme.guildName),
+        el('td', { className: 'muted' }, (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName),
+        el('td', { className: 'muted' }, meme.uses + ' 次 · ' + meme.width + '×' + meme.height + ' · ' + Math.round(meme.bytes / 1024) + 'KB'),
+        el('td', {}, el('button', { className: 'danger', dataset: { memeId: meme.id }, textContent: '刪除' })),
+      );
+    }) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有梗圖。'))]));
+  }
+
   function renderSessions(list) {
     $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
       el('td', { title: s.key }, s.label || s.key),
@@ -1504,7 +1558,7 @@
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
       api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise, api('/api/followups'),
-      api('/api/trade/overview'),
+      api('/api/trade/overview'), api('/api/memes'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -1522,6 +1576,7 @@
     if (results[11].status === 'fulfilled' && results[11].value) renderDevFeedback(results[11].value);
     if (results[12].status === 'fulfilled') renderFollowups(results[12].value);
     if (results[13].status === 'fulfilled') renderTrade(results[13].value);
+    if (results[14].status === 'fulfilled') renderMemes(results[14].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -1734,6 +1789,22 @@
     button.disabled = true;
     try {
       await api('/api/notes/delete', { method: 'POST', body: JSON.stringify({ id: button.dataset.noteId }) });
+      await refresh();
+    } catch (error) {
+      alert('刪除失敗：' + error.message);
+      await refresh();
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('meme-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-meme-id]');
+    if (!button) return;
+    if (!confirm('刪掉這張梗圖？模型之後就送不出它了。')) return;
+    button.disabled = true;
+    try {
+      await api('/api/memes/delete', { method: 'POST', body: JSON.stringify({ id: button.dataset.memeId }) });
       await refresh();
     } catch (error) {
       alert('刪除失敗：' + error.message);

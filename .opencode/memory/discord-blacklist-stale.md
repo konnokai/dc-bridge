@@ -34,6 +34,12 @@ description: deny.self 的 ⊘ 標記會留在舊 prompt 與 DSH 壓縮摘要裡
 - 已知邊界：沒退出的人和退出的人同名時，沒退出的人叫 bot，prompt 仍可能同時出現「⊘ 只看不回：「小明」」和「★小明」；名單本來只印名字，要解需要把使用者 id 帶進 prompt，範圍較大，未動。
 - 審查者（engineering-code-reviewer）指出新句子主詞不清等問題，已修正後再 ship。
 
+## 非 ★ 的 ⊘ 訊息接入（commit ab93f52）
+
+- 伺服器頻道的非 ★ `deny.self` 訊息不進批次，改由 `silentPending` + 下一批上下文補抓；`context.enabled=false` 時永遠不會進模型。
+- 上下文用 `⊘` 標記退出者；`silentPending` 只在訊息 id ≤ boundary 時清掉，還沒涵蓋就不標 `primedKeys`，下一批再抓。
+- `reply_to`、`add_reaction`、`remember_user` 遇到這種訊息回 403；`forget_user_fact` 不受限。
+
 ## 不用改的部分
 
 - 送出閘門（`canReadMessage`、`isSilentMessage`）都讀當下的 cfg，所以解除後 `reply_to` 馬上可用。

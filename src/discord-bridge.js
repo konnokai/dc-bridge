@@ -161,15 +161,38 @@ import {
   describeSkipped,
   embedImages,
   fetchDiscordMedia,
+  loadMemeSourceBytes,
+  parseDrawRef,
   prepareMediaBlock,
   prepareVideoUrlBlock,
   referenceRefsByUrl,
   resolveGeneratedImage,
   resolveReferenceImage,
+  runInMediaQueue,
   stickerImages,
   stickerLabel,
   viewMediaItems,
 } from './core/discord-media.mjs';
+import {
+  addMeme,
+  canSaveMemeFrom,
+  checkMemeSlot,
+  createSentImageOwners,
+  deleteMemeById,
+  findMeme,
+  forgetMeme,
+  formatMemeList,
+  isMemeRef,
+  loadMemesFile,
+  memeFileName,
+  memeHint,
+  memeNameFromRef,
+  newMemeId,
+  normalizeMeme,
+  recordMemeUse,
+  saveMemesFile,
+  searchMemes,
+} from './core/discord-memes.mjs';
 import { resolvePrtsArtwork } from './core/prts-artwork.mjs';
 import { fetchVideoLink, formatChapters, formatVideoTime, videoLinks } from './core/discord-video-link.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
@@ -216,6 +239,10 @@ const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 // generate_image 的輸出目錄；dc-draw-image 會把 outputDir 固定到這裡，send_image 也只認這裡。
 const AGENT_IMAGE_DIR = path.join(STATE_DIR, 'discord-images');
 const IMAGE_JOBS_FILE = path.join(STATE_DIR, 'discord-image-jobs.json');
+// 梗圖庫：不放進 discord-images，那個目錄只留最新 100 張、會被 dc-draw-image 清掉。
+const MEMES_DIR = path.join(STATE_DIR, 'discord-memes');
+const MEMES_INDEX_FILE = path.join(MEMES_DIR, 'index.json');
+const MEMES_FILES_DIR = path.join(MEMES_DIR, 'files');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
@@ -237,6 +264,7 @@ const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重
 const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
 const MEMORY_WRITES_PER_TURN = 3; // 記憶會留存、又是群友文字推動的，一輪寫幾次要有上限
 const NOTE_WRITES_PER_TURN = 2; // 頻道筆記也是群友文字推動的，一輪最多記 2 條
+const MEME_SAVES_PER_TURN = 2; // 每次存都要下載＋跑 ffmpeg，一輪最多 2 次（失敗也算）
 const SLANG_WRITES_PER_TURN = 3; // 模型自己收錄黑話／標籤也一樣，避免每一批都往詞庫塞
 const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一次（DSH 可能已經壓縮掉了）
 const SUMMARY_MIN_MESSAGES = 10; // 少於這個量不做每日摘要，省 token
@@ -499,6 +527,50 @@ async function main() {
     }
   }
 
+  // 梗圖庫：索引在 state/discord-memes/index.json，圖檔在同目錄的 files/。
+  const memesLoaded = loadMemesFile(MEMES_INDEX_FILE);
+  const memeStore = memesLoaded.store;
+  const sentImageOwners = createSentImageOwners(); // bot 送出的生圖訊息 id -> 要求畫圖的人
+  if (memesLoaded.warning) log(`⚠️ 梗圖庫：${memesLoaded.warning}`);
+  let memesDirty = false;
+  let memesSaveTimer = null;
+
+  function markMemesDirty() {
+    memesDirty = true;
+    if (memesSaveTimer) return;
+    memesSaveTimer = setTimeout(() => {
+      memesSaveTimer = null;
+      flushMemes();
+    }, 2000);
+    memesSaveTimer.unref?.();
+  }
+
+  function flushMemes() {
+    if (!memesDirty) return;
+    try {
+      saveMemesFile(MEMES_INDEX_FILE, memeStore);
+      memesDirty = false;
+    } catch (error) {
+      log(`梗圖索引存檔失敗：${error?.message ?? error}`);
+    }
+  }
+
+  // 存圖與刪圖改了檔案，索引要跟著立刻寫，不等 2 秒的延遲存檔：崩潰時才不會留下沒有索引的孤兒檔。
+  function persistMemesNow() {
+    memesDirty = true;
+    flushMemes();
+  }
+
+  // 開機時清掉索引裡沒有的圖檔（上次存圖途中崩潰留下的）。索引剛因為壞檔重建時不清：舊圖檔還有救回來的機會。
+  if (!memesLoaded.warning) {
+    try {
+      const known = new Set(memeStore.memes.map((meme) => memeFileName(meme)));
+      for (const name of fs.readdirSync(MEMES_FILES_DIR)) {
+        if (/^m_[a-z0-9]+\.(png|gif)$/.test(name) && !known.has(name)) fs.rmSync(path.join(MEMES_FILES_DIR, name), { force: true });
+      }
+    } catch { /* 目錄還不存在就是沒有孤兒檔 */ }
+  }
+
   // 開發回饋：模型用 submit_feedback 送出的意見，只有控制台看得到。
   const devFeedbackLoaded = loadDevFeedbackFile(DEV_FEEDBACK_FILE);
   const devFeedbackStore = devFeedbackLoaded.store;
@@ -602,6 +674,7 @@ async function main() {
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
   const notesShown = new Map(); // key -> Map<noteId, { at, shownAt }>：這個會話帶過哪些頻道筆記
   const noteWrites = new Map(); // key -> 這一輪寫了幾條頻道筆記
+  const memeSaves = new Map(); // key -> 這一輪試著存了幾張梗圖
   const devFeedbackWrites = new Map(); // key -> 這一輪送了幾筆開發回饋
   const devFeedbackEdits = new Map(); // key -> 這一輪改了幾個開發回饋
   const slangWrites = new Map(); // key -> 這一輪自己收錄了幾次黑話／標籤
@@ -645,6 +718,7 @@ async function main() {
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushMemes(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushDevFeedback(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushTriggers(); } catch { /* 收尾失敗不影響結束 */ }
@@ -1082,6 +1156,7 @@ async function main() {
     memoryWrites.delete(key);
     notesShown.delete(key);
     noteWrites.delete(key);
+    memeSaves.delete(key);
     devFeedbackWrites.delete(key);
     devFeedbackEdits.delete(key);
     slangWrites.delete(key);
@@ -1355,8 +1430,14 @@ async function main() {
       if (!found) throw toolError(`這個伺服器沒有貼圖「${sticker}」：先用 search_stickers 查貼圖名稱`, 404);
       stickerId = found.id;
     }
-    // 只認 generate_image 的輸出目錄；模型給的 path 先收斂成檔名再組回去。
-    const image = file ? resolveGeneratedImage(AGENT_IMAGE_DIR, file) : null;
+    // `meme:<名稱>` 走梗圖庫；其他只認 generate_image 的輸出目錄，模型給的 path 先收斂成檔名再組回去。
+    let meme = null;
+    let image = null;
+    if (file && isMemeRef(file)) {
+      ({ meme, image } = resolveMemeImage(await resolveChannel(key), file));
+    } else if (file) {
+      image = resolveGeneratedImage(AGENT_IMAGE_DIR, file);
+    }
     let sent;
     try {
       sent = await sendLong(key, content, { replyTo: replyMessage?.id ?? null, stickerId, file: image });
@@ -1366,7 +1447,44 @@ async function main() {
       }
       throw error;
     }
+    if (meme) {
+      recordMemeUse(memeStore, meme.id);
+      markMemesDirty();
+    } else if (image) {
+      // 生圖完成那一輪沒有 ★：用生圖開始時記下的人當要求者；查不到（逾時、重啟）就用這一輪的 ★ 觸發者。
+      const drawUsers = drawUsersForFile({ pendingDraws, key, file, ttlMs: IMAGE_JOB_TTL_MS }).map((user) => user.userId);
+      sentImageOwners.record(sent[0]?.id, drawUsers.length ? drawUsers : directTriggerIds(key));
+    }
     return sent.map((message) => message.id);
+  }
+
+  /**
+   * 這一輪真正叫 bot 的人（有 ★ 的訊息的發言者）。不能用 turnUsers：沒有 ★ 的批次它記的是整批的發言者，
+   * 等於任何人在閒聊裡出現一句話，就能讓模型存他的圖或刪別人的梗圖。
+   */
+  function directTriggerIds(key) {
+    return [...new Set((turnDirectMessages.get(key) ?? []).map((entry) => String(entry.userId)))];
+  }
+
+  /** 梗圖庫的入口閘：功能要開，而且只有伺服器頻道能用。 */
+  function memesGuard(channel) {
+    if (!cfg.discord.memes.enabled) throw toolError('梗圖庫沒開（config.json 的 discord.memes.enabled）', 403);
+    if (!channel.guildId) throw toolError('私聊沒有梗圖庫', 403);
+  }
+
+  /** `meme:<名稱>` → 這個伺服器看得到的梗圖與已讀進記憶體的檔案；私聊、查不到、檔案不見都回明確錯誤。 */
+  function resolveMemeImage(channel, file) {
+    memesGuard(channel);
+    const name = memeNameFromRef(file);
+    const meme = findMeme(memeStore, channel.guildId, name);
+    if (!meme) throw toolError(`找不到梗圖「${name}」：先用 search_memes 看名稱，不要自己編`, 404);
+    let buffer;
+    try {
+      buffer = fs.readFileSync(path.join(MEMES_FILES_DIR, memeFileName(meme)));
+    } catch {
+      throw toolError(`梗圖「${meme.name}」的檔案不見了：請管理員到控制台刪掉這筆`, 500);
+    }
+    return { meme, image: { buffer, name: `meme-${meme.id}.${meme.kind}` } };
   }
 
   // 改和收回之前把舊內容記進日誌：模型被誘導改壞或刪掉時，事後查得到原文。
@@ -2146,24 +2264,27 @@ async function main() {
       }
     },
     async send(body, options = {}) {
-      // 安靜期間只准 reaction 與生圖的檔案；PRTS 立繪是新發言，不算生圖檔案。
+      // 安靜期間只准 reaction 與生圖的檔案；PRTS 立繪與梗圖是新發言，不算生圖檔案。
       const { key } = await agentSender.resolve(body.token);
       const quietAt = quietUntil(key);
-      if (quietSendBlocked({ quietUntil: quietAt, file: options.prts ? '' : body.file })) {
+      const memeSend = isMemeRef(body.file);
+      const freshSpeech = options.prts === true || memeSend;
+      if (quietSendBlocked({ quietUntil: quietAt, file: freshSpeech ? '' : body.file })) {
         throw toolError(`安靜中（到 ${formatQuietUntil(quietAt)}），只能用 add_reaction 回；要恢復說話先 set_quiet minutes=0`, 409);
       }
       // 這一步剛攔過補句：其他 send 也先壓住，模型看完補句後在同一個回合重新決定。
       if (turnFollowupHeld.has(key)) {
         return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
       }
-      // 純文字才攔補句：帶圖片或貼圖的訊息照常送，補句的圖留給正常批次；PRTS 立繪是新發言，照純文字規則。
-      if (options.prts || (!textArg(body.file, 500) && !textArg(body.sticker))) {
+      // 純文字才攔補句：帶圖片或貼圖的訊息照常送，補句的圖留給正常批次；PRTS 立繪與梗圖是新發言，照純文字規則。
+      if (freshSpeech || (!textArg(body.file, 500) && !textArg(body.sticker))) {
         const followup = takeFollowupNotice(key);
         if (followup) return followup;
       }
       const refusal = await prepareRefusal(body);
       if (refusal?.replaced) return refusal.replaced;
-      const result = await sendMessage(body, { draw: options.prts ? false : true });
+      // 梗圖不是畫出來的，不計繪圖次數。
+      const result = await sendMessage(body, { draw: !freshSpeech });
       // 真的送出成功才累加：第一則失敗時，下一次仍然是第一次拒絕。
       if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
       return result;
@@ -2801,6 +2922,101 @@ async function main() {
       log(`MCP 刪頻道筆記 ${key}（第 ${number} 條「${flat(removed.text, 60)}」，剩 ${left.length} 條）`);
       return { text: left.length ? `已刪除「${flat(removed.text, 60)}」。剩下的筆記：\n${formatNoteList(left)}` : `已刪除「${flat(removed.text, 60)}」，這個頻道沒有筆記了。` };
     },
+    // 梗圖庫：把頻道裡一則訊息的圖存成 128～256px 的小圖，之後用 send_image 的 meme:<名稱> 送出。
+    async 'meme-save'(body) {
+      const { key, channel, sessionId } = await agentSender.resolve(body.token);
+      memesGuard(channel);
+      // 名額在第一個 await 之前就先佔：同一步的並行呼叫才不會一起鑽過上限。失敗也算一次。
+      const used = memeSaves.get(key) ?? 0;
+      if (used >= MEME_SAVES_PER_TURN) throw toolError(`一輪最多存 ${MEME_SAVES_PER_TURN} 次梗圖，下一輪再存`, 429);
+      memeSaves.set(key, used + 1);
+      const ref = parseDrawRef(body.message);
+      if (!ref) throw toolError('message 格式不對：填 #編號/張數，例如 #k7f3ab/1', 400);
+      agentSender.checkSensitive(sessionId, [body.name, body.when, ...(Array.isArray(body.tags) ? body.tags : [])].join('\n'));
+      const fields = {
+        name: body.name,
+        when: body.when,
+        tags: body.tags,
+        scope: body.shared === true ? 'global' : 'guild',
+        guildId: channel.guildId,
+        channelId: channel.id,
+      };
+      // 先過名稱、重名、額度與容量，再下載與縮圖。
+      const slot = checkMemeSlot(memeStore, { ...fields, authorIsBot: true });
+      if (slot.error) throw toolError(slot.error, slot.status);
+      const messageId = messageRefs.lookup(key, ref.ref);
+      if (!messageId) throw toolError(`找不到訊息 #${ref.ref}：只能用這個頻道出現過的 #編號`, 404);
+      const message = await channel.messages.fetch(messageId).catch(() => null);
+      if (!message) throw toolError(`訊息 #${ref.ref} 已經不存在（可能被刪了）`, 404);
+      const authorIsBot = message.author?.id === client.user.id;
+      const turnIds = directTriggerIds(key);
+      if (!authorIsBot) {
+        if (!canReadMessage(cfg.discord, message, client.user.id, ignoredUser)) {
+          throw toolError('不能存這張：對方已退出、被封鎖或在不理名單', 403);
+        }
+        if (!canSaveMemeFrom({ authorIsBot, authorId: message.author?.id, turnUserIds: turnIds, adminIds: [...ownerIds] })) {
+          throw toolError('這是群友貼的圖：只有他本人或管理員叫你存的那一輪才能存', 403);
+        }
+      }
+      let source;
+      try {
+        source = await loadMemeSourceBytes(message, ref.index, cfg.discord.media);
+      } catch (error) {
+        throw toolError(String(error?.message ?? error), Number(error?.statusCode) || 502);
+      }
+      const out = await runInMediaQueue(() => normalizeMeme(source.buffer, { ffmpegPath: cfg.discord.media.ffmpegPath ?? null }));
+      if (!out.ok) throw toolError(`存不了：${out.error}`, 400);
+      const added = addMeme(memeStore, {
+        ...fields,
+        id: newMemeId(),
+        kind: out.kind,
+        width: out.width,
+        height: out.height,
+        bytes: out.buffer.length,
+        authorId: message.author?.id,
+        authorIsBot,
+        messageId: message.id,
+        // 這一輪的 ★ 觸發者，加上（bot 自己的圖）當初要求畫這張的人。
+        requesters: [...new Set([...turnIds, ...(authorIsBot ? sentImageOwners.lookup(message.id) : [])])],
+      });
+      if (added.error) throw toolError(added.error, added.status);
+      try {
+        fs.mkdirSync(MEMES_FILES_DIR, { recursive: true });
+        fs.writeFileSync(path.join(MEMES_FILES_DIR, memeFileName(added.meme)), out.buffer, { mode: 0o600 });
+      } catch (error) {
+        deleteMemeById(memeStore, added.meme.id);
+        log(`梗圖寫檔失敗：${error?.message ?? error}`);
+        throw toolError('梗圖寫檔失敗，沒有存', 500);
+      }
+      persistMemesNow();
+      log(`MCP 存梗圖 ${key}（${flat(added.meme.name, 30)}，${added.meme.scope}，${out.note}）`);
+      return {
+        text: `已存成梗圖「${added.meme.name}」（${out.note}；${added.meme.scope === 'global' ? '所有伺服器共用' : '只有這個伺服器'}）。要送用 send_image，file 填 meme:${added.meme.name}。${added.note ? `\n${added.note}` : ''}`,
+      };
+    },
+    async 'meme-search'(body) {
+      const { channel } = await agentSender.resolve(body.token);
+      memesGuard(channel);
+      const list = searchMemes(memeStore, channel.guildId, body.query);
+      if (list.length === 0) return { text: textArg(body.query, 40) ? '沒有符合的梗圖。' : '這個伺服器還沒有梗圖。' };
+      return { text: `梗圖（送出：send_image 的 file 填 "meme:名稱"）：\n${formatMemeList(list)}` };
+    },
+    async 'meme-forget'(body) {
+      const { key, channel } = await agentSender.resolve(body.token);
+      memesGuard(channel);
+      const result = forgetMeme(memeStore, {
+        guildId: channel.guildId,
+        name: textArg(body.name, 60),
+        userIds: directTriggerIds(key),
+        adminIds: [...ownerIds],
+      });
+      if (result.error) throw toolError(result.error, result.status);
+      // 先寫索引再刪檔：中途崩潰只會留下孤兒檔（開機清掉），不會留下指向不存在檔案的索引。
+      persistMemesNow();
+      try { fs.rmSync(path.join(MEMES_FILES_DIR, memeFileName(result.meme)), { force: true }); } catch { /* 檔案本來就不在 */ }
+      log(`MCP 刪梗圖 ${key}（${flat(result.meme.name, 30)}）`);
+      return { text: `已刪除梗圖「${result.meme.name}」。` };
+    },
     // 開發回饋：模型覺得缺能力或有意見時送給開發者。內容只進控制台，不回到頻道。
     async 'dev-feedback'(body) {
       const { sessionId, key, channel } = await agentSender.resolve(body.token);
@@ -3376,6 +3592,7 @@ async function main() {
       agentSender.startTurn(key);
       memoryWrites.delete(key);
       noteWrites.delete(key);
+      memeSaves.delete(key);
       devFeedbackWrites.delete(key);
       devFeedbackEdits.delete(key);
       slangWrites.delete(key);
@@ -3959,6 +4176,17 @@ async function main() {
       ].filter(Boolean).join('\n');
     }
 
+    // 梗圖：本服前幾張＋跨伺服器共用的前幾張，只帶名稱與使用情境（模型不會自己想到去搜）。
+    // 同一會話沒變就不重帶；清單變了（存了新的、用次數改了排序）才會再帶一次。
+    let memeHintText = '';
+    if (cfg.discord.memes.enabled && guild) {
+      if (!emojiShown.has(key)) emojiShown.set(key, new Map());
+      memeHintText = onceInSession(emojiShown.get(key), 'meme', memeHint(memeStore, job.guildId, {
+        localMax: cfg.discord.memes.localMax,
+        otherMax: cfg.discord.memes.otherMax,
+      }), Date.now(), MEMORY_REFRESH_MS);
+    }
+
     // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
     const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
     // 名單每批重算：模型會把舊 prompt 或壓縮摘要裡的 ⊘ 當成現在，這一行負責校正。
@@ -3983,7 +4211,7 @@ async function main() {
       chatty ? '' : formatActivityLine(activity.stats(key)),
     ].filter(Boolean).join('\n');
     return {
-      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled }), blacklistStatus, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, memeHintText, formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled }), blacklistStatus, batch, time].filter(Boolean).join('\n'),
       images,
       feedbackEntries,
     };
@@ -5931,6 +6159,45 @@ async function main() {
             if (removed) markNotesDirty();
             return removed;
           },
+          memes: () => ({
+            enabled: cfg.discord.memes.enabled,
+            memes: memeStore.memes.map((meme) => ({
+              id: meme.id,
+              name: meme.name,
+              when: meme.when,
+              tags: meme.tags,
+              scope: meme.scope,
+              kind: meme.kind,
+              width: meme.width,
+              height: meme.height,
+              bytes: meme.bytes,
+              uses: meme.uses,
+              createdAt: meme.createdAt,
+              createdBy: meme.authorIsBot ? 'bot' : 'user',
+              guildName: client.guilds.cache.get(meme.guildId)?.name ?? meme.guildId,
+              channelName: client.channels.cache.get(meme.channelId)?.name ?? meme.channelId,
+            })),
+          }),
+          memeImage: (id) => {
+            const meme = memeStore.memes.find((item) => item.id === id);
+            if (!meme) return null;
+            try {
+              return {
+                buffer: fs.readFileSync(path.join(MEMES_FILES_DIR, memeFileName(meme))),
+                mime: meme.kind === 'gif' ? 'image/gif' : 'image/png',
+              };
+            } catch {
+              return null;
+            }
+          },
+          deleteMeme: (id) => {
+            const removed = deleteMemeById(memeStore, id);
+            if (!removed) return null;
+            persistMemesNow();
+            try { fs.rmSync(path.join(MEMES_FILES_DIR, memeFileName(removed)), { force: true }); } catch { /* 檔案本來就不在 */ }
+            log(`控制台刪梗圖 ${removed.name}`);
+            return removed;
+          },
           devFeedback: () => ({ items: devFeedbackOverview(devFeedbackStore) }),
           deleteDevFeedback: (id) => {
             const removed = deleteDevFeedbackById(devFeedbackStore, id);
@@ -6042,6 +6309,7 @@ async function main() {
     log(`收到 ${signal}，結束中…`);
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushMemes(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushDevFeedback(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ }

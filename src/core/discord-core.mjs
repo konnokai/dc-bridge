@@ -178,6 +178,13 @@ export function normalizeDiscordConfig(raw) {
       maxCandidates: clamp(src.emoji?.maxCandidates, 12, 3, 30),
       maxChars: clamp(src.emoji?.maxChars, 600, 100, 3000),
     },
+    memes: {
+      // 梗圖庫：模型把頻道裡的圖存成 128～256px 的小圖，再用 send_image 的 meme:<名稱> 送出。
+      // 預設開：圖只存在 state/discord-memes，沒有外部成本；要關就設 enabled:false。
+      enabled: src.memes?.enabled !== false,
+      localMax: clamp(src.memes?.localMax, 8, 0, 20),
+      otherMax: clamp(src.memes?.otherMax, 4, 0, 10),
+    },
     reactions: {
       // 沒被 @ 的頻道訊息，偶爾加一個 reaction（不廢話）。
       enabled: src.reactions?.enabled === true,
@@ -575,6 +582,9 @@ const PROGRESS_LABELS = {
   'mcp__discord__note_event': ['📝 記下頻道事件'],
   'mcp__discord__search_notes': ['📝 查頻道筆記', (args) => args.query],
   'mcp__discord__forget_note': ['🗑️ 刪頻道筆記'],
+  'mcp__discord__save_meme': ['🖼️ 存梗圖', (args) => args.name],
+  'mcp__discord__search_memes': ['🖼️ 找梗圖', (args) => args.query],
+  'mcp__discord__forget_meme': ['🗑️ 刪梗圖', (args) => args.name],
   'mcp__discord__run_script': ['🧮 跑程式', (args) => (args.language === 'node' ? 'Node' : 'Python')],
   'mcp__trade__get_quote': ['📈 查股價', (args) => args.query],
   'mcp__trade__place_order': ['📝 模擬下單', (args) => `${args.side === 'sell' ? '賣' : '買'} ${args.symbol} ${args.quantity} 股`],

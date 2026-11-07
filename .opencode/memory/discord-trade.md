@@ -13,6 +13,9 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - 權限：`dc-tool-restrict` 的 `trade: player|bot|none`、`dc-session-token` 的 `trade`、`setup-dsh` 的 `mcp-trade`。
 - 控制台：「股盤」唯讀分頁與「設定」分頁的交易表單；`/api/trade/*`。
 - Node ≥26（`node:sqlite`）；伺服器 26.12.1、本機 26.13。
+- `mcp-trade` 暴露 6 個工具：`get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`、`bot_place_order`。
+- `dc-tool-restrict` 的 `trade: player|bot|none`；Bot 額外有 web search/fetch 上限（橋接寫 `state/discord-trade-limits.json`，preset 讀取並取 min）。
+- Bot 一次性會話只活在記憶體，不寫入 sessions 檔；`resolve(token, { allowBot: true })` 只給 Bot 交易端點使用。
 
 ## 資料來源
 
@@ -20,6 +23,9 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - TWSE 資料會晚一天：18:28 仍為前一日資料，TPEx 已是當日資料。
 - provider 跳過無成交列（TPEx 回 `Close:"----"`、`Change:"---"`）；`getForDate` 只認資料日期等於 trade_date；`dataDate` 回整份來源日期。
 - 無成交／停牌股票：整份資料日期 > trade_date 才判定逾期拒絕。
+- 三大法人日報：`src/core/institutional-provider.mjs`，TWSE `T86`（`/rwd/zh/fund/T86`）與 TPEx OpenAPI `tpex_3insti_daily_trading`；欄位用「先精確比對再 contains」避免 `自營商買賣超股數` 被 `自營商買賣超股數(避險)` 誤抓。
+- 重大訊息：`src/core/material-provider.mjs`，TWSE `t187ap04_L`、TPEx `mopsfin_t187ap04_O`。MOPS 公告日通常比復盤日早一天，parser 收 `[prevTradingDate, date]` 範圍並標每筆實際日期；空結果不快取，下一輪重抓。`getForSymbols` 以 `time + subject` 去重、依日期+時間由新到舊排序、每檔取前 3。
+- 休市日 provider：`src/core/quote-provider.mjs` 的 `getHolidays()`，失敗只快取 5 分鐘（不再 12 小時），空回應算失敗；同時合併重複請求（inflight）；`extraHolidays`（`config.discord.trade.extraHolidays`，YYYY-MM-DD）與 API 結果聯集，供颱風／臨時停市。
 
 ## 漲跌停與參考價
 
@@ -31,6 +37,7 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 
 - 台北時間 09:00–13:30 盤中；週末與行事曆休市；`nextOpen` 給下一次開盤時間。
 - 結算只在收盤後進行（`market.phase` 為 after）。
+- 結算開始時間由 `trade.settlement.twSettleAfter` 控制，預設 `19:00`（HH:MM）；19:00 前即使有收盤資料也不結算，等收盤價、法人、晚報資料較齊。
 
 ## 帳戶與下單
 
@@ -41,7 +48,8 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 
 ## 結算
 
-- `settleDue`：收盤後成交；資料日期等於 trade_date 才成交；逾期拒絕並釋放保留。
+- `settleDue`：收盤後成交；`market.minutes >= twSettleAfter`（預設 19:00）才開始；資料日期等於 trade_date 才成交；逾期拒絕並釋放保留。
+- `prevPrevTradingDate` 空時 fail-closed（拒絕舊資料過關）；春節後第一個交易日的前兩個交易日仍可算出。
 - 漲停買單、跌停賣單不成交。
 - 結算與 Bot 排程有執行旗標防重疊；`rejectOrder` 遇非 pending 回 null。
 
@@ -51,6 +59,17 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - `bot:trader` 一次性會話只活在記憶體，不寫入 sessions 檔。
 - `resolve(token, { allowBot: true })` 只給 Bot 交易端點使用。
 - 復盤公告排版：`formatReviewBody`（`src/core/bot-trader.mjs`）把模型一整段拆成一句一行，並把點數／百分比／金額等重點數字加粗（`KEY_NUMBER`）；已分好的短行、清單、粗體原樣保留。`formatReviewNotice` 走 `formatReviewBody`；`sendTradeNotice` 也走 `splitDiscordMessage` 分段送。dc-trader persona 改要求 4~8 行、一行一個重點、數字用粗體；dc-chat persona 加「復盤、摘要、報告這類長訊息：一句一行或分成幾段，重點數字用粗體」。docs/guides/DISCORD.md 與 PLAN_STOCK.md 同步。
+- Bot 復盤（review）：`trade.bot.review.enabled` 預設 true、`review.after` 預設 `19:10`。Bridge 先抓收盤價與法人資料（TWSE T86、TPEx OpenAPI），模型只補新聞；19:40 法人還缺就照跑並標「查不到」。重大訊息 API 常隔天才更新，復盤只等法人，重大訊息缺就照跑並標「最近交易日的重大訊息：查不到」。復盤輸出發到 `announceChannelId`，這一輪不能下單。Bot runs 以 `kind` 區分 `decision`／`review`；復盤每交易日一次，重啟不補做。
+- 復盤公開前安全處理：`stripPublicLinks` 去 URL／邀請連結；`findSensitive` 命中就不發布、只記 log；發送加 `SuppressEmbeds`。`botReviewRunning` 在等待資料前就設 true，避免重複排程。
+- 隔天決策只帶入 `lastReview.date >= market.prevPrevTradingDate` 的復盤，避免過期摘要；復盤摘要存 `daily_reviews`（date PK）。
+
+## 營運狀態（2026-11-05）
+
+- `trade.enabled` 與 `trade.bot.enabled` 皆開啟；Bot 帳戶 `bot:1564252581340127294`，起始資金 1,000,000 NT$；公告頻道 `739040035571236905`（#雜談交流大廳）。
+- 復盤排程在 19:10（`review.after`），`daily_reviews` 表記錄摘要與 token；Bot 盤中決策在 09:00 後。
+- TWSE OpenAPI 常只到前一交易日，19:10 當天重大訊息更新尚未實測驗證。
+- 使用者所述：重大訊息規定下午兩點之後發布，所以盤前新聞彙整參考性有限；目前 Bot 在 09:00 後第一次決策時自己查新聞，沒有盤前摘要功能。
+- 交易 DB `state/discord-trade.sqlite` 權限 600，每日備份保留 7 份。
 
 ## 備份
 
@@ -60,5 +79,6 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 
 - Console UI 測試缺 Playwright，只做 HTML 語法與標籤平衡檢查。
 - `node scripts/test-setup-dsh-idempotent.mjs` 需 `DSH_INSTALL_MODULES`，本機無法跑。
+- 測試套件：`npm run test:discord` 為 22 支腳本（含 `test-discord-trade`、`test-discord-trade-db`、`test-discord-bot-trader`、`test-discord-institutional`）；`test-mcp-servers-stdio` 驗證 mcp-trade 6 工具。
 
 相關：[[discord-usage-pricing]]、[[discord-console-table-layout]]。
