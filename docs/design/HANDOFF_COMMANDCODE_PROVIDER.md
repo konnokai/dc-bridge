@@ -42,8 +42,9 @@ DSH 已經裝好社群外掛 `@mars-sea/dsh-commandcode-provider` 並登入 Comm
   - `src/discord-bridge.js:399`：config 載入時 `provider` 的預設值是 `'opencode-go'`。
   - `scripts/build-discord-emojis.mjs:52`：同樣的預設值。
   - `config.example.json:4-5`。
-- `src/discord-bridge.js:789` `quotaInfo()`：provider 不是 `opencode-go` 就回 `skipped`，
-  `/status` 與控制台的 OpenCode Go 額度卡片自然消失。這是預期行為，不用改。
+- `src/discord-bridge.js` `quotaInfo()`：這份實作當時只有 `opencode-go` 有額度查詢，其他 provider 回 `skipped`。
+  後續補了 Command Code 額度（`GET /alpha/billing/credits`），卡片改成跟著 provider 換標題，
+  見 `docs/guides/DISCORD.md`「訂閱額度」。
 - 價目表 `src/model-prices.js` 的 `DEFAULT_PRICE_TABLE.models` 用「model id 字串」當鍵。
   Command Code 的 model id 帶前綴（`deepseek/deepseek-v4.1-flash`），目前表裡沒有，
   會被當成未登記模型、用 `deepseek-flash` 兜底並標 `estimated=true`。
@@ -95,7 +96,8 @@ DSH 已經裝好社群外掛 `@mars-sea/dsh-commandcode-provider` 並登入 Comm
 - 不要寫 Jev 或任何閘門。
 - 不要刪 `createGoQuota` 與相關測試。provider 換回 `opencode-go` 還用得到，列在 Found 就好。
 - 不要碰 `.agents/loops/dream.md`（它自己的 `opencode-go/beam-free`，跟 bridge 無關）。
-- 不要把 DSH 的 Command Code 憑證讀出來給 bridge 用；bridge 不需要這把 key。
+- 不要把 DSH 的 Command Code 憑證拿去做別的事。橋接只在查額度時讀 `COMMANDCODE_API_KEY`
+  打 `GET /alpha/billing/credits`（`createCommandCodeQuota`），模型呼叫本身還是走 DSH 外掛。
 
 ## 部署
 
@@ -118,8 +120,8 @@ DSH 已經裝好社群外掛 `@mars-sea/dsh-commandcode-provider` 並登入 Comm
    如果換完 cache 讀幾乎是 0，成本會變 3–5 倍，要先停下來回報，不要繼續部署。
 4. 發一張圖給 bot，看下一回合的 `cacheReadTokens` 有沒有掉到接近 0（外掛 README 提到的問題）。
 5. 控制台「令牌與花費」頁：新回合的模型不是「未登記」、金額合理。
-6. `/status`：沒有 OpenCode Go 額度那行是預期的。
-7. 撞額度的行為（GOAT 5 小時 $20、每週 $50）**沒有驗證過**，也沒做降級；先觀察用量，每天約 $0.5。
+6. `/status`：當時沒有額度查詢，所以沒有那一行。後續補了 Command Code 額度，現在會顯示 5 小時 / 每週。
+7. 撞額度的行為（實際回報是 5 小時上限 $14、每週 $35，不是文件上的 $20 / $50）**沒有驗證過**，也沒做降級；先觀察用量，每天約 $0.5。
 
 ## 回退
 

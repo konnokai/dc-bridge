@@ -115,7 +115,7 @@ import {
 import { createBatcher, createTurnGate, formatBatch, imageRefTag, repliedName, resolveMentions, takeFollowups, visibleName } from '../src/core/discord-batch.mjs';
 import { createUrgentTyping } from '../src/core/discord-typing.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
-import { createGoQuota, createUsageTracker, formatGoQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
+import { COMMAND_CODE_API_BASE, createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
@@ -1807,9 +1807,9 @@ console.log('## 7c2. OpenCode Go 額度');
   await quota.get();
   ok(calls.length === 2, '超過 60 秒再查一次');
 
-  const text = formatGoQuota(first, NOW);
+  const text = formatQuota({ ...first, provider: 'opencode-go' }, NOW);
   ok(first.windows[0].remainingPercent === 97, '端點的已用 3% 轉成剩 97%');
-  ok(text.includes('5 小時剩 97%') && text.includes('每週剩 93%') && text.includes('每月剩 0%'), '/status 文字顯示三個剩餘百分比');
+  ok(text.includes('OpenCode Go 額度：5 小時剩 97%') && text.includes('每週剩 93%') && text.includes('每月剩 0%'), '/status 文字顯示三個剩餘百分比');
   ok(text.includes('2 小時 14 分後重置') && text.includes('5 天 20 小時後重置'), '重置時間用「多久後」表示');
   ok(text.includes('limited'), '狀態不是 ok 時標出來');
 
@@ -1824,8 +1824,84 @@ console.log('## 7c2. OpenCode Go 額度');
     getKey: () => 'k',
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ nope: 1 }) }),
   }).get();
-  ok(!broken.ok && formatGoQuota(broken, NOW).includes('查不到'), '格式不對時回錯誤，/status 寫查不到');
-  ok(formatGoQuota({ ok: false, skipped: true }, NOW) === '', '不是 opencode-go 就不顯示');
+  ok(!broken.ok && formatQuota(broken, NOW).includes('查不到'), '格式不對時回錯誤，/status 寫查不到');
+  ok(formatQuota({ ok: false, skipped: true }, NOW) === '', '沒有額度查詢的 provider 就不顯示');
+}
+
+console.log('## 7c3. Command Code 額度');
+{
+  const NOW = Date.parse('2026-11-07T12:00:00Z');
+  const body = {
+    credits: { monthlyCredits: 69.9 },
+    windowLimits: {
+      fiveHour: { used: 7, cap: 14, exceeded: false, resetAt: NOW + 3 * 3600_000 },
+      weekly: { used: 42, cap: 35, exceeded: true, resetAt: NOW + 5 * 86400_000 },
+    },
+  };
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, status: 200, json: async () => body };
+  };
+  let clock = NOW;
+  const quota = createCommandCodeQuota({ getKey: () => 'cc-key', fetchImpl: fakeFetch, ttlMs: 60_000, now: () => clock });
+  const first = await quota.get();
+  ok(first.ok && first.windows.map((w) => w.key).join() === 'fiveHour,weekly', '兩個額度按 5 小時、每週排');
+  ok(calls[0].url === `${COMMAND_CODE_API_BASE}/alpha/billing/credits`, '打 Command Code 的 credits 端點');
+  ok(calls[0].options.headers.authorization === 'Bearer cc-key', '帶 key');
+  ok(calls[0].options.redirect === 'error', '不跟隨重新導向（key 不會被帶去別的網址）');
+  clock = NOW + 30_000;
+  await quota.get();
+  ok(calls.length === 1, '60 秒內不重打');
+  clock = NOW + 61_000;
+  await quota.get();
+  ok(calls.length === 2, '超過 60 秒再查一次');
+
+  const text = formatQuota({ ...first, provider: 'commandcode' }, NOW);
+  ok(Math.round(first.windows[0].remainingPercent) === 50, '已用 7 / 上限 14 轉成剩 50%');
+  ok(first.windows[1].remainingPercent === 0, '用量超過上限時剩 0%，不會變負的');
+  ok(text.includes('5 小時剩 50%') && text.includes('每週剩 0%（已超限）'), '/status 文字帶兩個窗口與超限狀態');
+  ok(text.startsWith('Command Code 額度：'), '/status 標題跟著 provider 換');
+  ok(text.includes('3 小時 0 分後重置'), '重置時間用「多久後」表示');
+
+  const noKey = await createCommandCodeQuota({ getKey: () => '', fetchImpl: fakeFetch }).get();
+  ok(!noKey.ok && noKey.error.includes('COMMANDCODE_API_KEY'), '沒有 key 回原因');
+
+  const broken = await createCommandCodeQuota({
+    getKey: () => 'k',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ credits: {} }) }),
+  }).get();
+  ok(!broken.ok && broken.error.includes('看不懂'), '沒有 windowLimits 時回錯誤，不會畫出假額度');
+
+  const partial = await createCommandCodeQuota({
+    getKey: () => 'k',
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        windowLimits: {
+          fiveHour: { used: 1, cap: 14, exceeded: false, resetAt: NOW + 3600_000 },
+          weekly: { used: 0, cap: 0, exceeded: false, resetAt: 0 },
+        },
+      }),
+    }),
+  }).get();
+  ok(partial.ok && partial.windows.map((w) => w.key).join() === 'fiveHour', '沒有上限的視窗直接不畫，不顯示 0% 或 100%');
+  ok(formatQuota({ ...partial, provider: 'commandcode' }, NOW).includes('5 小時剩 93%'), '剩一個視窗時 /status 只寫那一個');
+
+  const noUsed = await createCommandCodeQuota({
+    getKey: () => 'k',
+    fetchImpl: async () => ({
+      ok: true, status: 200, json: async () => ({ windowLimits: { fiveHour: { cap: 14 }, weekly: { used: 1, cap: 35 } } }),
+    }),
+  }).get();
+  ok(noUsed.ok && noUsed.windows.map((w) => w.key).join() === 'weekly', 'used 不是數字時跳過那個視窗，不當成 0');
+
+  const denied = await createCommandCodeQuota({
+    getKey: () => 'k',
+    fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+  }).get();
+  ok(!denied.ok && denied.error.includes('500'), 'HTTP 錯誤回狀態碼');
 }
 
 console.log('## 7d. 智能體發送 API（MCP）');

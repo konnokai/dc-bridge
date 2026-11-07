@@ -201,7 +201,7 @@ import { createAgentSender, createMessageRefs, startAgentApi } from './core/disc
 import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, takeFollowups, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { createUrgentTyping } from './core/discord-typing.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
-import { createGoQuota, createUsageTracker, formatGoQuota, usageReport } from './core/discord-usage.mjs';
+import { createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, usageReport } from './core/discord-usage.mjs';
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { createAgentSendHandler } from './core/discord-send-handler.mjs';
@@ -785,9 +785,17 @@ async function main() {
   const goQuota = createGoQuota({
     getKey: () => process.env.OPENCODE_GO_API_KEY?.trim() || readDshCredential('OPENCODE_GO_API_KEY'),
   });
+  const commandCodeQuota = createCommandCodeQuota({
+    getKey: () => process.env.COMMANDCODE_API_KEY?.trim() || readDshCredential('COMMANDCODE_API_KEY'),
+  });
+  /** 目前 provider 的訂閱額度；換成沒有查詢來源的 provider 時回 skipped（卡片和 /status 那一行都會消失）。 */
   async function quotaInfo() {
-    if (cfg.dsh.provider !== 'opencode-go') return { ok: false, skipped: true, error: `provider 是 ${cfg.dsh.provider}，不是 opencode-go` };
-    return goQuota.get();
+    const provider = cfg.dsh.provider;
+    if (provider !== 'opencode-go' && provider !== 'commandcode') {
+      return { ok: false, skipped: true, error: `provider 是 ${provider}，沒有對應的額度查詢` };
+    }
+    const result = provider === 'opencode-go' ? await goQuota.get() : await commandCodeQuota.get();
+    return { ...result, provider };
   }
 
   // 生圖開關在 preset 的 dc-tool-restrict.config.allowImageGen；沒有開生圖就不查
@@ -5326,10 +5334,10 @@ async function main() {
       return;
     }
     if (interaction.commandName === 'status') {
-      const [goUsage, codexUsage] = await Promise.all([quotaInfo(), codexQuotaInfo()]);
+      const [subscriptionUsage, codexUsage] = await Promise.all([quotaInfo(), codexQuotaInfo()]);
       const lines = [`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${interaction.guildId ? '頻道' : '私聊'}`];
-      const goLine = formatGoQuota(goUsage);
-      if (goLine) lines.push(goLine);
+      const subscriptionLine = formatQuota(subscriptionUsage);
+      if (subscriptionLine) lines.push(subscriptionLine);
       const codexLine = formatCodexQuota(codexUsage);
       if (codexLine) lines.push(codexLine);
       await interaction.editReply(lines.join('\n'));

@@ -115,13 +115,27 @@ export const GO_USAGE_URL = 'https://opencode.ai/zen/go/v1/usage';
 const GO_WINDOWS = [['rolling', '5 小時'], ['weekly', '每週'], ['monthly', '每月']];
 
 /**
- * 查 OpenCode Go 訂閱額度，結果（含失敗）快取 ttlMs：控制台每 5 秒刷新，不能每次都打出去。
+ * 把一次查詢包成「含失敗一起快取、同一時間只打一次」。
+ * 控制台每 5 秒刷新，不能每次都打出去；查詢失敗也照樣快取，才不會一直重打。
+ */
+function cachedLoader(load, { ttlMs, now }) {
+  let cached = null;
+  let inflight = null;
+  return async function get() {
+    if (cached && now() - cached.at < ttlMs) return cached.value;
+    inflight ??= load().then((value) => {
+      cached = { value, at: now() };
+      return value;
+    }).finally(() => { inflight = null; });
+    return inflight;
+  };
+}
+
+/**
+ * 查 OpenCode Go 訂閱額度。
  * @returns {{ get: () => Promise<{ok: true, windows: object[], fetchedAt: number} | {ok: false, error: string}> }}
  */
 export function createGoQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeoutMs = 10_000, now = Date.now }) {
-  let cached = null;
-  let inflight = null;
-
   async function load() {
     const key = getKey();
     if (!key) return { ok: false, error: '沒有 OpenCode Go API key（環境變數 OPENCODE_GO_API_KEY 或 DSH 的 .credentials.yaml）' };
@@ -152,16 +166,59 @@ export function createGoQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeo
     return { ok: true, windows, fetchedAt: now() };
   }
 
-  return {
-    async get() {
-      if (cached && now() - cached.at < ttlMs) return cached.value;
-      inflight ??= load().then((value) => {
-        cached = { value, at: now() };
-        return value;
-      }).finally(() => { inflight = null; });
-      return inflight;
-    },
-  };
+  return { get: cachedLoader(load, { ttlMs, now }) };
+}
+
+/** Command Code 的帳號端點：外掛的用量頁讀同一支，回應單位是金額（美元）不是百分比。 */
+export const COMMAND_CODE_API_BASE = 'https://api.commandcode.ai';
+const COMMAND_CODE_WINDOWS = [['fiveHour', '5 小時'], ['weekly', '每週']];
+
+/**
+ * 查 Command Code 訂閱額度（GOAT 的 5 小時 / 每週上限）。
+ *
+ * `windowLimits.<window>` 給的是 `{ used, cap, exceeded, resetAt }`，卡面要的是剩餘百分比，
+ * 所以自己算 `100 - used / cap * 100`。`accept-encoding: identity` 跟外掛一致：
+ * DSH 換過 undici 的 dispatcher，壓縮過的回應有可能解不開。
+ * 快取與失敗處理跟 createGoQuota 相同（控制台每 5 秒刷新，不能每次都打出去）。
+ * * shortcut: 不帶 orgId（多組織帳號可能拿到別的組織）, 真的遇到多組織再補 `/alpha/whoami`。
+ */
+export function createCommandCodeQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeoutMs = 10_000, now = Date.now }) {
+  async function load() {
+    const key = getKey();
+    if (!key) return { ok: false, error: '沒有 Command Code API key（環境變數 COMMANDCODE_API_KEY 或 DSH 的 .credentials.yaml）' };
+    let res;
+    try {
+      res = await fetchImpl(`${COMMAND_CODE_API_BASE}/alpha/billing/credits`, {
+        headers: { authorization: `Bearer ${key}`, 'accept-encoding': 'identity' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      return { ok: false, error: `連不上 Command Code：${error?.name === 'TimeoutError' ? '逾時' : (error?.message ?? error)}` };
+    }
+    if (!res.ok) return { ok: false, error: `Command Code 回 HTTP ${res.status}` };
+    const limits = (await res.json().catch(() => null))?.windowLimits;
+    if (!limits || typeof limits !== 'object') return { ok: false, error: 'Command Code 回的格式看不懂' };
+    // cap 不是正數或 used 不是數字就跳過那個視窗：畫一條 0% 或 100% 的假額度比不畫更糟。
+    const windows = [];
+    for (const [name, label] of COMMAND_CODE_WINDOWS) {
+      const block = limits[name];
+      const cap = Number(block?.cap);
+      const used = Number(block?.used);
+      if (!(cap > 0) || !Number.isFinite(used)) continue;
+      windows.push({
+        key: name,
+        label,
+        status: block.exceeded ? '已超限' : 'ok',
+        remainingPercent: Math.max(0, Math.min(100, 100 - (used / cap) * 100)),
+        resetsAt: Number(block.resetAt) || null,
+      });
+    }
+    if (windows.length === 0) return { ok: false, error: 'Command Code 沒有回報額度上限' };
+    return { ok: true, windows, fetchedAt: now() };
+  }
+
+  return { get: cachedLoader(load, { ttlMs, now }) };
 }
 
 export function untilText(ms) {
@@ -173,14 +230,18 @@ export function untilText(ms) {
   return `${minutes} 分`;
 }
 
-/** `/status` 用的一行；provider 不是 opencode-go（skipped）時回空字串。 */
-export function formatGoQuota(result, now = Date.now()) {
+/** provider id 對到卡片／`/status` 的顯示名稱。 */
+const QUOTA_NAMES = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code' };
+
+/** `/status` 用的一行；provider 沒有額度查詢（skipped）時回空字串。 */
+export function formatQuota(result, now = Date.now()) {
   if (!result || result.skipped) return '';
-  if (!result.ok) return `OpenCode Go 額度：查不到（${result.error ?? '未知原因'}）`;
+  const name = QUOTA_NAMES[result.provider] ?? '訂閱';
+  if (!result.ok) return `${name} 額度：查不到（${result.error ?? '未知原因'}）`;
   const parts = result.windows.map((w) => `${w.label}剩 ${Math.round(w.remainingPercent)}%`
     + (w.status && w.status !== 'ok' ? `（${w.status}）` : '')
     + (w.resetsAt ? `，${untilText(w.resetsAt - now)}後重置` : ''));
-  return `OpenCode Go 額度：${parts.join('｜')}`;
+  return `${name} 額度：${parts.join('｜')}`;
 }
 
 /** 控制台「花費」卡片一次要的資料：總計、每個會話、走勢、目前價位。 */

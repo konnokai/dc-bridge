@@ -141,7 +141,7 @@
   </section>
 
   <section class="card" id="quota-card">
-    <h2>OpenCode Go 額度 <span id="quota-note" class="muted"></span></h2>
+    <h2><span id="quota-title">訂閱</span> 額度 <span id="quota-note" class="muted"></span></h2>
     <div id="quota"></div>
   </section>
 
@@ -915,8 +915,9 @@
     $('usage-rows').replaceChildren(...rows);
   }
 
-  // ── OpenCode Go 額度 ──────────────────────────────────────────────────────
-  // 這是 OpenCode 伺服器算的（用完會被擋）；上面的花費是橋接按價目表估的。
+  // ── 訂閱額度（OpenCode Go / Command Code）────────────────────────────────
+  // 這是對方伺服器算的（用完會被擋）；上面的花費是橋接按價目表估的。
+  // 一次只有一個 provider，所以共用同一張卡，標題跟著 provider 換。
   function untilText(ms) {
     const minutes = Math.max(0, Math.round(ms / 60000));
     const days = Math.floor(minutes / 1440);
@@ -929,6 +930,7 @@
   function renderQuota(q) {
     $('quota-card').hidden = !!q?.skipped;
     if (q?.skipped) return;
+    $('quota-title').textContent = q?.provider === 'commandcode' ? 'Command Code' : 'OpenCode Go';
     if (!q?.ok) {
       $('quota-note').textContent = '';
       $('quota').replaceChildren(el('div', { className: 'msg err' }, '查不到：' + (q?.error ?? '未知原因')));
