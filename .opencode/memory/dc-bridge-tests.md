@@ -10,6 +10,9 @@ description: 這個 repo 的測試套件怎麼跑，PowerShell 下怎麼拿到�
 最大的單檔 `scripts/test-discord-bridge.mjs` 自己印 `✅ Discord 橋接離線回歸通過`
 或 `❌ N 項失敗`。
 
+媒體測試檔已改名 `scripts/test-discord-media-normalize.mjs`（原 `test-media-normalize.mjs`），
+部署腳本在本機與遠端都會跑它。
+
 ## 拿結果的方式（2026-11 實測）
 
 PowerShell 直接看 stdout 會亂碼（CP950 解），`Select-String` 過濾也一樣。

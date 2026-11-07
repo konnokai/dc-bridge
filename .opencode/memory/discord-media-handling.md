@@ -8,7 +8,7 @@ description: Discord 媒體處理：語音訊息分類、行程級媒體佇列�
 - 媒體預算：佇列任務開始時檢查剩餘預算，少於 10 秒就跳過（避免排隊等完才跑、一定逾時）。`view_message` 傳 `deadline = viewStart + 55_000` 給 prepare 呼叫；影片連結 yt-dlp/ffmpeg 共用剩下的預算，少於 12 秒就放棄連結、保住前面的文字結果。
 - 影片抽格時間戳：`src/media-normalize.js` 的 `frameTimesLabel` 在 note 補「約 X/Ys」，例如「抽 6 格拼成 3×2（約 0/12/…s，左上→右下）」，讓模型能說「0:30 那裡」。真畫時間碼（drawtext）未做。
 - 已知：`normalizeImageForModel` 的壓縮迴圈可能在同一個名額內跑多次 ffmpeg（審查推測，未驗證）；多張附件仍 Promise.all 並行下載，但縮圖/抽格受佇列管。
-- PNG 修復：`repairPng(buf)`（`src/media-normalize.js`）走訪 PNG 區塊，丟掉色彩類型要求長度不符的 `sBIT`（例如 RGBA 圖上 3 位元組），因為 ffmpeg 7.1 會把這種檔判成壞檔（exit 69）；只在寫入 ffmpeg 輸入檔時套用，回 null 就照原檔走。測試：`test-media-normalize.mjs` 的 `repairPng` 單元測試與 1920×1080 RGBA 壞 sBIT 整合測試。
-- Alpha 保留策略：壓縮迴圈第一輪留 PNG（保 alpha），從第二輪起改 JPEG；切換編碼時不降低長邊，避免截圖文字糊掉。有 alpha 的 1080p RGBA 截圖在 1280 長邊仍約 2.1MB PNG，但 JPEG 約 100KB，能進 1MB 上限。相關回饋 df_mw65pyem53b0b6（2026-11-07）。
+- PNG 修復：`repairPng(buf)`（`src/media-normalize.js`）走訪 PNG 區塊，把所有 `sBIT` 區塊一律丟掉（不分長度對錯、值是否為 0／大於位深、或放在 IDAT 後面），因為伺服器 ffmpeg 7.1 遇到壞的 `sBIT` 會把整張判成壞檔（exit 69）；只在寫入 ffmpeg 輸入檔時套用，回 null 就照原檔走。測試：`scripts/test-discord-media-normalize.mjs` 的 `repairPng` 單元測試（拿掉所有 sBIT，沒有 sBIT 回 null）與 1920×1080 RGBA 整合測試。
+- Alpha 保留策略：壓縮迴圈第一輪留 PNG（保 alpha），壓不進上限時改 JPEG 並在透明區鋪白底（避免深色字掉進黑底）；切換編碼時不降低長邊，避免截圖文字糊掉。有 alpha 的 1080p RGBA 截圖在 1280 長邊仍約 2.1MB PNG，但 JPEG 約 100KB，能進 1MB 上限。白底測試做過變異檢查（拿掉鋪白底就失敗）；伺服器 ffmpeg 7.1 實測 2.48MB RGBA -> 1280×720 JPEG 98,930 bytes，字幕清楚（2026-11-07）。相關回饋 df_mw65pyem53b0b6（2026-11-07）。
 
 相關：[[discord-video-subtitles]]、[[discord-message-preview]]。
