@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import {
   MEDIA_DEFAULTS,
@@ -23,6 +24,7 @@ import {
   normalizeVideoUrlForModel,
   planAnimation,
   planNormalization,
+  repairPng,
   sniffImage,
   sniffVideo
 } from '../src/media-normalize.js';
@@ -58,6 +60,16 @@ const hasFfmpeg = (() => {
   catch { return false; }
 })();
 
+/** 在 IHDR（簽名 8 + 標頭 25）後面插一個附屬區塊：長度 + 類型 + 內容 + CRC。 */
+function insertPngChunk(png, type, data) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'latin1');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(zlib.crc32(Buffer.concat([head.subarray(4), data])), 0);
+  return Buffer.concat([png.subarray(0, 33), head, data, crc, png.subarray(33)]);
+}
+
 // ── 1. 格式/帧数探测（纯函数） ─────────────────────────────────────────────
 await test('sniffImage 认出 PNG 并读取尺寸/透明通道', async () => {
   const info = sniffImage(PNG_1x1);
@@ -87,6 +99,23 @@ await test('sniffImage 对未知/垃圾字节返回 null（不瞎猜）', async 
 await test('describeImage 摘要含帧数（日志与提示共用）', async () => {
   assert.match(describeImage(GIF_2), /动图 2 帧/);
   assert.match(describeImage(PNG_1x1), /png 1×1/);
+});
+
+await test('repairPng：拿掉所有 sBIT（長度錯、值錯都一樣），沒有 sBIT 就回 null', async () => {
+  // 回饋 df_mw65pyem53b0b6：2.48MB 截圖（colorType 6）帶 3 位元組 sBIT，
+  // ffmpeg 7.1 的 PNG 解碼器判成壞檔，三輪都 exit 69。ffmpeg 7.1 對值為 0、
+  // 大於位深的 sBIT 也同樣判壞檔，所以不分長度對錯一律拿掉。
+  // 用 FAKE_GATEWAY_PNG：它是完整的 PNG（PNG_1x1 缺 IEND，只能測檔頭）。
+  const base = FAKE_GATEWAY_PNG;
+  assert.equal(repairPng(base), null, '本來就沒有 sBIT：回 null，不多複製一份');
+
+  for (const data of [Buffer.alloc(3, 8), Buffer.alloc(2, 8), Buffer.from([0, 0])]) {
+    const fixed = repairPng(insertPngChunk(base, 'sBIT', data));
+    assert.ok(fixed, `sBIT(${data.length} 位元組) 要拿掉`);
+    assert.equal(fixed.includes(Buffer.from('sBIT')), false);
+    assert.deepEqual(fixed, base, '其餘區塊要原樣保留');
+  }
+  assert.equal(repairPng(Buffer.concat([base.subarray(0, 40), Buffer.alloc(4)])), null, '截斷的檔案不假裝修好');
 });
 
 // ── 2. 决策纯函数 ─────────────────────────────────────────────────────────
@@ -323,6 +352,47 @@ await test('真实大图（3000×2000）→ 降采样到长边上限以内', asy
     `长边应 ≤ ${MEDIA_DEFAULTS.maxLongEdge}，实际 ${info.width}×${info.height}`);
   assert.ok(out.buffer.length <= MEDIA_DEFAULTS.maxModelBytes);
   assert.match(out.note, /→/);
+});
+
+await test('1080p RGBA PNG 帶壞 sBIT（ffmpeg 7.1 解不開）→ 壓成可讀 JPEG', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const srcFile = path.join(tmp, 'rgba-sbit.png');
+  // noise 讓 PNG 真的壓不小（testsrc2 太乾淨，只有 200KB）；-pix_fmt rgba 才會是 colorType 6。
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=1:duration=1', '-vf', 'noise=alls=30:allf=t+u',
+    '-frames:v', '1', '-pix_fmt', 'rgba', srcFile]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const broken = insertPngChunk(fs.readFileSync(srcFile), 'sBIT', Buffer.from([8, 8, 8]));
+  assert.equal(sniffImage(broken)?.alpha, true);
+  assert.ok(broken.length > MEDIA_DEFAULTS.maxModelBytes, `夹具要超过上限（${broken.length}）`);
+
+  const out = await normalizeImageForModel(broken, 'image/png', { ...MEDIA_DEFAULTS, tmpDir: tmp });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(sniffImage(out.buffer)?.format, 'jpeg', '保 alpha 的 PNG 壓不進上限時要改 JPEG');
+  assert.equal(sniffImage(out.buffer)?.width, MEDIA_DEFAULTS.maxLongEdge, '換編碼不該順便再縮一輪');
+  assert.ok(out.buffer.length <= MEDIA_DEFAULTS.maxModelBytes);
+});
+
+await test('透明底 PNG 超限改 JPEG 時鋪白底（深色字不會掉進黑底）', async () => {
+  if (!hasFfmpeg) throw skip('本机没有 ffmpeg');
+  const srcFile = path.join(tmp, 'transparent.png');
+  // 整張 alpha=0、RGB 是雜訊（讓 PNG 超過上限，才會走到改 JPEG 那一輪）。
+  const made = ff(['-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=1:duration=1', '-vf',
+    'noise=alls=30:allf=t+u,format=rgba,colorchannelmixer=aa=0', '-frames:v', '1', srcFile]);
+  if (made.status !== 0) throw skip('ffmpeg 生成夹具失败');
+  const src = fs.readFileSync(srcFile);
+  assert.equal(sniffImage(src)?.alpha, true);
+  assert.ok(src.length > MEDIA_DEFAULTS.maxModelBytes, `夹具要超过上限（${src.length}）`);
+
+  const out = await normalizeImageForModel(src, 'image/png', { ...MEDIA_DEFAULTS, tmpDir: tmp });
+  assert.equal(out.ok, true, out.error);
+  assert.equal(sniffImage(out.buffer)?.format, 'jpeg');
+  // 左上 64×64 縮成 1 像素取平均：鋪白底 ⇒ 接近 255；沒鋪 ⇒ 是雜訊畫面的顏色。
+  const probe = path.join(tmp, 'corner.gray');
+  const jpg = path.join(tmp, 'transparent-out.jpg');
+  fs.writeFileSync(jpg, out.buffer);
+  const px = ff(['-i', jpg, '-vf', 'crop=64:64:0:0,scale=1:1:flags=area,format=gray', '-frames:v', '1', '-f', 'rawvideo', probe]);
+  assert.equal(px.status, 0);
+  assert.ok(fs.readFileSync(probe)[0] > 240, '透明區應該是白的');
 });
 
 await test('抽帧失败（ffmpeg 超时/不可用）也不崩：退回首帧 + 说明', async () => {

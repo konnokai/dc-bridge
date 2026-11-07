@@ -1326,7 +1326,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 
 - 圖片附件（png/jpeg/webp/gif）與影片（mp4/webm/mov）會轉成 base64 送進模型；圖片超過
   `media.maxLongEdge` 或 `media.maxModelBytes` 時先用 ffmpeg 縮小，縮不動才跳過並告訴模型「附件未提供」。
-  下載只認 `cdn.discordapp.com` / `media.discordapp.net` / `images-ext-*`，不跟隨轉址。
+  有 alpha 的圖第一輪留 PNG，壓不進上限就改 JPEG 並鋪白底（1920×1080 的 RGBA 截圖縮到 1280 的
+  PNG 還有 2.1MB，JPEG 約 100KB）；PNG 的 sBIT 區塊一律先丟掉，否則伺服器的 ffmpeg 7.1 遇到
+  壞的 sBIT 會判成壞檔（exit 69），整張看不到。下載只認 `cdn.discordapp.com` / `media.discordapp.net` / `images-ext-*`，不跟隨轉址。
 - **PRTS 立繪是即時抓的**：`send_prts_artwork`、`get_prts_artwork` 與 `prts:` 參考都先依 MediaWiki
   規則直接組 `media.prts.wiki` 的縮圖網址，抓不到才回頭查 `prts.wiki/api.php`；preview 約 1~2 秒、
   large 約 1~3 秒（實測），沒有磁碟快取，同一張重複抓會再連一次。large 的縮圖 404 時（原圖本來就

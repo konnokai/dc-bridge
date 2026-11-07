@@ -32,7 +32,7 @@
     "test:initial-prompt": "node scripts/test-v2-initial-prompt.mjs",
     "test:regressions": "node scripts/test-audit-regressions.mjs",
     "test:media-search": "node scripts/test-media-search.mjs",
-    "test:media-normalize": "node scripts/test-media-normalize.mjs",
+    "test:media-normalize": "node scripts/test-discord-media-normalize.mjs",
     "test:issues": "node scripts/test-issue-regressions.mjs",
     "test-wait:e2e": "node scripts/test-dsh-v2-wait.mjs",
     "test-vision": "node scripts/test-vision-media.mjs",

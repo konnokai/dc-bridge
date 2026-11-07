@@ -234,6 +234,36 @@ export function sniffImage(buf) {
   };
 }
 
+// ffmpeg 7.1 的 PNG 解碼器遇到壞的 sBIT 會整張判成壞檔（exit 69）：長度跟色彩類型對不上
+// （RGBA 要 4 位元組，有些產生器寫 3）、位元值是 0 或大於位深、或放在 IDAT 後面。
+// 使用者的 2.48MB 截圖就是 RGBA 配 3 位元組，三輪壓縮全失敗。
+// sBIT 只是「原始有效位數」的提示、不是像素；我們一律重新編碼，所以整塊丟掉最單純
+// （整塊不寫進輸出，其他區塊的 CRC 不用重算）。
+
+/**
+ * 拿掉 PNG 裡所有 sBIT 區塊。
+ * @returns 修好的 Buffer；沒有 sBIT 就回 null（呼叫端照原檔走，不多複製一份）。
+ */
+export function repairPng(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 33) return null;
+  if (buf.readUInt32BE(0) !== 0x89504e47) return null;
+
+  const kept = [buf.subarray(0, 8)];
+  let pos = 8;
+  let dropped = false;
+  while (pos + 12 <= buf.length) {
+    const length = buf.readUInt32BE(pos);
+    const type = buf.toString('latin1', pos + 4, pos + 8);
+    const end = pos + 12 + length;
+    if (end > buf.length) return null; // 區塊長度本身就不對：不假裝修好
+    if (type === 'sBIT') dropped = true;
+    else kept.push(buf.subarray(pos, end));
+    pos = end;
+    if (type === 'IEND') return dropped ? Buffer.concat(kept) : null;
+  }
+  return null; // 沒走到 IEND：交給下游報錯
+}
+
 /**
  * 從位元組認影片容器：mp4／mov 在第 4 byte 有 `ftyp`，webm 是 EBML 標頭。
  * 只認容器，不解析軌道；長度交給 ffprobe（見 normalizeVideoForModel）。
@@ -386,7 +416,7 @@ export async function normalizeImageForModel(buf, mimeType, opts = {}) {
   try {
     const inExt = info.format === 'jpeg' ? '.jpg' : `.${info.format}`;
     const inFile = path.join(dir, `in${inExt}`);
-    fs.writeFileSync(inFile, buf);
+    fs.writeFileSync(inFile, info.format === 'png' ? (repairPng(buf) ?? buf) : buf);
 
     if (plan.action === 'animate') {
       const layout = planAnimation(info, opts);
@@ -423,15 +453,26 @@ export async function normalizeImageForModel(buf, mimeType, opts = {}) {
     }
 
     // action === 'shrink'：静态图降采样 + 重编码，最多试三轮（逐步缩小尺寸/降质量）。
-    const outExt = pickOutputExt(info);
+    // 第一轮留 alpha（PNG）；PNG 压不进上限就从第二轮起改 JPEG —— 1920×1080 的 RGBA 截图
+    // 缩到 1280 还有 2.1 MB，守着 PNG 只会一路缩到 400px 还是糊，不如丢掉透明保住字。
     let edge = maxLongEdge;
     let lastError = '';
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      const outExt = attempt === 0 ? pickOutputExt(info) : '.jpg';
       const scale = Math.min(1, edge / Math.max(info.width, info.height));
       const width = Math.max(2, Math.round(info.width * scale) & ~1);
       const height = Math.max(2, Math.round(info.height * scale) & ~1);
       const outFile = path.join(dir, `out-${attempt}${outExt}`);
-      const args = ['-v', 'error', '-y', '-i', inFile, '-vf', `scale=${width}:${height}:flags=lanczos`];
+      const args = ['-v', 'error', '-y', '-i', inFile];
+      if (outExt === '.jpg' && info.alpha) {
+        // JPEG 沒有 alpha：直接轉會讓透明像素露出底下的 RGB（常是黑的），深色字會消失，先鋪白底。
+        args.push('-filter_complex',
+          `color=c=white:s=${width}x${height}[bg];[0:v]scale=${width}:${height}:flags=lanczos[fg];` +
+          '[bg][fg]overlay=shortest=1:format=auto,format=yuvj420p[out]',
+          '-map', '[out]', '-frames:v', '1');
+      } else {
+        args.push('-vf', `scale=${width}:${height}:flags=lanczos`);
+      }
       if (outExt === '.jpg') args.push('-q:v', String(3 + attempt * 3));
       args.push(outFile);
       const run = await runFfmpeg(ffmpeg, args, { timeoutMs: opts.timeoutMs });
@@ -448,7 +489,8 @@ export async function normalizeImageForModel(buf, mimeType, opts = {}) {
         }
         lastError = '压缩后仍超限';
       }
-      edge = Math.max(320, Math.round(edge * 0.7));
+      // 這一輪是「保 alpha 的 PNG」，下一輪只是換編碼：尺寸先別降，截圖裡的字才看得清。
+      if (outExt !== '.png') edge = Math.max(320, Math.round(edge * 0.7));
     }
     // 压不动：小图照发，大图明确拒绝（绝不发注定被 DSH 丢掉的东西）。
     if (bytes <= maxBytes) return { ok: true, buffer: buf, mimeType, note: `压缩失败（${lastError}），按原图提供` };
