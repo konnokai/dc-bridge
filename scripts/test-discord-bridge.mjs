@@ -3949,7 +3949,7 @@ console.log('## 9. 控制台');
       usage: ({ range }) => ({
         ok: true, range, hours: range === '7d' ? 168 : 24,
         totals: { cost: 0.5 }, conversations: [], series: { buckets: [] },
-        prices: { symbol: '¥', version: 'test' },
+        prices: { symbol: '$', version: 'test' },
       }),
       usageTurns: (key) => (key === 'ch:1' ? { ok: true, key, turns: [] } : null),
       usageReset: () => { usageWasReset = true; },
