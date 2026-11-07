@@ -939,14 +939,17 @@
     $('quota-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，60 秒更新一次）';
     const rows = [];
     for (const w of q.windows) {
-      const percent = Math.max(0, Math.min(100, Math.round(w.remainingPercent)));
-      const level = percent <= 10 ? ' bad' : percent <= 30 ? ' warn' : '';
+      const percent = Math.max(0, Math.min(100, w.remainingPercent));
+      const bar = Math.round(percent);
+      const level = bar <= 10 ? ' bad' : bar <= 30 ? ' warn' : '';
+      // 月額度的分母只有 70，整數百分比一格是 $0.7，跟下面那列金額對不起來，所以多留一位。
+      const shown = w.key === 'monthly' ? percent.toFixed(1) : String(bar);
       const reset = w.resetsAt ? untilText(w.resetsAt - Date.now()) + '後重置' : '';
       rows.push(el('div', { className: 'quota-row' },
         el('span', { className: 'muted' }, w.label),
-        el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(percent), ariaLabel: w.label + '剩餘額度' },
-          el('div', { className: 'bar-fill' + level, style: 'width:' + percent + '%' })),
-        el('span', { className: 'num' }, percent + '%' + (w.status && w.status !== 'ok' ? '（' + w.status + '）' : '') + (reset ? '｜' + reset : '')),
+        el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(bar), ariaLabel: w.label + '剩餘額度' },
+          el('div', { className: 'bar-fill' + level, style: 'width:' + bar + '%' })),
+        el('span', { className: 'num' }, shown + '%' + (w.status && w.status !== 'ok' ? '（' + w.status + '）' : '') + (reset ? '｜' + reset : '')),
       ));
       // 每月只報剩餘金額（上限是方案常數），金額單獨一列，不塞進進度條那格。
       if (w.key === 'monthly' && q.monthly) {
