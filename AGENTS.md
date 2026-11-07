@@ -20,7 +20,7 @@ node scripts/deploy-discord.mjs             # 真的部署
 
 腳本依序做，任何一步失敗就停：
 
-1. 工作目錄必須乾淨，而且 HEAD 已經在 `origin/main`（還沒推就先 push 或跑 `/ship`）。
+1. 工作目錄必須乾淨（`.opencode/memory` 與 `.agents` 的改動不算），而且 HEAD 已經在 `origin/main`（還沒推就先 push 或跑 `/ship`）。
 2. 伺服器 `git fetch --prune` → `git checkout --detach <HEAD>`，再確認 HEAD 與 tracked 檔案都一致。
    伺服器上的 tracked 檔案被手改過時 `git checkout` 會拒絕，部署就停在這裡。
 3. 本機跑 `build-agent-preset-patches.mjs --check` 與 `npm run test:discord`。
