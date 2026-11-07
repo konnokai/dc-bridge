@@ -937,17 +937,27 @@
       return;
     }
     $('quota-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，60 秒更新一次）';
-    $('quota').replaceChildren(...q.windows.map((w) => {
+    const rows = [];
+    for (const w of q.windows) {
       const percent = Math.max(0, Math.min(100, Math.round(w.remainingPercent)));
       const level = percent <= 10 ? ' bad' : percent <= 30 ? ' warn' : '';
       const reset = w.resetsAt ? untilText(w.resetsAt - Date.now()) + '後重置' : '';
-      return el('div', { className: 'quota-row' },
+      rows.push(el('div', { className: 'quota-row' },
         el('span', { className: 'muted' }, w.label),
         el('div', { className: 'bar-track', role: 'progressbar', ariaValueMin: '0', ariaValueMax: '100', ariaValueNow: String(percent), ariaLabel: w.label + '剩餘額度' },
           el('div', { className: 'bar-fill' + level, style: 'width:' + percent + '%' })),
         el('span', { className: 'num' }, percent + '%' + (w.status && w.status !== 'ok' ? '（' + w.status + '）' : '') + (reset ? '｜' + reset : '')),
-      );
-    }));
+      ));
+      // 每月只報剩餘金額（上限是方案常數），金額單獨一列，不塞進進度條那格。
+      if (w.key === 'monthly' && q.monthly) {
+        rows.push(el('div', { className: 'quota-row' },
+          el('span', { className: 'muted' }, '剩餘'),
+          el('div'),
+          el('span', { className: 'num' }, '$' + q.monthly.remaining.toFixed(2)),
+        ));
+      }
+    }
+    $('quota').replaceChildren(...rows);
   }
 
   // ── Codex 額度 ───────────────────────────────────────────────────────────

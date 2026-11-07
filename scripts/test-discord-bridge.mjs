@@ -115,7 +115,7 @@ import {
 import { createBatcher, createTurnGate, formatBatch, imageRefTag, repliedName, resolveMentions, takeFollowups, visibleName } from '../src/core/discord-batch.mjs';
 import { createUrgentTyping } from '../src/core/discord-typing.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
-import { COMMAND_CODE_API_BASE, createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, GO_USAGE_URL, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
+import { COMMAND_CODE_API_BASE, createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, GO_USAGE_URL, GOAT_MONTHLY_CREDITS, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
@@ -1832,7 +1832,7 @@ console.log('## 7c3. Command Code 額度');
 {
   const NOW = Date.parse('2026-11-07T12:00:00Z');
   const body = {
-    credits: { monthlyCredits: 69.9 },
+    credits: { monthlyCredits: 35 },
     windowLimits: {
       fiveHour: { used: 7, cap: 14, exceeded: false, resetAt: NOW + 3 * 3600_000 },
       weekly: { used: 42, cap: 35, exceeded: true, resetAt: NOW + 5 * 86400_000 },
@@ -1846,7 +1846,7 @@ console.log('## 7c3. Command Code 額度');
   let clock = NOW;
   const quota = createCommandCodeQuota({ getKey: () => 'cc-key', fetchImpl: fakeFetch, ttlMs: 60_000, now: () => clock });
   const first = await quota.get();
-  ok(first.ok && first.windows.map((w) => w.key).join() === 'fiveHour,weekly', '兩個額度按 5 小時、每週排');
+  ok(first.ok && first.windows.map((w) => w.key).join() === 'monthly,fiveHour,weekly', '三個額度按每月、5 小時、每週排');
   ok(calls[0].url === `${COMMAND_CODE_API_BASE}/alpha/billing/credits`, '打 Command Code 的 credits 端點');
   ok(calls[0].options.headers.authorization === 'Bearer cc-key', '帶 key');
   ok(calls[0].options.redirect === 'error', '不跟隨重新導向（key 不會被帶去別的網址）');
@@ -1858,9 +1858,14 @@ console.log('## 7c3. Command Code 額度');
   ok(calls.length === 2, '超過 60 秒再查一次');
 
   const text = formatQuota({ ...first, provider: 'commandcode' }, NOW);
-  ok(Math.round(first.windows[0].remainingPercent) === 50, '已用 7 / 上限 14 轉成剩 50%');
-  ok(first.windows[1].remainingPercent === 0, '用量超過上限時剩 0%，不會變負的');
-  ok(text.includes('5 小時剩 50%') && text.includes('每週剩 0%（已超限）'), '/status 文字帶兩個窗口與超限狀態');
+  ok(first.monthly.cap === GOAT_MONTHLY_CREDITS && first.monthly.remaining === 35 && first.monthly.used === 35,
+    '每月額度用 GOAT 的 70 當分母，用量由剩餘相減');
+  ok(first.windows[0].remainingPercent === 50 && first.windows[0].resetsAt === null,
+    '每月剩 35 / 70 轉成剩 50%，沒有重置時間');
+  ok(Math.round(first.windows[1].remainingPercent) === 50, '已用 7 / 上限 14 轉成剩 50%');
+  ok(first.windows[2].remainingPercent === 0, '用量超過上限時剩 0%，不會變負的');
+  ok(text.includes('月額度剩 50%') && text.includes('5 小時剩 50%') && text.includes('每週剩 0%（已超限）'),
+    '/status 文字帶三個窗口與超限狀態');
   ok(text.startsWith('Command Code 額度：'), '/status 標題跟著 provider 換');
   ok(text.includes('3 小時 0 分後重置'), '重置時間用「多久後」表示');
 
@@ -1873,12 +1878,22 @@ console.log('## 7c3. Command Code 額度');
   }).get();
   ok(!broken.ok && broken.error.includes('看不懂'), '沒有 windowLimits 時回錯誤，不會畫出假額度');
 
+  const noMonthly = await createCommandCodeQuota({
+    getKey: () => 'k',
+    fetchImpl: async () => ({
+      ok: true, status: 200, json: async () => ({ windowLimits: { fiveHour: { used: 1, cap: 14 } } }),
+    }),
+  }).get();
+  ok(noMonthly.ok && noMonthly.monthly === null && noMonthly.windows.map((w) => w.key).join() === 'fiveHour',
+    '沒有 monthlyCredits 就不畫月額度，不假設剩 0');
+
   const partial = await createCommandCodeQuota({
     getKey: () => 'k',
     fetchImpl: async () => ({
       ok: true,
       status: 200,
       json: async () => ({
+        credits: { monthlyCredits: 70 },
         windowLimits: {
           fiveHour: { used: 1, cap: 14, exceeded: false, resetAt: NOW + 3600_000 },
           weekly: { used: 0, cap: 0, exceeded: false, resetAt: 0 },
@@ -1886,7 +1901,7 @@ console.log('## 7c3. Command Code 額度');
       }),
     }),
   }).get();
-  ok(partial.ok && partial.windows.map((w) => w.key).join() === 'fiveHour', '沒有上限的視窗直接不畫，不顯示 0% 或 100%');
+  ok(partial.ok && partial.windows.map((w) => w.key).join() === 'monthly,fiveHour', '沒有上限的視窗直接不畫，不顯示 0% 或 100%');
   ok(formatQuota({ ...partial, provider: 'commandcode' }, NOW).includes('5 小時剩 93%'), '剩一個視窗時 /status 只寫那一個');
 
   const noUsed = await createCommandCodeQuota({

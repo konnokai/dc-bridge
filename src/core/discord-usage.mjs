@@ -174,13 +174,25 @@ export const COMMAND_CODE_API_BASE = 'https://api.commandcode.ai';
 const COMMAND_CODE_WINDOWS = [['fiveHour', '5 小時'], ['weekly', '每週']];
 
 /**
- * 查 Command Code 訂閱額度（GOAT 的 5 小時 / 每週上限）。
+ * GOAT 的每月額度上限（美元）。
+ *
+ * API 不報這個值：`credits` 只有 `monthlyCredits`（已扣到剩多少），`windowLimits` 只有 5 小時與
+ * 每週。官方文件寫「up to $100」是逐模型的最佳情況（DeepSeek V4.1 Flash $100、GLM-5.2 $70……），
+ * 不是每個 GOAT 帳號都拿得到：實測這個帳號的 5 小時 $14、每週 $35、月池 $70，都是公告值的 0.7 倍。
+ *
+ * shortcut: 只支援 GOAT，換方案要改這裡。
+ */
+export const GOAT_MONTHLY_CREDITS = 70;
+
+/**
+ * 查 Command Code 訂閱額度（GOAT 的每月 / 5 小時 / 每週）。
  *
  * `windowLimits.<window>` 給的是 `{ used, cap, exceeded, resetAt }`，卡面要的是剩餘百分比，
  * 所以自己算 `100 - used / cap * 100`。`accept-encoding: identity` 跟外掛一致：
  * DSH 換過 undici 的 dispatcher，壓縮過的回應有可能解不開。
  * 快取與失敗處理跟 createGoQuota 相同（控制台每 5 秒刷新，不能每次都打出去）。
- * * shortcut: 不帶 orgId（多組織帳號可能拿到別的組織）, 真的遇到多組織再補 `/alpha/whoami`。
+ *
+ * shortcut: 不帶 orgId（多組織帳號可能拿到別的組織）, 真的遇到多組織再補 `/alpha/whoami`。
  */
 export function createCommandCodeQuota({ getKey, fetchImpl = fetch, ttlMs = 60_000, timeoutMs = 10_000, now = Date.now }) {
   async function load() {
@@ -197,10 +209,25 @@ export function createCommandCodeQuota({ getKey, fetchImpl = fetch, ttlMs = 60_0
       return { ok: false, error: `連不上 Command Code：${error?.name === 'TimeoutError' ? '逾時' : (error?.message ?? error)}` };
     }
     if (!res.ok) return { ok: false, error: `Command Code 回 HTTP ${res.status}` };
-    const limits = (await res.json().catch(() => null))?.windowLimits;
+    const body = await res.json().catch(() => null);
+    const limits = body?.windowLimits;
     if (!limits || typeof limits !== 'object') return { ok: false, error: 'Command Code 回的格式看不懂' };
-    // cap 不是正數或 used 不是數字就跳過那個視窗：畫一條 0% 或 100% 的假額度比不畫更糟。
     const windows = [];
+    // 每月只有「剩多少」：上限是方案常數，用量由兩者相減。卡片會再多一列顯示剩下的金額。
+    const remaining = Number(body?.credits?.monthlyCredits);
+    const monthly = Number.isFinite(remaining)
+      ? { cap: GOAT_MONTHLY_CREDITS, remaining, used: Math.max(0, GOAT_MONTHLY_CREDITS - remaining) }
+      : null;
+    if (monthly) {
+      windows.push({
+        key: 'monthly',
+        label: '月額度',
+        status: remaining <= 0 ? '已用完' : 'ok',
+        remainingPercent: Math.max(0, Math.min(100, (remaining / GOAT_MONTHLY_CREDITS) * 100)),
+        resetsAt: null,
+      });
+    }
+    // cap 不是正數或 used 不是數字就跳過那個視窗：畫一條 0% 或 100% 的假額度比不畫更糟。
     for (const [name, label] of COMMAND_CODE_WINDOWS) {
       const block = limits[name];
       const cap = Number(block?.cap);
@@ -215,7 +242,7 @@ export function createCommandCodeQuota({ getKey, fetchImpl = fetch, ttlMs = 60_0
       });
     }
     if (windows.length === 0) return { ok: false, error: 'Command Code 沒有回報額度上限' };
-    return { ok: true, windows, fetchedAt: now() };
+    return { ok: true, windows, monthly, fetchedAt: now() };
   }
 
   return { get: cachedLoader(load, { ttlMs, now }) };

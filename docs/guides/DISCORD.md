@@ -497,7 +497,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - **總覽**（`#overview`）
   - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批，
     以及觸發對話人數（今天／總計／次數、畫圖次數與最常觸發的人）
-  - **訂閱額度**：目前 provider 的額度視窗剩餘百分比與重置時間。`opencode-go` 是 5 小時 / 每週 / 每月，`commandcode` 是 5 小時 / 每週（見「訂閱額度」）
+  - **訂閱額度**：目前 provider 的額度視窗剩餘百分比與重置時間。`opencode-go` 是 5 小時 / 每週 / 每月，`commandcode` 是每月 / 5 小時 / 每週，另外多一列每月剩餘金額（見「訂閱額度」）
   - **Codex 額度**：生圖 preset 有開 `allowImageGen` 時，顯示 5 小時 / 每週剩餘百分比、重置時間與重置券（見「Codex 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
 - **黑話**（`#slang`）：「黑話詞庫」和「頻道風格」兩張卡片分開列。各自可以按狀態（全部／待確認／已確認／已拒絕）過濾，
@@ -572,12 +572,16 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 每個視窗各剩幾 %、多久後重置，跟 Codex 額度一樣從 100% 往下扣。
 上面的「花費」是橋接自己按價目表估算的；這裡是對方伺服器算的，用完會被擋的是這個數字。
 
-- **`commandcode`**（bridge 的預設）：5 小時 / 每週兩個視窗。
-  資料來源 `GET https://api.commandcode.ai/alpha/billing/credits`，回應是 `windowLimits.fiveHour` /
-  `windowLimits.weekly`，各帶 `used` / `cap`（金額，美元）與 `resetAt`，百分比由橋接自己算
-  `100 - used / cap`。`exceeded` 為 true 時標「已超限」。
-  key 先看環境變數 `COMMANDCODE_API_KEY`，沒有就讀 DSH 的 `~/.dsh/.credentials.yaml` →
-  `refs.COMMANDCODE_API_KEY`。只讀這支端點，不帶 `orgId`（多組織帳號可能拿到別的組織，目前只有一個）。
+- **`commandcode`**（bridge 的預設）：每月 / 5 小時 / 每週三個視窗。
+  資料來源 `GET https://api.commandcode.ai/alpha/billing/credits`：
+  - `windowLimits.fiveHour` / `windowLimits.weekly` 各帶 `used` / `cap`（金額，美元）與 `resetAt`，
+    百分比由橋接自己算 `100 - used / cap`；`exceeded` 為 true 時標「已超限」。
+  - `credits.monthlyCredits` 只給「扣到剩多少」，**沒有上限**。橋接用方案常數
+    `GOAT_MONTHLY_CREDITS = 70` 當分母（`src/core/discord-usage.mjs`），卡片再把剩下的金額
+    單獨列成一列「剩餘 $69.85」。官方文件寫「up to $100」是逐模型的最佳情況，實際帳號的
+    5 小時 $14、每週 $35、月池 $70 都是公告值的 0.7 倍。**換方案或 Command Code 改額度時要改這個常數。**
+  - key 先看環境變數 `COMMANDCODE_API_KEY`，沒有就讀 DSH 的 `~/.dsh/.credentials.yaml` →
+    `refs.COMMANDCODE_API_KEY`。只讀這支端點，不帶 `orgId`（多組織帳號可能拿到別的組織，目前只有一個）。
 - **`opencode-go`**：5 小時 / 每週 / 每月三個視窗。
   資料來源 `GET https://opencode.ai/zen/go/v1/usage`（跟 opencode.ai 後台的額度頁同一份資料）。
   key 先看環境變數 `OPENCODE_GO_API_KEY`，沒有就讀 DSH 的 `.credentials.yaml` → `refs.OPENCODE_GO_API_KEY`。
