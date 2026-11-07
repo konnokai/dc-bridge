@@ -17,7 +17,7 @@
 
 - [[discord-batch-debounce]] — 批次去抖：預設 20 秒、maxWait 30 秒、@ 後改用 4 秒短等待（不立刻送）、私聊不設 urgent
 - [[discord-blacklist-stale]] — `deny.self` 的 ⊘ 會過期；每批 prompt 用【黑名單現況】校正；★ 優先於黑名單（2026-11-07）
-- [[discord-deny-user-mention-override]] — `deny.users` 被擋的人 @bot／回覆 bot 時仍處理；閘門、上下文過濾、已知缺口
+- [[discord-deny-user-mention-override]] — `deny.users`（管理員封鎖）與 `deny.self`（自己 `/blacklist` 退出）分工；閘門、上下文過濾、被動路徑、slash、updateConfig、缺口
 - [[discord-followup-batching]] — 送出前攔補句：urgent 8 秒、take/takeFollowups、hold 同 step、測試 20 項
 - [[discord-message-preview]] — component embed、embed.author、完整 URL、component media、敏感 embed
 - [[discord-view-message]] — view_message 找修復 bot、連結路徑比對、bot 訊息可見性、每日摘要

@@ -1,35 +1,39 @@
 ---
 name: discord-deny-user-mention-override
-description: deny.users 被擋的人 @bot 或回覆 bot 時仍處理；閘門、上下文過濾、測試與已知缺口
+description: deny.users（管理員封鎖）與 deny.self（自己 /blacklist 退出）分工；閘門、上下文過濾、被動路徑、slash、updateConfig、測試與缺口
 ---
 
-`deny.users`（管理員封鎖或使用者自己 `/blacklist`）原本全擋。現在例外：
-被擋的人**在伺服器頻道 @bot 或回覆 bot 的那一則**照常處理，讓他還能找 bot 說話。
-`deny.guilds`／`deny.channels`、私訊、slash 指令不受例外影響。
+兩份名單分工（2026-11-07 拆分）：
+
+- `deny.users`：管理員封鎖（控制台／`config.json`）。bot 完全不處理他的訊息，@bot 也一樣，也不能自己用 `/blacklist` 解除。
+- `deny.self`：使用者自己用 `/blacklist` 退出。訊息照樣不處理，**唯一例外**是他 @bot 或回覆 bot 的那一則照常處理（含黑話語料、觸發統計、記憶記錄）。
+- `deny.guilds`／`deny.channels`、私訊、slash 指令都不受例外影響。
 
 ## 實作
 
-- `src/core/discord-core.mjs`：`isConversationAllowed()` 加 `ignoreUserDeny`（預設 false）。
-  只跳過 `deny.users`，且只在伺服器頻道生效（`ignoreUserDeny && guildId`）。
-- `src/discord-bridge.js` `handleMessage()`：把 `mentioned`／`repliedUserId` 提到閘門前，
-  `addressedToBot = Boolean(guildId) && shouldHandleGuildMessage(..., true)`，
-  帶 `ignoreUserDeny: addressedToBot`。`direct` 直接沿用 `addressedToBot`。
-- 頻道上下文（`:2450`）原本沒過濾 `deny.users`，加了 `!cfg.discord.deny.users.includes(entry.author?.id)`，
-  使被擋的人沒 @ 的閒聊不進 prompt、不收黑話樣本；每日摘要（`:3053`）仍過濾。
-- `/blacklist` 回覆文字補上例外；文件 `docs/guides/DISCORD.md` 三處同步。
+- `src/core/discord-core.mjs`：
+  - `isConversationAllowed()`：`deny.users` 一律擋；`deny.self` 只在 `!(ignoreUserDeny && guildId)` 時擋。`ignoreUserDeny` 只跳過 self，且只在伺服器頻道生效。
+  - `isDeniedUser(cfg, userId)`：兩份名單任一命中都算「被擋的人」，給被動路徑用。
+  - `withSelfMutedUser(deny, userId, muted)`：改寫 `deny.self`，其他欄位原樣保留（舊名 `withDeniedUser`，寫 `deny.users`）。
+- `src/discord-bridge.js` `handleMessage()`：`mentioned`／`repliedUserId` 提到閘門前，`addressedToBot = Boolean(guildId) && shouldHandleGuildMessage(..., true)`，帶 `ignoreUserDeny: addressedToBot`；`direct` 沿用 `addressedToBot`。
+- 被動路徑（`isDeniedUser` 兩份名單都擋）：recent-channel-history priming、每日摘要（`:3051`）、`read_history`（`:1307`）、`search_history`（`:1338`）、`view` 目標訊息（`:1353`，回 403）與被回覆的那則（`:1361`）、批次引用原文（`:2413`）、頻道上下文＋黑話樣本（`:2448`）、`user` 工具的記憶 facts（`:1444`）。
+- `view` 的轉發內容（messageSnapshots）不查作者，文件已寫明。
+- `/blacklist`（slash）：管理員封鎖的人不能自己解除（回「請找管理員」）；其餘 toggle `deny.self`；私聊全擋；`/blacklist` 與 `/mention` 改成 optionless toggle。
+- `/reset`、`/status`、`/forget` 得 `dmPermission: true`；`/status` 印 頻道/私聊；`/reset` 非擁有者閘門用 `userId: ''` 問頻道。
+- 所有文字指令移除（`!reset`、`!new`、`!status`、`!forget` 當一般聊天）。
+- `updateConfig()`：`deny` 逐欄合併（`{ ...cfg.discord.deny, ...(patch?.deny ?? {}) }`），console 表單只送部分欄位也不蓋掉 `deny.self`；先讀檔、寫檔、rename，再改記憶體，寫檔失敗狀態不變；函式同步、無 await。
 
 ## 測試
 
-`scripts/test-discord-bridge.mjs` 第 2 節新增：@ 放行、伺服器／頻道／母頻道黑名單擋得住、私聊不適用。
+`scripts/test-discord-bridge.mjs`：@ 放行、伺服器／頻道／母頻道黑名單擋得住、私聊不適用、`/blacklist` toggle、@ 例外。
 
-## 已知缺口（Found）
+## 已知缺口
 
-- `read_history`／`search_history` 不過濾 `deny.users`，仍讀得到被擋的人的訊息。
-- `memoryTarget` 沒看黑名單，模型可用訊息編號記下他的事。
-- `handleMessage` 在 `main()` closure，無整合測試，只有核心 predicate 被測。
-- 設計問題：`deny.users` 同時是「使用者自己退出」與「管理員封鎖」兩種用途；
-  改完後被封鎖的人只要 @bot 就能觸發回合。若要完全封鎖，需拆成兩份名單。
+- `view` 轉發內容不查作者（跨頻道抓來源成本大，維持現狀）。
+- 被擋的人的名字仍可能經 `replyName` 露出（只名字，內文不漏）。
+- `ignoreUserDeny` 命名偏寬（實際只跳過 self）。
+- `handleMessage` 在 `main()` closure，無整合測試。
 
 ## 相關
 
-[[discord-blacklist-stale]]、[[discord-view-message]]。
+[[discord-blacklist-stale]]、[[discord-view-message]]、[[discord-session-reload]]。
