@@ -438,6 +438,9 @@
   <section class="card">
     <h2>群友記憶 <span id="memory-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 remember_user 記下的事，唯讀。要刪請當事人用 /forget。</p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="memory-search" type="search" aria-label="搜尋群友記憶" placeholder="搜尋名稱或 user id" style="max-width:260px">
+    </div>
     <div class="table-wrap">
       <table style="min-width:480px">
         <colgroup><col style="width:20%"><col><col style="width:20%"></colgroup>
@@ -445,11 +448,15 @@
         <tbody id="memory-rows"></tbody>
       </table>
     </div>
+    <div class="row pager" id="memory-pager"></div>
   </section>
 
   <section class="card">
     <h2>頻道筆記 <span id="notes-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 note_event 記下的事，加上每天自動產生的頻道摘要。刪掉後模型就看不到那條。</p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="note-search" type="search" aria-label="搜尋頻道筆記" placeholder="搜尋頻道名稱或 channel id" style="max-width:260px">
+    </div>
     <div class="table-wrap">
       <table style="min-width:720px">
         <colgroup><col style="width:16%"><col style="width:38%"><col style="width:10%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup>
@@ -457,11 +464,15 @@
         <tbody id="note-rows"></tbody>
       </table>
     </div>
+    <div class="row pager" id="note-pager"></div>
   </section>
 
   <section class="card">
     <h2>梗圖 <span id="memes-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 save_meme 存下的小圖，用 send_image 的 meme:名稱 送出。刪掉後模型就送不出那張；共用的梗圖所有伺服器都看得到。</p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="meme-search" type="search" aria-label="搜尋梗圖" placeholder="搜尋名稱或梗圖 id" style="max-width:260px">
+    </div>
     <div class="table-wrap">
       <table style="min-width:760px">
         <colgroup><col style="width:11%"><col style="width:34%"><col style="width:15%"><col style="width:15%"><col style="width:12%"><col style="width:13%"></colgroup>
@@ -469,6 +480,7 @@
         <tbody id="meme-rows"></tbody>
       </table>
     </div>
+    <div class="row pager" id="meme-pager"></div>
   </section>
   </div>
 
@@ -1018,6 +1030,8 @@
   const LIST_PAGE_SIZE = 20;
   // 自動重新整理每 5 秒重畫一次，過濾和頁碼放在這裡才不會被重設。
   const listView = { slang: { status: 'all', page: 1, query: '' }, style: { status: 'all', page: 1, query: '', channel: 'all' } };
+  // 群友記憶、頻道筆記、梗圖共用：名稱／ID 篩選，每頁 20 筆。
+  const pagedLists = { memory: { query: '', page: 1, data: null }, note: { query: '', page: 1, data: null }, meme: { query: '', page: 1, data: null } };
   const LIST_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']];
   let triggerData = { users: [] };
   let triggerSearch = '';
@@ -1300,16 +1314,42 @@
       data?.enabled === false ? '回訪功能關著。' : '現在沒有排回訪。'))]));
   }
 
+  // 篩選後才分頁；換頁只重畫表格，篩選字與頁碼留在 pagedLists。
+  function renderPagedList(kind, all, { fields, colSpan, empty, cells, unit = '筆' }) {
+    const view = pagedLists[kind];
+    const query = view.query.trim().toLowerCase();
+    const matched = query
+      ? all.filter((row) => fields(row).some((value) => String(value ?? '').toLowerCase().includes(query)))
+      : all;
+    const pages = Math.max(1, Math.ceil(matched.length / LIST_PAGE_SIZE));
+    view.page = Math.min(Math.max(1, view.page), pages);
+    const rows = matched.slice((view.page - 1) * LIST_PAGE_SIZE, view.page * LIST_PAGE_SIZE);
+    $(kind + '-rows').replaceChildren(...(rows.length ? rows.map((row) => el('tr', {}, ...cells(row)))
+      : [el('tr', {}, el('td', { colSpan, className: 'muted' }, query && !matched.length ? '沒有符合的項目。' : empty))]));
+    $(kind + '-pager').replaceChildren(...(pages > 1 ? [
+      el('button', { type: 'button', className: 'ghost', dataset: { page: String(view.page - 1) }, textContent: '上一頁', disabled: view.page <= 1 }),
+      el('span', { className: 'muted' }, `第 ${view.page} / ${pages} 頁（${matched.length} ${unit}）`),
+      el('button', { type: 'button', className: 'ghost', dataset: { page: String(view.page + 1) }, textContent: '下一頁', disabled: view.page >= pages }),
+    ] : []));
+  }
+
   function renderMemory(data) {
+    pagedLists.memory.data = data;
     const rows = data?.users ?? [];
     $('memory-count').textContent = data?.enabled
       ? `（${rows.length} 人）`
       : '（已關閉：config.json 的 discord.memory.enabled）';
-    $('memory-rows').replaceChildren(...(rows.length ? rows.map((user) => el('tr', {},
-      el('td', {}, el('strong', {}, user.name || user.userId)),
-      el('td', {}, ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact))),
-      el('td', { className: 'muted' }, fmtAgo(user.updatedAt)),
-    )) : [el('tr', {}, el('td', { colSpan: 3, className: 'muted' }, '還沒有記住任何人。'))]));
+    renderPagedList('memory', rows, {
+      fields: (user) => [user.name, user.userId],
+      colSpan: 3,
+      empty: '還沒有記住任何人。',
+      unit: '人',
+      cells: (user) => [
+        el('td', {}, el('strong', {}, user.name || user.userId)),
+        el('td', {}, ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact))),
+        el('td', { className: 'muted' }, fmtAgo(user.updatedAt)),
+      ],
+    });
   }
 
   function feedbackPrompt(item) {
@@ -1384,18 +1424,25 @@
   }
 
   function renderNotes(data) {
+    pagedLists.note.data = data;
     const rows = data?.notes ?? [];
     $('notes-count').textContent = data?.enabled
       ? `（${rows.length} 條）`
       : '（已關閉：config.json 的 discord.notes.enabled）';
-    $('note-rows').replaceChildren(...(rows.length ? rows.map((note) => el('tr', {},
-      el('td', { className: 'mono' }, '#' + (note.channelName || note.channelId)),
-      el('td', {}, note.text),
-      el('td', { className: 'muted' }, note.by === 'summary' ? '每日摘要' : '模型'),
-      el('td', { className: 'muted' }, fmtAgo(Date.parse(note.at))),
-      el('td', { className: 'muted' }, note.expiresAt ? new Date(note.expiresAt).toLocaleDateString() : '永久'),
-      el('td', {}, el('button', { className: 'danger', dataset: { noteId: note.id }, textContent: '刪除' })),
-    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有筆記。'))]));
+    renderPagedList('note', rows, {
+      fields: (note) => [note.channelName, note.channelId],
+      colSpan: 6,
+      empty: '還沒有筆記。',
+      unit: '條',
+      cells: (note) => [
+        el('td', { className: 'mono' }, '#' + (note.channelName || note.channelId)),
+        el('td', {}, note.text),
+        el('td', { className: 'muted' }, note.by === 'summary' ? '每日摘要' : '模型'),
+        el('td', { className: 'muted' }, fmtAgo(Date.parse(note.at))),
+        el('td', { className: 'muted' }, note.expiresAt ? new Date(note.expiresAt).toLocaleDateString() : '永久'),
+        el('td', {}, el('button', { className: 'danger', dataset: { noteId: note.id }, textContent: '刪除' })),
+      ],
+    });
   }
 
   // 縮圖要帶 Authorization 標頭，<img src> 帶不了：抓成 blob 再顯示，同一張只抓一次。
@@ -1406,12 +1453,15 @@
       const res = await fetch('/api/memes/image?id=' + encodeURIComponent(id), { headers: { authorization: 'Bearer ' + token } });
       if (!res.ok) return;
       const url = URL.createObjectURL(await res.blob());
+      // 輪詢、搜尋、換頁都可能讓同一張圖同時抓好幾次：只留第一個，重複的馬上釋放。
+      if (memeThumbs.has(id)) { URL.revokeObjectURL(url); img.src = memeThumbs.get(id); return; }
       memeThumbs.set(id, url);
       img.src = url;
     } catch { /* 下一次 refresh 會再試 */ }
   }
 
   function renderMemes(data) {
+    pagedLists.meme.data = data;
     const rows = data?.memes ?? [];
     $('memes-count').textContent = data?.enabled
       ? `（${rows.length} 張）`
@@ -1420,22 +1470,28 @@
     for (const [id, url] of memeThumbs) {
       if (!alive.has(id)) { URL.revokeObjectURL(url); memeThumbs.delete(id); }
     }
-    $('meme-rows').replaceChildren(...(rows.length ? rows.map((meme) => {
-      const img = el('img', { className: 'meme-thumb', alt: meme.name, width: meme.width, height: meme.height });
-      loadMemeThumb(meme.id, img);
-      return el('tr', {},
-        el('td', {}, img),
-        el('td', {},
-          el('div', {}, meme.name),
-          el('div', { className: 'muted' }, meme.when),
-          meme.tags?.length ? el('div', { className: 'muted meme-tags' }, meme.tags.join('、')) : null,
-        ),
-        el('td', {}, meme.scope === 'global' ? '所有伺服器共用' : meme.guildName),
-        el('td', { className: 'muted' }, (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName),
-        el('td', { className: 'muted' }, meme.uses + ' 次 · ' + meme.width + '×' + meme.height + ' · ' + Math.round(meme.bytes / 1024) + 'KB'),
-        el('td', {}, el('button', { className: 'danger', dataset: { memeId: meme.id }, textContent: '刪除' })),
-      );
-    }) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有梗圖。'))]));
+    renderPagedList('meme', rows, {
+      fields: (meme) => [meme.name, meme.id],
+      colSpan: 6,
+      empty: '還沒有梗圖。',
+      unit: '張',
+      cells: (meme) => {
+        const img = el('img', { className: 'meme-thumb', alt: meme.name, width: meme.width, height: meme.height });
+        loadMemeThumb(meme.id, img);
+        return [
+          el('td', {}, img),
+          el('td', {},
+            el('div', {}, meme.name),
+            el('div', { className: 'muted' }, meme.when),
+            meme.tags?.length ? el('div', { className: 'muted meme-tags' }, meme.tags.join('、')) : null,
+          ),
+          el('td', {}, meme.scope === 'global' ? '所有伺服器共用' : meme.guildName),
+          el('td', { className: 'muted' }, (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName),
+          el('td', { className: 'muted' }, meme.uses + ' 次 · ' + meme.width + '×' + meme.height + ' · ' + Math.round(meme.bytes / 1024) + 'KB'),
+          el('td', {}, el('button', { className: 'danger', dataset: { memeId: meme.id }, textContent: '刪除' })),
+        ];
+      },
+    });
   }
 
   function renderSessions(list) {
@@ -1727,6 +1783,25 @@
     listView.style.page = 1;
     renderSlang({ entries: slangEntries, learning: lastSlangLearning });
   });
+
+  // 記憶分頁三張表：搜尋框改字、分頁鈕換頁都只重畫自己那張。
+  const PAGED_RENDERERS = { memory: renderMemory, note: renderNotes, meme: renderMemes };
+  for (const [kind, render] of Object.entries(PAGED_RENDERERS)) {
+    // 瀏覽器重新載入時可能還原輸入值，以 pagedLists 為準。
+    $(kind + '-search').value = pagedLists[kind].query;
+    $(kind + '-search').addEventListener('input', (event) => {
+      pagedLists[kind].query = event.target.value;
+      pagedLists[kind].page = 1;
+      // 第一次 API 還沒回來就打字：先記住字，等資料到再畫。
+      if (pagedLists[kind].data) render(pagedLists[kind].data);
+    });
+    $(kind + '-pager').addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-page]');
+      if (!button || button.disabled) return;
+      pagedLists[kind].page = Number(button.dataset.page) || 1;
+      render(pagedLists[kind].data);
+    });
+  }
 
   async function onEntryAction(event) {
     const button = event.target.closest('button[data-action]');

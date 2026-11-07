@@ -75,6 +75,7 @@ OpenChamber 这台没有本机 Chrome / Edge，也没装 Playwright，`npm run t
 - Discord 版控制台（`public/discord-console.html`，用 `startConsole` 加 mock handler 起一个随机端口）：「频道风格」的频道下拉選單顯示 `#頻道名 · 伺服器名（筆數）`，名稱或伺服器還是撞才補 id，跟狀態過濾一起作用，換頻道回到第 1 頁，重新整理後保留選擇，頻道沒有條目時退回「全部頻道」。
 - Discord 對話表：次數、畫圖、最後觸發、第一次可點擊排序；同欄切換升冪/降冪，換欄預設降冪，排序後回第 1 頁，`aria-sort` 與箭頭同步，同值保留伺服器順序。
 - Discord 會話分頁的「回訪排程」卡片：列出排程與剩餘時間，取消按鈕會呼叫 `/api/followups/delete`。
+- Discord「記憶」分頁：群友記憶、頻道筆記、梗圖每頁 20 筆，可依名稱或 ID 篩選；按重新整理後頁碼不變，換頁後再篩選會回到第 1 頁，一頁放得下時不顯示分頁。
 - Discord 所有表格固定欄寬：換頁或內容變長時欄位與按鈕位置不變；375px 下各分頁的表格儲存格不溢出到隔壁欄。
 - 无 JavaScript 错误、未知 API 或外部网络请求。
 

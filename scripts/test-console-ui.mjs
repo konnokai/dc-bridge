@@ -925,6 +925,85 @@ try {
     }
   });
 
+  await test('Discord 控制台：群友記憶、頻道筆記、梗圖每頁 20 筆，可依名稱或 ID 篩選', async () => {
+    const old = Date.parse('2026-01-02T03:04:05Z');
+    const pad = (index) => String(index).padStart(2, '0');
+    const userId = (index) => `9000000000000000${pad(index)}`;
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: {}, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: Array.from({ length: 25 }, (_, i) => ({
+          userId: userId(i), name: `群友${pad(i)}`, facts: ['事情'], updatedAt: old,
+        })) }),
+        followups: () => ({ enabled: true, items: [] }),
+        notes: () => ({ enabled: true, notes: Array.from({ length: 25 }, (_, i) => ({
+          id: `n${i}`, channelId: `2000000000000000${pad(i)}`, channelName: `頻道${pad(i)}`,
+          text: `筆記${i}`, by: 'model', at: new Date(old).toISOString(), expiresAt: old,
+        })) }),
+        memes: () => ({ enabled: true, memes: Array.from({ length: 25 }, (_, i) => ({
+          id: `m_${pad(i)}`, name: `梗圖${pad(i)}`, when: '', tags: [], scope: 'guild', guildName: '伺服器',
+          createdBy: 'user', channelName: '頻道', uses: 0, width: 256, height: 256, bytes: 1024,
+        })) }),
+        memeImage: () => null,
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1204, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      const pageErrors = [];
+      p.on('pageerror', (error) => pageErrors.push(error.message));
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#memory`);
+      await p.waitForFunction(() => document.querySelectorAll('#memory-rows tr').length === 20);
+      assert.match(await p.locator('#memory-pager').textContent(), /第 1 \/ 2 頁（25 人）/);
+      await p.locator('#memory-pager button', { hasText: '下一頁' }).click();
+      assert.equal(await p.locator('#memory-rows tr').count(), 5, '群友記憶第 2 頁剩 5 筆');
+      assert.match(await p.locator('#memory-rows tr').first().textContent(), /群友20/);
+
+      await p.locator('#memory-search').fill('群友1');
+      await p.waitForFunction(() => document.querySelectorAll('#memory-rows tr').length === 10);
+      assert.equal(await p.locator('#memory-pager').textContent(), '', '一頁放得下就不顯示分頁');
+      await p.locator('#memory-search').fill(userId(3));
+      await p.waitForFunction(() => document.querySelectorAll('#memory-rows tr').length === 1);
+      assert.match(await p.locator('#memory-rows tr').textContent(), /群友03/, '可用 user id 找到人');
+
+      await p.waitForFunction(() => document.querySelectorAll('#note-rows tr').length === 20);
+      assert.match(await p.locator('#note-pager').textContent(), /第 1 \/ 2 頁（25 條）/);
+      await p.locator('#note-search').fill('頻道07');
+      await p.waitForFunction(() => document.querySelectorAll('#note-rows tr').length === 1);
+      assert.match(await p.locator('#note-rows tr').textContent(), /筆記7/);
+
+      await p.waitForFunction(() => document.querySelectorAll('#meme-rows tr').length === 20);
+      assert.match(await p.locator('#meme-pager').textContent(), /第 1 \/ 2 頁（25 張）/);
+      await p.locator('#meme-pager button', { hasText: '下一頁' }).click();
+      assert.equal(await p.locator('#meme-rows tr').count(), 5, '梗圖第 2 頁剩 5 筆');
+      await Promise.all([
+        p.waitForResponse((response) => new URL(response.url()).pathname === '/api/memes'),
+        p.locator('#refresh').click(),
+      ]);
+      assert.equal(await p.locator('#meme-rows tr').count(), 5, '重新整理後仍停在第 2 頁');
+      assert.match(await p.locator('#meme-pager').textContent(), /第 2 \/ 2 頁/, '重新整理不會把頁碼歸零');
+      await p.locator('#meme-search').fill('梗圖');
+      await p.waitForFunction(() => document.querySelectorAll('#meme-rows tr').length === 20);
+      assert.match(await p.locator('#meme-pager').textContent(), /第 1 \/ 2 頁/, '換頁後再篩選會回到第 1 頁');
+      await p.locator('#meme-search').fill('m_03');
+      await p.waitForFunction(() => document.querySelectorAll('#meme-rows tr').length === 1);
+      assert.match(await p.locator('#meme-rows tr').textContent(), /梗圖03/, '可用梗圖 id 找到圖');
+      assert.deepEqual(pageErrors, [], '頁面沒有 JS 錯誤');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('Discord 控制台：單頻道 requireMentionInChannel 讀寫，沒開意圖時鎖住且不送', async () => {
     const posts = [];
     let current = {
