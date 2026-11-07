@@ -49,8 +49,8 @@ function loadConfig() {
   return {
     dsh: {
       baseUrl: String(dsh.baseUrl || 'http://127.0.0.1:3080').replace(/\/+$/, ''),
-      provider: String(dsh.provider || 'opencode-go'),
-      model: String(dsh.model || 'deepseek-v4.1-flash'),
+      provider: String(dsh.provider || 'commandcode'),
+      model: String(dsh.model || 'deepseek/deepseek-v4.1-flash'),
       authToken: typeof dsh.authToken === 'string' ? dsh.authToken : '',
       allowRemote: dsh.allowRemote === true,
     },

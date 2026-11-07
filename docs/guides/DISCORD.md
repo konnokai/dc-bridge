@@ -200,7 +200,8 @@ pm2 logs dc-bridge
 - 自動壓縮的 `/compact` 不計時。
 
 `dsh` 段沿用 QQ 版的欄位（`baseUrl`、`provider`、`model`、`reasoningEffort`、`authToken`、`allowRemote`）。
-預設是 `opencode-go` / `deepseek-v4.1-flash`（橋接的內建預設）。實際可用的 provider/model 以 DSH 的
+預設是 `commandcode` / `deepseek/deepseek-v4.1-flash`（橋接的內建預設，走 DSH 的
+`@mars-sea/dsh-commandcode-provider` 外掛）。實際可用的 provider/model 以 DSH 的
 `session/modelCatalog` 為準——不在 `routableProviders` 裡的組合會讓每個回合在送出訊息前就失敗。
 `dsh.authToken` 通常留空，讓橋接用 `~/.dsh/.credentials.yaml` 離線鑄造 Cookie。
 
@@ -343,7 +344,7 @@ urgent 的批次只認叫 bot 的那個人，旁人打字不會拖慢回答；�
 | --- | --- | --- |
 | `/reset` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理員只能重置自己伺服器裡、在白名單上的頻道；私聊只有擁有者能用 |
 | `/reload-system-prompt` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 排進這個頻道的同一條會話佇列，等目前回合結束後用那個 DSH 會話產生一段對話總結，存進 `state/discord-reload-summaries.json`，再重置會話。排隊期間的新訊息會留在 bridge，重載完成後進新會話；總結會放在新會話第一則 prompt 的開頭。**不會重啟 DSH**，新的 preset 要先由 DSH 重新載入 |
-| `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度；生圖 preset 開著時再加一行 Codex 額度 |
+| `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go` 時再加一行 OpenCode Go 額度（用 `commandcode` 時沒有這行）；生圖 preset 開著時再加一行 Codex 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
 | `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**；個別頻道的 `requireMentionInChannel` 優先。沒開 Message Content 意圖時不能切換（一定得 @bot） |
@@ -496,7 +497,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - **總覽**（`#overview`）
   - **狀態**：Discord 登入、DSH 位址、preset/模型、事件流最後一幀、會話數、等待中的提問/審批，
     以及觸發對話人數（今天／總計／次數、畫圖次數與最常觸發的人）
-  - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的剩餘百分比與重置時間（見「OpenCode Go 額度」）
+  - **OpenCode Go 額度**：5 小時 / 每週 / 每月三個額度的剩餘百分比與重置時間；`dsh.provider` 是 `commandcode`（預設）時沒有這張卡片（見「OpenCode Go 額度」）
   - **Codex 額度**：生圖 preset 有開 `allowImageGen` 時，顯示 5 小時 / 每週剩餘百分比、重置時間與重置券（見「Codex 額度」）
 - **花費**（`#usage`）：token 用量與折算金額；24 小時 / 3 天 / 7 天 / 30 天走勢，點會話列展開逐輪明細
 - **黑話**（`#slang`）：「黑話詞庫」和「頻道風格」兩張卡片分開列。各自可以按狀態（全部／待確認／已確認／已拒絕）過濾，
@@ -570,6 +571,9 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 `dsh.provider` 是 `opencode-go` 時，控制台的「OpenCode Go 額度」卡片和 `/status` 會顯示訂閱額度：
 5 小時、每週、每月三個額度各剩幾 %、多久後重置，跟 Codex 額度一樣從 100% 往下扣。
 上面的「花費」是橋接自己按價目表估算的；這裡是 OpenCode 伺服器算的，用完會被擋的是這個數字。
+
+用 `commandcode`（bridge 的預設）時**沒有**這張卡片、`/status` 也沒有那一行，額度要直接看
+Command Code 後台。程式碼留著，provider 換回 `opencode-go` 就自動恢復，不用改任何東西。
 
 - **資料來源**：`GET https://opencode.ai/zen/go/v1/usage`（跟 opencode.ai 後台的額度頁同一份資料）。
 - **API key**：先看環境變數 `OPENCODE_GO_API_KEY`，沒有就讀 DSH 的 `~/.dsh/.credentials.yaml` →

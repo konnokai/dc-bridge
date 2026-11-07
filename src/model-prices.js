@@ -22,7 +22,7 @@
 // 节假日来源：国办发明电〔2025〕7 号（2026 年）、国办发明电〔2026〕10 号（2027 年）。
 
 /** 价目表版本标记，仅用于控制台展示与排障（改了价目表就改这里）。 */
-export const PRICE_TABLE_VERSION = '2026-11-07';
+export const PRICE_TABLE_VERSION = '2026-11-07b';
 
 /**
  * 旧账本（人民币价目表时代）已落盘的金额换算成美元的比率。
@@ -115,6 +115,12 @@ export const DEFAULT_PRICE_TABLE = {
     // 每一筆都會被當成未登記模型。價格與 deepseek-flash 相同。
     'deepseek-v4.1-flash': {
       label: 'DeepSeek-V4.1-Flash',
+      off: { cacheHit: 0.003, cacheMiss: 0.15, cacheWrite: 0.15, output: 0.6 }
+    },
+    // Command Code provider（`commandcode`）回報的 model id 帶 provider 前綴；
+    // 少了這個別名，每一筆都會被當成未登記模型。價格與 deepseek-v4.1-flash 相同。
+    'deepseek/deepseek-v4.1-flash': {
+      label: 'DeepSeek-V4.1-Flash（Command Code）',
       off: { cacheHit: 0.003, cacheMiss: 0.15, cacheWrite: 0.15, output: 0.6 }
     },
     'deepseek-v4-flash': {

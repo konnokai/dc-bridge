@@ -1,8 +1,8 @@
 {
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
-    "provider": "opencode-go",
-    "model": "deepseek-v4.1-flash",
+    "provider": "commandcode",
+    "model": "deepseek/deepseek-v4.1-flash",
     "reasoningEffort": "max",
     "authToken": "",
     "authHeader": "authorization",

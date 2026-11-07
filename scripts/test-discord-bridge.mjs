@@ -1747,6 +1747,33 @@ console.log('## 7c. Token 帳本（花費看板）');
   ok(report2.totals.estimated === false, '快照回填的逐輪事件帶上會話模型（不被當成未登記模型）');
   ok(report2.totals.turns === 1, '快照的歷史事件會回填成逐輪明細');
 
+  // Command Code 外掛回報的 model id 帶一層 provider 前綴（deepseek/deepseek-v4.1-flash）。
+  // 價目表少了這個別名，整批帳會被當成未登記模型、按兜底價估算。
+  const ledgerWith = (name, provider, model) => {
+    const tracker = createUsageTracker({
+      file: path.join(dir, `${name}.jsonl`),
+      priceTable,
+      reverse: new Map(),
+      learnerSessions: new Set(),
+      nominalModel: model,
+      provider,
+    });
+    tracker.ingestEvent(name, {
+      seq: 1, time: Date.UTC(2026, 9, 26, 12, 0), type: 'model/selection',
+      data: { provider, model },
+    });
+    tracker.ingestEvent(name, {
+      seq: 2, time: Date.UTC(2026, 9, 26, 12, 0), type: 'assistant/message',
+      data: { turn: 1, step: 1, usage: { inputTokens: 1000, cacheReadTokens: 50000, outputTokens: 25 } },
+    });
+    return usageReport({ ledger: tracker.ledger, priceTable, nominalModel: model });
+  };
+  const ccReport = ledgerWith('cc', 'commandcode', 'deepseek/deepseek-v4.1-flash');
+  const nativeReport = ledgerWith('native', 'opencode-go', 'deepseek-v4.1-flash');
+  ok(ccReport.totals.estimated === false, 'commandcode 的 model id 不算未登記模型');
+  ok(ccReport.totals.cost === nativeReport.totals.cost,
+    'commandcode 的金額與 deepseek-v4.1-flash 相同');
+
   usage.ledger.reset();
   ok(usage.ledger.summary().totals.cost === 0, '清空帳本後歸零');
   fs.rmSync(dir, { recursive: true, force: true });

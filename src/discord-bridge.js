@@ -396,8 +396,8 @@ function loadConfig() {
   return {
     dsh: {
       baseUrl: String(dsh.baseUrl || 'http://127.0.0.1:3080').replace(/\/+$/, ''),
-      provider: String(dsh.provider || 'opencode-go'),
-      model: String(dsh.model || 'deepseek-v4.1-flash'),
+      provider: String(dsh.provider || 'commandcode'),
+      model: String(dsh.model || 'deepseek/deepseek-v4.1-flash'),
       reasoningEffort: String(dsh.reasoningEffort || 'max'),
       // 顯式填的 token 優先；留空時才去日誌裡找（新版 DSH 通常找不到，改用離線鑄造 Cookie）。
       authToken: authToken || discoverDshLaunchToken(),
