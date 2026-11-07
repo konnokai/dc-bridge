@@ -24,6 +24,7 @@ description: web_fetch 的 Google Docs/Slides/Sheets export 改寫、HTML og/tit
   - deflate 只支援 zlib 包裝，不支援 raw deflate；zstd 不支援（伺服器很少回）。
 - `src/core/fetch-verdict.mjs` 新增 `looksBinary()`，二進位內容回 `isError`「無法解析正文」。
 - 文件同步：`docs/guides/DISCORD.md`。
+- preset dc-chat 規則：群友丟 URL 問內容先 `view_message`，預覽沒正文才 `web_fetch`（commit 696d78c）。避免模型看到 URL 就直接 web_fetch 原網址。
 
 測試：`scripts/test-discord-web-content.mjs`（離線）、`scripts/test-audit-security-mcp.mjs`。
 相關：[[discord-message-preview]]。

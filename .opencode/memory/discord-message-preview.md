@@ -12,6 +12,7 @@ description: view_message/batch 讀取 Discord component embed、embed.author/pr
 - `viewMediaItems`：component media、gallery 圖優先於 thumbnail、V2 File 的 cdn/proxy 只送一次、
   敏感 embed（`embed.flags`）不自動按 reaction。
 - `visibleAttachments`：V2 File 隱藏的附件過濾成共用函式（`src/core/discord-context.mjs`）。
+- `formatQuote`：引用內容為空時，若有圖片則 fallback `[圖片]`，避免引用整則被吃掉。
 - batch 加一行 `[連結預覽：…]`，讓模型不只看到縮圖。
 - 媒體去重依 URL pathname；沒有 content-length 時會先讀完整 body 才檢查大小（已知限制）。
 

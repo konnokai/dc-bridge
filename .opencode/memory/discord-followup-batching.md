@@ -11,6 +11,9 @@ description: 送出前攔補句：urgent 8 秒、take/takeFollowups、hold 同 s
 - `src/discord-bridge.js`：`send_message` 送出純文字前攔補句（安靜檢查後、`prepareRefusal` 前），一個回合一次；同一個 step 的其他 send 也 hold 到 `step/start`，避免只送出後半句；`/reset`、turn/start、turn/end、斷線都會清狀態。
 - `/reset`、turn/start、turn/end、斷線都會清狀態。
 - 一般批次（20 秒）與私聊（沒有 @）不受影響；F 只救「回合開始後約 8 秒內」到的補句，救不到 15 秒那種。
+- `take` 的 `hasMedia` guard 會把帶圖／附件／貼圖／embed／component／轉發快照的訊息留給正常批次，只攔純文字補句；`takeFollowups` 順便帶 `replyName`（回覆對象名字），引用內文與 `muted` 仍不帶。
+- 重排送出時間改用剩餘項目中最晚的 `at`（`Math.max`），並照 `followsDirect` 規則重算 urgent；避免項目的順序不照時間。
+- `turnFollowupHeld` 會讓同一個 step 的其他 `send` 暫時不送（避免只送後半句），在 `step/start`、`assistant/message`、turn 邊界與 `/reset` 清除；DSH 事件流是否真的送 `step/start` 尚未直接驗證。
 
 ## 已知限制（Found）
 
