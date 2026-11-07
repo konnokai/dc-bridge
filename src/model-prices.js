@@ -3,22 +3,35 @@
 // 为什么放在桥接里：DSH 自身不做任何货币换算（`dsh-llm-pi-ai` 明写 "no consumer reports
 // spend"），provider 只回 token 数。所以「花多少钱」必须由消费方用价目表算。
 //
-// 口径（与官方文档一致，单位：元 / 百万 token）：
+// 口径（与官方英文文档一致，单位：美元 / 百万 token）：
 //   扣减费用 = Σ(各桶 token 数 × 对应单价)
 //   桶共三个：输入缓存命中 / 输入缓存未命中 / 输出。
 //   空闲时段单价 = 高峰时段的一半。
 //   高峰时段 = 北京时间周一至周五 9:00-12:00、14:00-18:00，且不含中国法定节假日；
 //   其余时段（含周末与法定节假日全天）均为空闲时段。
 //
+// 中英文两页不是同一组数字：英文页 USD，中文页 CNY（两边有取整，不是精确汇率换算）。
+// 这里照英文页收 USD。逐轮与基线的金额读取时才折算；被淘汰的 evict 汇总是淘汰当下的金额，
+// 不随价目表重算。
+//
 // 注意 `dsh` 报的 token 桶是**互不重叠**的：
 //   计费输入 = inputTokens(未命中) + cacheReadTokens + cacheWriteTokens
 // 所以三个桶要分别计价再相加，不能把 cacheRead 当成 inputTokens 的一部分。
 //
-// 价目来源：https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
-// 节假日来源：国办发明电〔2025〕7 号（2026 年部分节假日安排）。
+// 价目来源：https://api-docs.deepseek.com/quick_start/pricing/（2026-11-05 抓取）
+// 节假日来源：国办发明电〔2025〕7 号（2026 年）、国办发明电〔2026〕10 号（2027 年）。
 
 /** 价目表版本标记，仅用于控制台展示与排障（改了价目表就改这里）。 */
-export const PRICE_TABLE_VERSION = '2026-11-04';
+export const PRICE_TABLE_VERSION = '2026-11-07';
+
+/**
+ * 旧账本（人民币价目表时代）已落盘的金额换算成美元的比率。
+ *
+ * 英文页 USD 价 ≈ 中文页 CNY 价 × 0.15（flash 三项都正好 0.15，pro 约 0.1467）。
+ * 旧 `evict` 行只存金额、没存模型，按 flash 的 0.15 换算，最坏误差约 2%。
+ * 2026-11 之后写入的 `evict` 行带 `cur`，不再走这条换算。
+ */
+export const LEGACY_CNY_TO_USD = 0.15;
 
 /**
  * 2026 年中国法定节假日（放假日，含调休连休段）。
@@ -46,26 +59,26 @@ export const CN_HOLIDAYS_2026 = [
 
 /**
  * 2027 年法定节假日（国务院办公厅通知，放假调休段）。
+ * 来源：国办发明电〔2026〕10 号（2026-11-05 发布）。
  *
- * 为什么要预置到 2027：价目表只认这些日期，缺失时的表现是**静默高估**——
- * 节假日里的调用会被当高峰计价（2 倍），金额看着偏高但不报错。
- * 春节/国庆这类长假横跨多天，很容易把一年的账单整体抬高几个百分点。
- * 官方通常在上一年 11 月公布次年安排；公布后按实际日期替换本表即可。
+ * 价目表只认这些日期：缺一天会把那天当高峰计价（2 倍），多写一天会把那天
+ * 当空闲计价。两种情况都不报错，只让账单静默偏高或偏低，所以放假安排公布后
+ * 要按实际日期更新本表（2026 年的表就是照国办发明电〔2025〕7 号写的）。
  */
 export const CN_HOLIDAYS_2027 = [
   // 元旦：1/1(周五)-1/3(周日)
   '2027-01-01', '2027-01-02', '2027-01-03',
-  // 春节：2/5(周五，除夕前一天)-2/13(周六)（按农历正月初一 2/6 前后连续放假日推定）
+  // 春节：2/5(周五，除夕)-2/13(周六)
   '2027-02-05', '2027-02-06', '2027-02-07', '2027-02-08', '2027-02-09',
   '2027-02-10', '2027-02-11', '2027-02-12', '2027-02-13',
-  // 清明节：4/4(周日)-4/6(周二)
-  '2027-04-04', '2027-04-05', '2027-04-06',
+  // 清明节：4/3(周六)-4/5(周一)
+  '2027-04-03', '2027-04-04', '2027-04-05',
   // 劳动节：5/1(周六)-5/5(周三)
   '2027-05-01', '2027-05-02', '2027-05-03', '2027-05-04', '2027-05-05',
-  // 端午节：6/9(周三)-6/11(周五)（按农历五月初五）
-  '2027-06-09', '2027-06-10', '2027-06-11',
-  // 中秋节：9/15(周三)-9/17(周五)（按农历八月十五）
-  '2027-09-15', '2027-09-16', '2027-09-17',
+  // 端午节：6/9(周三) 1 天
+  '2027-06-09',
+  // 中秋节：9/15(周三) 1 天
+  '2027-09-15',
   // 国庆节：10/1(周五)-10/7(周四)
   '2027-10-01', '2027-10-02', '2027-10-03', '2027-10-04',
   '2027-10-05', '2027-10-06', '2027-10-07'
@@ -78,14 +91,14 @@ export const CN_HOLIDAYS = [...CN_HOLIDAYS_2026, ...CN_HOLIDAYS_2027];
 const BEIJING_OFFSET_MINUTES = 8 * 60;
 
 /**
- * 默认价目表（元 / 百万 token）。
+ * 默认价目表（美元 / 百万 token）。
  * `off` 为空闲时段单价；高峰时段单价 = 空闲单价 × `peakMultiplier`。
  * `cacheWrite` 缺省时按未命中价计费（DeepSeek 目前不单独报 cacheWrite，恒为 0）。
  */
 export const DEFAULT_PRICE_TABLE = {
   version: PRICE_TABLE_VERSION,
-  currency: 'CNY',
-  symbol: '¥',
+  currency: 'USD',
+  symbol: '$',
   unit: 1e6,
   peakMultiplier: 2,
   // 高峰时段窗口，按北京时间的小时数半开区间 [start, end)
@@ -96,29 +109,29 @@ export const DEFAULT_PRICE_TABLE = {
   models: {
     'deepseek-flash': {
       label: 'DeepSeek-V4.1-Flash',
-      off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
+      off: { cacheHit: 0.003, cacheMiss: 0.15, cacheWrite: 0.15, output: 0.6 }
     },
     // 實際送進 DSH 的模型 id（config 的 dsh.model）；少了這個別名，
     // 每一筆都會被當成未登記模型。價格與 deepseek-flash 相同。
     'deepseek-v4.1-flash': {
       label: 'DeepSeek-V4.1-Flash',
-      off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
+      off: { cacheHit: 0.003, cacheMiss: 0.15, cacheWrite: 0.15, output: 0.6 }
     },
     'deepseek-v4-flash': {
       label: 'DeepSeek-V4.1-Flash（旧模型名）',
-      off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
+      off: { cacheHit: 0.003, cacheMiss: 0.15, cacheWrite: 0.15, output: 0.6 }
     },
     'deepseek-v4-flash-vision-exp': {
       label: 'DeepSeek-V4.1-Flash（视觉实验名）',
-      off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
+      off: { cacheHit: 0.003, cacheMiss: 0.15, cacheWrite: 0.15, output: 0.6 }
     },
     'deepseek-v4-pro': {
       label: 'DeepSeek-V4-Pro-0813',
-      off: { cacheHit: 0.15, cacheMiss: 4.5, cacheWrite: 4.5, output: 13.5 }
+      off: { cacheHit: 0.022, cacheMiss: 0.66, cacheWrite: 0.66, output: 1.98 }
     },
     'deepseek-pro': {
       label: 'DeepSeek-V4-Pro-0813（旧模型名）',
-      off: { cacheHit: 0.15, cacheMiss: 4.5, cacheWrite: 4.5, output: 13.5 }
+      off: { cacheHit: 0.022, cacheMiss: 0.66, cacheWrite: 0.66, output: 1.98 }
     }
   },
   // 未知模型的兜底价：按 flash 计，并在返回值里标 estimated=true，控制台会提示。
@@ -133,6 +146,10 @@ export function resolvePriceTable(override) {
   const merged = {
     ...DEFAULT_PRICE_TABLE,
     ...override,
+    // 币别固定跟内置单价表一致：只改 currency 不改单价，会把同一组数字当成另一种货币，
+    // 账面上差好几倍而且不报错。要换币别就整张表一起换，不要只改这两个字段。
+    currency: DEFAULT_PRICE_TABLE.currency,
+    symbol: DEFAULT_PRICE_TABLE.symbol,
     models: { ...DEFAULT_PRICE_TABLE.models },
     peakWindows: Array.isArray(override.peakWindows) ? override.peakWindows : DEFAULT_PRICE_TABLE.peakWindows,
     peakWeekdays: Array.isArray(override.peakWeekdays) ? override.peakWeekdays : DEFAULT_PRICE_TABLE.peakWeekdays,

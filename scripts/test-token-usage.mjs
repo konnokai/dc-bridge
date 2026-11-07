@@ -68,12 +68,13 @@ const offRates = ratesAt('deepseek-flash', mon('20:00'), DEFAULT_PRICE_TABLE);
 const peakRates = ratesAt('deepseek-flash', mon('10:00'), DEFAULT_PRICE_TABLE);
 assert(offRates.tier === 'off' && peakRates.tier === 'peak', '同一模型峰谷档位判定正确');
 assert(near(peakRates.cacheMiss, offRates.cacheMiss * 2), '高峰单价为空闲单价的 2 倍');
-assert(near(offRates.cacheHit, 0.02) && near(offRates.cacheMiss, 1) && near(offRates.output, 4), 'flash 空闲单价与官方一致（0.02/1/4）');
+assert(near(offRates.cacheHit, 0.003) && near(offRates.cacheMiss, 0.15) && near(offRates.output, 0.6), 'flash 空闲单价与官方英文页一致（0.003/0.15/0.6）');
+assert(DEFAULT_PRICE_TABLE.currency === 'USD' && DEFAULT_PRICE_TABLE.symbol === '$', '默认价目表用美元');
 
 // 100 万 token 各桶 → 正好等于单价
 const cost1M = costOfBuckets({ cacheHit: 1e6, cacheMiss: 1e6, cacheWrite: 0, output: 1e6 }, offRates);
-assert(near(cost1M.cacheHit, 0.02) && near(cost1M.cacheMiss, 1) && near(cost1M.output, 4), '桶计价 = 单价 × 百万 token');
-assert(near(cost1M.total, 5.02), '合计 = 分项之和');
+assert(near(cost1M.cacheHit, 0.003) && near(cost1M.cacheMiss, 0.15) && near(cost1M.output, 0.6), '桶计价 = 单价 × 百万 token');
+assert(near(cost1M.total, 0.753), '合计 = 分项之和');
 
 // 桶互不重叠：normalizeUsage 不能把 cacheRead 也算进未命中
 const norm = normalizeUsage({ inputTokens: 100, outputTokens: 10, cacheReadTokens: 900, cacheWriteTokens: 5 });
@@ -84,10 +85,12 @@ assert(totalTokensOf(norm) === 1015, 'token 总量 = 四桶之和');
 // ── 3. 未知模型兜底 ─────────────────────────────────────────────────────
 const unknown = ratesAt('some-future-model', mon('10:00'), DEFAULT_PRICE_TABLE);
 assert(unknown.estimated === true, '未知模型标记 estimated');
-assert(near(unknown.cacheMiss, 2), '未知模型按 flash 兜底（高峰期 1×2）');
+assert(near(unknown.cacheMiss, 0.3), '未知模型按 flash 兜底（高峰期 0.15×2）');
 const tbl = resolvePriceTable({ models: { 'my-model': { label: '自定义', off: { cacheHit: 0.5, cacheMiss: 3, output: 9 } } } });
 assert(tbl.models['my-model'].off.cacheWrite === 3, '自定义模型未给 cacheWrite 时跟随 cacheMiss');
-assert(tbl.models['deepseek-flash'].off.cacheMiss === 1, '自定义覆盖不影响内置模型');
+assert(tbl.models['deepseek-flash'].off.cacheMiss === 0.15, '自定义覆盖不影响内置模型');
+const forced = resolvePriceTable({ currency: 'CNY', symbol: '¥' });
+assert(forced.currency === 'USD' && forced.symbol === '$', '价目表币别固定 USD，config 只改 currency/symbol 会被忽略');
 
 // ── 4~8. 账本折叠语义 ───────────────────────────────────────────────────
 const usage = (inputTokens, outputTokens, cacheReadTokens = 0, extra = {}) =>
@@ -155,7 +158,7 @@ let c = sum.conversations.find((x) => x.key === 'group:100');
 assert(c.buckets.cacheMiss === 6000, '权威总量 = 基线 5000 + 增量 1000');
 assert(c.buckets.cacheHit === 50000, '基线命中量计入总量');
 assert(c.buckets.output === 600, '基线输出计入总量');
-const expectCost = (5000 / 1e6) * 1 + (50000 / 1e6) * 0.02 + (500 / 1e6) * 4 + (1000 / 1e6) * 1 + (100 / 1e6) * 4;
+const expectCost = (5000 / 1e6) * 0.15 + (50000 / 1e6) * 0.003 + (500 / 1e6) * 0.6 + (1000 / 1e6) * 0.15 + (100 / 1e6) * 0.6;
 assert(near(c.cost, expectCost, 1e-9), `花费 = 基线 + 增量，实得 ${c.cost.toFixed(8)} 期望 ${expectCost.toFixed(8)}`);
 assert(c.turns === 2, '基线范围内的回合仍出现在逐轮明细里（共 2 轮）');
 assert(near(c.unattributedCost, Math.max(0, c.cost - c.attributedCost), 1e-9), '未逐轮归属差额自洽');
@@ -164,11 +167,11 @@ assert(sum.totals.cacheHitRate > 0.85, `缓存命中率按输入桶计算（${(s
 
 // 峰谷混算：同一会话内高峰与空闲的采样各按各的档位
 ledger = freshLedger({ resolveKey: () => 'group:100' });
-ledger.ingestEvent({ sessionId: 's1', event: evMsg(10, 1, 1, usage(1e6, 1e6, 0)), at: mon('10:00') }); // 高峰：1 + 4 → ×2
-ledger.ingestEvent({ sessionId: 's1', event: evMsg(20, 2, 1, usage(1e6, 1e6, 0)), at: mon('20:00') }); // 空闲：1 + 4
+ledger.ingestEvent({ sessionId: 's1', event: evMsg(10, 1, 1, usage(1e6, 1e6, 0)), at: mon('10:00') }); // 高峰：(0.15 + 0.6) × 2
+ledger.ingestEvent({ sessionId: 's1', event: evMsg(20, 2, 1, usage(1e6, 1e6, 0)), at: mon('20:00') }); // 空闲：0.15 + 0.6
 c = ledger.summary().conversations[0];
-assert(near(c.cost, (1 + 4) * 2 + (1 + 4)), `峰谷分时计价：高峰轮 ¥10 + 空闲轮 ¥5 = ¥15（实得 ${c.cost}）`);
-assert(near(c.byTier.peak, 10) && near(c.byTier.off, 5), '高峰期/空闲期花费分开统计');
+assert(near(c.cost, (0.15 + 0.6) * 2 + (0.15 + 0.6)), `峰谷分时计价：高峰轮 $1.5 + 空闲轮 $0.75 = $2.25（实得 ${c.cost}）`);
+assert(near(c.byTier.peak, 1.5) && near(c.byTier.off, 0.75), '高峰期/空闲期花费分开统计');
 
 // ── 9. 半行容错 ─────────────────────────────────────────────────────────
 fs.appendFileSync(ledgerFile, '{"k":"turn","sid":"s1","turn":9,"ste', 'utf8');
@@ -187,7 +190,7 @@ const stats = ledger.stats();
 assert(stats.samples <= 20, `逐轮明细被压到上限内（实得 ${stats.samples}）`);
 assert(stats.journalLines <= 40, `压缩后磁盘行数受控（实得 ${stats.journalLines}）`);
 const afterEvict = ledger.summary().totals;
-const expectEvictCost = 30 * ((10 / 1e6) * 1 + (1 / 1e6) * 4);
+const expectEvictCost = 30 * ((10 / 1e6) * 0.15 + (1 / 1e6) * 0.6);
 assert(afterEvict.buckets.cacheMiss === 300, `淘汰后累计未命中输入仍为 30×10=300（实得 ${afterEvict.buckets.cacheMiss}）`);
 assert(afterEvict.buckets.output === 30, `淘汰后累计输出仍为 30（实得 ${afterEvict.buckets.output}）`);
 assert(near(afterEvict.cost, expectEvictCost, 1e-9), `淘汰后累计花费不变（实得 ${afterEvict.cost.toFixed(8)} 期望 ${expectEvictCost.toFixed(8)}）`);
@@ -195,6 +198,24 @@ assert(afterEvict.unattributedCost > 0, '被淘汰的回合归入「未逐轮归
 const reloaded = createTokenLedger({ file: ledgerFile, priceTable: DEFAULT_PRICE_TABLE, resolveKey: () => 'group:100' });
 assert(reloaded.stats().samples === stats.samples, '淘汰后重新载入不丢采样');
 assert(near(reloaded.summary().totals.cost, afterEvict.cost, 1e-9), '淘汰结果的累计花费可跨重启复现');
+
+// 10c. 旧人民币账本的 evict 金额在载入时换算成美元（没有 cur 字段的旧行）
+fs.writeFileSync(ledgerFile, `${JSON.stringify({
+  k: 'evict', t: mon('20:00'), sid: 'legacy', key: 'group:legacy',
+  b: { cacheMiss: 1e6, cacheHit: 0, cacheWrite: 0, output: 0 },
+  cost: 1, peak: 0.5, off: 0.5, estimated: false, dropped: 1, maxSeq: -1
+})}\n`, 'utf8');
+const legacy = createTokenLedger({ file: ledgerFile, priceTable: DEFAULT_PRICE_TABLE });
+assert(near(legacy.summary().totals.cost, 0.15, 1e-9), '旧人民币 evict 金额按 0.15 换成美元');
+assert(near(legacy.summary().totals.byTier.peak, 0.075, 1e-9), '旧 evict 的峰谷分项也一起换算');
+
+// 换算后 compact 要写回 USD 金额和 cur；重载不得再乘一次 0.15
+legacy.compact();
+const evictLine = fs.readFileSync(ledgerFile, 'utf8').split('\n').find((line) => line.includes('"k":"evict"'));
+const evictRecord = JSON.parse(evictLine);
+assert(evictRecord.cur === 'USD' && near(evictRecord.cost, 0.15, 1e-9), 'compact 写回 USD 金额与 cur');
+const legacyReloaded = createTokenLedger({ file: ledgerFile, priceTable: DEFAULT_PRICE_TABLE });
+assert(near(legacyReloaded.summary().totals.cost, 0.15, 1e-9), '带 cur 的 evict 行重载后不再换算');
 
 // ── 10b. 读取路径是单遍索引：总量不随采样数二次膨胀 ─────────────────────
 ledger = freshLedger({ resolveKey: () => 'group:100', maxLines: 5000 });
@@ -249,7 +270,7 @@ assert(ser.buckets.some((b) => b.tier === 'peak') && ser.buckets.some((b) => b.t
   '空桶也有档位（图上能看出"这段时间本来就是 2 倍价"）');
 
 // 合计：每笔按自己时刻的峰谷计价（高峰 2 倍）
-const expectWindow = 2 * ((1000 / 1e6) * 2 + (100 / 1e6) * 8) + ((2000 / 1e6) * 1 + (200 / 1e6) * 4);
+const expectWindow = 2 * ((1000 / 1e6) * 0.3 + (100 / 1e6) * 1.2) + ((2000 / 1e6) * 0.15 + (200 / 1e6) * 0.6);
 assert(near(ser.totals.cost, expectWindow, 1e-9),
   `窗口合计按各桶自身时刻的峰谷计价（实得 ${ser.totals.cost.toFixed(6)} 期望 ${expectWindow.toFixed(6)}）`);
 assert(ser.totals.steps === 3 && ser.totals.turns === 2, `步数 3 / 轮次 2（实得 ${ser.totals.steps}/${ser.totals.turns}）`);

@@ -706,10 +706,10 @@
     return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   };
   const usageMoney = (value, symbol) => {
-    const sym = symbol || '¥';
+    const sym = symbol || '$';
     const n = Number(value) || 0;
     if (n === 0) return sym + '0';
-    if (n < 0.01) return sym + n.toFixed(4);
+    if (n < 0.01) return sym + Number(n.toPrecision(3));
     return sym + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   };
   const usagePct = (value) => (Number.isFinite(Number(value)) ? (Number(value) * 100).toFixed(1) + '%' : '—');
@@ -825,7 +825,7 @@
     const b = t.buckets ?? {};
     const series = data?.series ?? {};
     const prices = data?.prices;
-    const sym = prices?.symbol ?? '¥';
+    const sym = prices?.symbol ?? '$';
     $('usage-total').textContent = (Number(t.cost) || 0) > 0 ? '累計 ' + usageMoney(t.cost, sym) : '';
     $('usage-price').textContent = prices
       ? `價目 ${prices.version}｜${prices.now?.label ?? ''}（${prices.now?.model ?? ''}）｜現在是`

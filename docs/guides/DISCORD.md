@@ -551,9 +551,11 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   執行期間的逐條取樣是精確的。
 - **空狀態**：還沒有可歸屬的回合時會明講，不會顯示 NaN。
 
-價目表內建 DeepSeek 官方價（元 / 百萬 token；高峰為空閒的 2 倍，中國法定節假日除外）。
+價目表內建 DeepSeek 官方英文頁的美元價（美元 / 百萬 token；高峰為空閒的 2 倍，中國法定節假日除外）。
 要覆蓋時在 `config.json` 加 `pricing`（格式與 QQ 版相同，見 `docs/guides/TOKEN_USAGE_CONSOLE.md`），
-改完重啟橋接。金額是讀取時才折算，所以改價目表**不需要重算歷史**。
+改完重啟橋接。逐輪與基線的歷史金額是讀取時才折算，不用重算；
+被淘汰的 `evict` 彙總存的是淘汰當下的金額，改價目表不會重算那部分。
+2026-11 之前的人民幣舊帳本會在載入時把 `evict` 金額換成美元。
 
 控制台端點（都要 console token）：`GET /api/usage?range=24h|3d|7d|30d`、
 `GET /api/usage/turns?key=ch:<id>`、`POST /api/usage/reset`（清空帳本，不可恢復）。

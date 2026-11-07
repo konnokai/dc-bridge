@@ -44,6 +44,9 @@ node scripts/deploy-discord.mjs --sha <上一個 commit>
 跟正常部署走同一條路：checkout、遠端測試、必要時 `setup:discord`、重啟、健康檢查。
 失敗時腳本會直接印出這一行。
 
+**跨過 2026-11-07 幣別變更（CNY→USD）回退時**：先還原部署前的 `state/discord-usage.jsonl` 備份。
+新版 `compact()` 會在 `evict` 行寫 `cur`；舊版會把 `cur` 丟掉，再升回新版時那批金額會被再乘一次 0.15。
+
 ### 一次性設定（換機器時）
 
 伺服器先要有 repo。repo 是公開可讀，不需要金鑰：

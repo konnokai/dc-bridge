@@ -19,14 +19,18 @@
 //    `pumpMux` 的 finally 会清掉所有 per-turn Map（否则重连后回复会重复累加）。
 //    所以每条采样一到就 append 到 JSONL 日志，内存只是它的投影。
 //
-// 存储：`state/token-usage.jsonl`，两种行：
+// 存储：`state/token-usage.jsonl`，三种行：
 //   {"k":"base", t, sid, key, seq, model, provider, b:{cacheMiss,cacheHit,cacheWrite,output,reasoning}}
 //   {"k":"turn", t, sid, key, seq, turn, step, retry, model, provider, b:{...}}
-// 行数超过上限时按内存态重写（自动去重 + 丢弃被覆盖的旧采样）。
+//   {"k":"evict", t, sid, key, b, cost, peak, off, cur, estimated, dropped, maxSeq}
+// evict 是淘汰后的累计桶与**淘汰当下**算好的金额；`cur` 是这笔金额的币别
+// （旧账本没有这个字段，一律视为此前的人民币）。行数超过上限时按内存态重写
+// （自动去重 + 丢弃被覆盖的旧采样）。
 import fs from 'node:fs';
 import path from 'node:path';
 import {
   DEFAULT_PRICE_TABLE,
+  LEGACY_CNY_TO_USD,
   ZERO_BUCKETS,
   addBuckets,
   costOfBuckets,
@@ -156,14 +160,17 @@ export function createTokenLedger({
     if (record.k === 'evict') {
       const prevEvicted = evicted.get(sid);
       if (prevEvicted && prevEvicted.dropped >= (Number(record.dropped) || 0)) return false;
+      // 旧账本（CNY 价目表）的 evict 行只有金额、没有币别。换成 USD 后直接相加会把
+      // 人民币当成美元（差约 7 倍），所以缺 cur 的旧行按 flash 的比率换算一次。
+      const fx = record.cur === undefined ? LEGACY_CNY_TO_USD : 1;
       evicted.set(sid, {
         sessionId: sid,
         key: record.key,
         buckets,
-        cost: Number(record.cost) || 0,
+        cost: (Number(record.cost) || 0) * fx,
         byTier: {
-          peak: Number(record.peak) || 0,
-          off: Number(record.off) || 0
+          peak: (Number(record.peak) || 0) * fx,
+          off: (Number(record.off) || 0) * fx
         },
         estimated: record.estimated === true,
         dropped: Number(record.dropped) || 0,
@@ -289,6 +296,7 @@ export function createTokenLedger({
       out.push({
         k: 'evict', t: sessionSeen.get(e.sessionId) ?? 0, sid: e.sessionId, key: e.key,
         b: e.buckets, cost: e.cost, peak: e.byTier.peak, off: e.byTier.off,
+        cur: priceTable.currency,
         estimated: e.estimated, dropped: e.dropped, maxSeq: Number(e.maxSeq) >= 0 ? Number(e.maxSeq) : -1
       });
     }
