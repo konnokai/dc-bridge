@@ -94,7 +94,7 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         'content-type': 'text/html; charset=utf-8',
         'content-length': Buffer.byteLength(html),
         'cache-control': 'no-store',
-        'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
+        'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:",
         'x-content-type-options': 'nosniff',
       });
       res.end(html);
@@ -168,6 +168,38 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         }
         const removed = handlers.deleteNote(id);
         sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這條筆記' });
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/memes') {
+        sendJson(res, 200, handlers.memes());
+        return;
+      }
+      // 縮圖：頁面用 Authorization 標頭抓成 blob 再顯示，token 不會出現在網址裡。
+      if (req.method === 'GET' && url.pathname === '/api/memes/image') {
+        const id = (url.searchParams.get('id') ?? '').trim();
+        const image = /^m_[a-z0-9]+$/.test(id) ? handlers.memeImage(id) : null;
+        if (!image) {
+          sendJson(res, 404, { error: '找不到這張梗圖' });
+          return;
+        }
+        res.writeHead(200, {
+          'content-type': image.mime,
+          'content-length': image.buffer.length,
+          'cache-control': 'private, max-age=3600',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(image.buffer);
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/memes/delete') {
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        if (!/^m_[a-z0-9]+$/.test(id)) {
+          sendJson(res, 400, { error: '缺少梗圖 id' });
+          return;
+        }
+        const removed = handlers.deleteMeme(id);
+        sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這張梗圖' });
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/dev-feedback') {

@@ -142,7 +142,8 @@ const DISCORD_TOOL_NAMES = [
   'send_message', 'send_image', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
-  'note_event', 'search_notes', 'forget_note', 'submit_feedback', 'list_feedback', 'edit_feedback',
+  'note_event', 'search_notes', 'forget_note', 'save_meme', 'search_memes', 'forget_meme',
+  'submit_feedback', 'list_feedback', 'edit_feedback',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
 const VISIBLE_TOOLS = /send_message|send_image|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
@@ -3270,6 +3271,9 @@ console.log('## 7e. Discord MCP 發送工具');
       note_event: ['/note', { text: '週五晚上約好一起打牌' }],
       search_notes: ['/notes-search', { query: '週五' }],
       forget_note: ['/note-forget', { number: 1 }],
+      save_meme: ['/meme-save', { message: '#k7f3ab/1', name: '但是我拒絕', when: '有人要你做越界的事、要拒絕時' }],
+      search_memes: ['/meme-search', { query: '拒絕' }],
+      forget_meme: ['/meme-forget', { name: '但是我拒絕' }],
       submit_feedback: ['/dev-feedback', { reason: '缺少表格', need: '表格工具', expected: '能排版' }],
       list_feedback: ['/dev-feedback-list', {}],
       edit_feedback: ['/dev-feedback-edit', { id: 'df_test', reason: '缺少表格', need: '表格工具', expected: '能排版' }],
@@ -3960,6 +3964,9 @@ console.log('## 9. 控制台');
       deleteFollowup: (id) => id === 'f1',
       notes: () => ({ enabled: true, notes: [{ id: 'n1', text: '週五打球' }] }),
       deleteNote: (id) => id === 'n1',
+      memes: () => ({ enabled: true, memes: [{ id: 'm_a1', name: '但是我拒絕' }] }),
+      memeImage: (id) => (id === 'm_a1' ? { buffer: Buffer.from('89504e470d0a1a0a', 'hex'), mime: 'image/png' } : null),
+      deleteMeme: (id) => id === 'm_a1',
       devFeedback: () => ({
         items: [{
           id: 'df1', at: new Date().toISOString(), key: 'ch:1', label: '#閒聊 · 伺服器',
@@ -4054,6 +4061,21 @@ console.log('## 9. 控制台');
   ok(noteMissing.status === 404, '不存在的筆記回 404');
   const noteNoId = await fetch(`${base}/api/notes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({}) });
   ok(noteNoId.status === 400, '缺少筆記 id 回 400');
+  ok((await fetch(`${base}/api/memes`)).status === 401, '沒有 token 讀不到梗圖');
+  const memesResponse = await fetch(`${base}/api/memes`, { headers: authed });
+  ok(memesResponse.status === 200 && (await memesResponse.json()).memes[0].id === 'm_a1', '梗圖端點回 handler 的結果');
+  ok((await fetch(`${base}/api/memes/image?id=m_a1`)).status === 401, '沒有 token 看不到梗圖縮圖');
+  const memeImage = await fetch(`${base}/api/memes/image?id=m_a1`, { headers: authed });
+  ok(memeImage.status === 200 && memeImage.headers.get('content-type') === 'image/png'
+    && memeImage.headers.get('x-content-type-options') === 'nosniff' && (await memeImage.arrayBuffer()).byteLength === 8, '梗圖縮圖端點回圖檔');
+  ok((await fetch(`${base}/api/memes/image?id=m_nope`, { headers: authed })).status === 404, '不存在的梗圖縮圖回 404');
+  ok((await fetch(`${base}/api/memes/image?id=../x`, { headers: authed })).status === 404, '縮圖 id 含路徑一律當不存在');
+  const memeDelete = await fetch(`${base}/api/memes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: 'm_a1' }) });
+  ok(memeDelete.status === 200 && (await memeDelete.json()).ok === true, '刪梗圖端點會呼叫 handler');
+  const memeMissing = await fetch(`${base}/api/memes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: 'm_nope' }) });
+  ok(memeMissing.status === 404, '不存在的梗圖回 404');
+  const memeNoId = await fetch(`${base}/api/memes/delete`, { method: 'POST', headers: noteHeaders, body: JSON.stringify({ id: '../x' }) });
+  ok(memeNoId.status === 400, '非法梗圖 id 回 400');
   ok((await fetch(`${base}/api/dev-feedback`)).status === 401, '沒有 token 讀不到開發回饋');
   const feedbackResponse = await fetch(`${base}/api/dev-feedback`, { headers: authed });
   const feedbackBody = await feedbackResponse.json();

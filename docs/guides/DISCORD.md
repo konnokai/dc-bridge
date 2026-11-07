@@ -140,6 +140,9 @@ pm2 logs dc-bridge
 | `memory.enabled` | 群友記憶開關，預設 `false`（要在 `config.json` 明確打開） |
 | `memory.maxFacts` | 每個人最多記幾條，滿了丟最舊的，預設 20（5~50） |
 | `memory.maxChars` | 注入區塊的字數上限，預設 800（200~3000） |
+| `memes.enabled` | 梗圖庫開關，預設 `true`（見「梗圖庫」）；設 `false` 就不能存、不能用 `meme:` 送 |
+| `memes.localMax` | 每批 prompt 帶的本伺服器梗圖數，預設 8（0~20） |
+| `memes.otherMax` | 每批 prompt 帶的跨伺服器共用梗圖數，預設 4（0~10） |
 | `notes.enabled` | 頻道筆記開關，預設 `false`（會保存頻道文字；每天摘要會另外花 token） |
 | `notes.injectMax` | 每批最多注入幾條筆記，預設 5（1~20） |
 | `notes.maxChars` | 筆記注入區塊的字數上限，預設 600（100~3000） |
@@ -842,6 +845,62 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 > `.corrupt-<timestamp>` 並從空的重建，日誌會留一行錯誤。格式是第 3 版（`users` 以 user id 為鍵）；
 > 其他版本的檔案會被當成不支援的版本，改名備份後從空的重建。
 
+## 梗圖庫
+
+把頻道裡的圖存成 128～256px 的小圖，之後用 `send_image` 的 `file="meme:<名稱>"` 送出。圖存在橋接這台機器上，
+以附件方式發出，不是上傳成 Discord 的伺服器表情或貼圖（那要「管理表情」權限、有欄位上限，也會影響整個伺服器）。
+
+**圖怎麼進庫**
+- 沒有新的畫圖工具：先用 `generate_image` 畫、`send_image` 送進頻道，再用 `save_meme(message=#編號/張數, name, when, tags?, shared?)`
+  存那則訊息的圖。圖由橋接重新從 Discord 附件下載原始位元組，不依賴 `state/discord-images`（那個目錄只留最新 100 張）。
+  只收訊息的**附件**，不收 Discord 貼圖與連結預覽的圖。
+- bot 自己送的圖：不限誰叫它存，模型也可以自己存（見下方「自己做」）。
+- 群友貼的圖：只有貼那張圖的本人、或 `ownerIds` 的管理員，**在這一輪**叫 bot 存才行。「叫 bot」指這一輪有 ★（@ 或回覆 bot）的訊息的發言者；
+  沒有 ★ 的批次沒有人算叫 bot，所以不能存別人的圖、也不能刪梗圖。不信模型自己的說法。
+  讀不到的人（已退出、被封鎖、在不理名單）的圖不能存。
+- `requesters`（之後刪得了這張的人，最多 5 人）= 存圖那一輪的 ★ 觸發者，加上 bot 自己的圖「當初要求畫的人」：
+  橋接送出生圖時，用生圖開始時記下的人（查不到就用那一輪的 ★ 觸發者）對照那則訊息 id，記在記憶體 24 小時。
+  生圖完成那一輪是系統提示觸發、沒有 ★，所以靠這份對照；橋接重啟後對照消失，`requesters` 就只剩存圖那一輪的 ★ 觸發者，管理員仍可刪。
+- `when` 必填（最多 60 字）：什麼情境下才貼，例如「有人要你做越界的事、要拒絕時」。群友說「以後遇到某種情況就貼這張」就寫在這裡。
+
+**規格**
+- 長邊 ≤256px，保持比例、不補邊、不放大；來源長邊小於 128 拒絕；來源超過 1600 萬像素拒絕。
+- 靜態圖存 PNG（≤256KB，超過依序降色、降到 192、128）；動圖存 GIF（≤512KB，最多 3 秒，12 fps 起，超過依序降到 8／5 fps 與更小尺寸）。
+- 縮圖用 ffmpeg，跟看圖、抽格共用同一個佇列；沒有 ffmpeg 時 `save_meme` 回錯誤。縮圖整體最多 60 秒（MCP 工具逾時 90 秒）。
+  動態 WebP 不支援（伺服器的 ffmpeg 7.1 解不了），請改用 GIF；sBIT 壞掉的 PNG 會先修再縮。
+- 存圖與刪圖後索引立刻寫檔；開機時會清掉索引裡沒有的圖檔（存圖途中崩潰留下的），索引壞檔重建那次不清。
+
+**範圍與上限**
+- 預設只有來源伺服器看得到（`scope: guild`）。bot 自己畫、不含群友姓名長相的圖才可以 `shared: true`，所有伺服器共用；
+  群友貼的圖即使設了 `shared` 也強制只限本服。「不含群友資訊」橋接驗不出來，靠 persona 的規則與每日上限、控制台刪除兜底。
+- 名稱在伺服器內不能重複；共用梗圖的名字全域唯一。同名時查找先本服、再共用。
+- 全庫 300 張、100MB；每個頻道 24 小時最多存 5 張、每個伺服器最多 20 張（存了又刪不能洗額度）。滿了拒絕，要先刪。
+- 私聊不能用。一輪最多嘗試存 2 次（失敗也算）。
+
+**送出與注入**
+- `send_image` 的 `file="meme:名稱"`：算一則發言（佔一輪 5 則），**不計繪圖次數**；安靜中被擋（跟 PRTS 立繪一樣當成新發言），
+  純文字補句攔截也照純文字規則。送出成功才記一次使用。
+- 每批 prompt 帶【常用梗圖】：本服前 `localMax` 張＋跨伺服器共用前 `otherMax` 張，只列名稱與 `when`（依使用次數排序）；
+  同一會話沒變不重帶。沒梗圖就不帶。
+- `search_memes`（`query` 每個詞都要出現在名稱、情境或標籤；留空列出全部）、`forget_meme(name)`：
+  只有當初要求存的人或管理員，在那一輪叫 bot 刪才刪得了。
+- 安全規則第 6 條（情色）：梗圖庫有 `when` 寫著拒絕的梗圖時，那一句「這個不聊」可以換成只貼那一張，不加文字。
+  這種貼圖沒有文字，橋接不會把它當成重複拒絕，也不會升級成 ❌ reaction。
+
+**自己做**：沒人叫它存時，模型可以在同一個梗在頻道反覆出現（至少 3 次）時自己畫一張再存，每頻道一天最多 5 張，
+存完要在頻道講一句。畫圖額度照原本的 Codex 額度檢查。
+
+**控制台**：「記憶」分頁的「梗圖」卡片列出全部梗圖（縮圖、名稱、情境、標籤、範圍、來源、尺寸、使用次數），可以逐張刪除。
+端點 `GET /api/memes`、`GET /api/memes/image?id=`（縮圖；頁面用 Authorization 標頭抓成 blob，token 不進網址，所以控制台 CSP 加了 `img-src 'self' blob:`）、
+`POST /api/memes/delete`（`{id}`）。
+
+**檔案**：`state/discord-memes/index.json`（壞檔備份成 `.corrupt-<timestamp>` 後從空的重建）與
+`state/discord-memes/files/<id>.png|gif`。
+
+```json
+"memes": { "enabled": true, "localMax": 8, "otherMax": 4 }
+```
+
 ## 頻道筆記（選用）
 
 記「群裡發生過什麼」：約定、決定、反覆被提起的事件、梗的由來。跟群友記憶分開，關於某個人的事還是用
@@ -957,7 +1016,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 
 - 只有模型真的送出訊息（`send_message`／`send_image`／`send_sticker`／`create_poll`）才記一次；
   同一個回合送好幾則只算一次，避免模型連發把數字洗高。
-- 另外記「繪圖次數」：`send_image` 每成功送出一張就加一次，歸給這個回合叫 bot 的人；
+- 另外記「繪圖次數」：`send_image` 每成功送出一張生圖就加一次（`meme:` 梗圖不算），歸給這個回合叫 bot 的人；
   不影響對話次數與最後觸發時間。
 - 這批訊息有 ★ 就只記叫 bot 的人；沒有 ★（自由參與）記整批的發言者；同一個人只算一次。
 - 存在 `state/discord-triggers.json`（`state/` 已被 gitignore）。控制台總覽顯示今天人數、總人數、
@@ -981,8 +1040,9 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   已退出（`deny.self`）、管理員封鎖（`deny.users`）或模型不理名單的訊息不能當 `reply_to`，會回 403。
   有 `reply_to` 就用 Discord 的「回覆」接那則（不額外 ping 對方）。回傳
   `已送出到 #頻道名。這則的訊息編號是 #xxxx（之後改、收回、看反應用這個）`；太長切成好幾則時列出每個編號
-- `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道（含 GIF）。
-  `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖；
+- `mcp__discord__send_image`（`file`、`content`／`reply_to` 可省略）：把 `generate_image` 畫好的圖送進頻道（含 GIF），
+  或用 `file="meme:<名稱>"` 送梗圖庫的圖（見「梗圖庫」）。
+  `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖與梗圖庫；
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
 - `mcp__discord__cancel_image`（沒有參數）：取消這個頻道所有還在跑或排隊中的生圖。使用者說「不要畫了」
   或發現 prompt 填錯時用；橋接刪掉工作後，外掛下一次 poll（最多 15 秒）中止 Codex，
@@ -1048,7 +1108,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `mcp__discord__remove_reaction`（`message`、`emoji`）：收回你在那則訊息按過的同一個表情。
   只能收回自己按的；沒按過或已經收回時回 404，一輪最多 3 次（跟 `add_reaction` 分開算）
 - `mcp__discord__set_quiet`（`minutes`、`reason` 可省略）：讓自己安靜 1~120 分鐘。這段時間**沒叫 bot** 的頻道訊息
-  不送進模型（省 token）；叫 bot 的只按 reaction，文字、貼圖與投票會被閘門擋下（帶檔案的 `send_image` 例外）。
+  不送進模型（省 token）；叫 bot 的只按 reaction，文字、貼圖與投票會被閘門擋下（送生圖檔案的 `send_image` 例外；`meme:` 梗圖和 PRTS 立繪一樣會被擋）。
   被叫安靜時只設安靜，不要送文字；安靜結束後不要主動接同一個話題。黑話語料照收。`minutes=0` 提早結束。
   安靜結束後的下一批會重新帶一次頻道上下文。狀態只在記憶體，bridge 重啟就清掉
 - `mcp__discord__set_custom_status`（`text`）：改 bot 在成員列表顯示的自訂狀態（custom status），
@@ -1084,6 +1144,10 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `mcp__discord__search_notes`（`query`／`days` 可省略）：查這個頻道的筆記；`query` 的每個詞都要出現，
   `days` 只看最近幾天。回傳的編號給 `forget_note` 用
 - `mcp__discord__forget_note`（`number`）：刪掉這個頻道第 `number` 條筆記（舊→新的編號）
+- `mcp__discord__save_meme`（`message`、`name`、`when`，`tags`／`shared` 可省略）：把那則訊息的圖存進梗圖庫（長邊 ≤256px）。
+  `message` 是 `#編號/張數`；群友貼的圖只有本人或管理員在這一輪叫它存才行；私聊不能用。細節見「梗圖庫」
+- `mcp__discord__search_memes`（`query` 可省略）：查梗圖庫（本伺服器加上共用的），回名稱、情境、標籤、尺寸、使用次數
+- `mcp__discord__forget_meme`（`name`）：刪一張梗圖；只有當初要求存的人或管理員在那一輪叫它刪才行
 - `mcp__discord__submit_feedback`（`reason`、`need`、`expected`）：把「覺得自己缺某個能力／工具」或「對回覆方式、規則、功能的建議」
   送給開發者，各欄最多 500 字。不用先 `list_feedback`：所有頻道 24 小時內 `need` 相同的內容會回既有那筆的 id。
   觸發：工具只回「看不到／只有網域或標題／沒有正文」、你得繞路才做得到，或規則互相打架；網站擋、逾時、訊息刪除、
@@ -1180,7 +1244,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
 `POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
-`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/meme-save`、`/meme-search`、`/meme-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 

@@ -295,6 +295,28 @@ export function resolveGeneratedImage(dir, file, { maxBytes = 10 * 1024 * 1024 }
   return { path: full, name, buffer };
 }
 
+/** 跟看圖、抽格共用同一個 ffmpeg 名額，梗圖縮圖才不會跟它們搶 CPU。 */
+export const runInMediaQueue = (task) => mediaQueue(task);
+
+/**
+ * save_meme 用：一則訊息第 index 張「附件」的原始位元組。
+ * 不收 Discord 貼圖與連結預覽的圖：貼圖可能是別的伺服器的，預覽圖不是這則訊息的內容。
+ * 動圖照收，原始位元組交給縮圖那一步判斷。
+ * @returns {Promise<{buffer: Buffer, name: string}>}
+ */
+export async function loadMemeSourceBytes(message, index, limits, { fetchMedia = fetchDiscordMedia } = {}) {
+  const { accepted, skipped } = collectMediaAttachments(messageParts(message).attachments, limits);
+  const images = accepted.filter((item) => item.mime.startsWith('image/'));
+  if (!images.length) {
+    throw drawRefError(`這則訊息沒有能存的圖片附件${skipped[0]?.reason ? `（${skipped[0].reason}）` : ''}`, 400);
+  }
+  if (!Number.isInteger(index) || index < 1 || index > images.length) {
+    throw drawRefError(`這則訊息只有 ${images.length} 張圖片附件，張數要填 1~${images.length}`, 400);
+  }
+  const item = images[index - 1];
+  return { buffer: await fetchMedia(item.url, limits), name: safeName(item.name) };
+}
+
 /**
  * 把下載到的位元組整理成 DSH 的 `{type:'image', mediaType, data}`。
  * 影片先抽格拼圖，再走跟圖片一樣的出口；解析度／體積超標時交給 ffmpeg 縮小。
