@@ -17,6 +17,7 @@ import path from 'node:path';
 import { safeFetch } from './safe-fetch.js';
 import { fetchVerdict } from './core/fetch-verdict.mjs';
 import { normalizeWebFetchUrl } from './core/web-content.mjs';
+import { fetchTwitterPost, twitterPostLines, twitterStatusId } from './core/twitter-post.mjs';
 import { webSearch } from './web-search.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -94,10 +95,17 @@ server.tool(
 
 server.tool(
   'web_fetch',
-  '只读抓取 HTTPS（443 端口）网页正文，返回标题、说明与可见文字。Google Docs／Slides／Sheets 会自动改写成公开 export；只拿到登录页或只有标题时会明说。禁止访问内网/本机地址，不执行任何本地操作。',
+  '只读抓取 HTTPS（443 端口）网页正文，返回标题、说明与可见文字。X／Twitter 贴文（含 fixvx、fixupx、fxtwitter、vxtwitter 转址）改用 FxEmbed 公开 API 返回作者、正文与媒体；Google Docs／Slides／Sheets 会自动改写成公开 export；只拿到登录页或只有标题时会明说。禁止访问内网/本机地址，不执行任何本地操作。',
   { url: z.string().describe('要抓取的 https URL') },
   async ({ url }) => {
     try {
+      if (twitterStatusId(url)) {
+        const post = await fetchTwitterPost(url);
+        if (!post.ok) {
+          return { content: [{ type: 'text', text: `抓取失败：${post.reason}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text: untrustedData(twitterPostLines(post).join('\n'), 0) }], isError: false };
+      }
       const target = normalizeWebFetchUrl(url);
       const result = await safeFetch(target.url, 50000, WEB_FETCH_OPTS);
       const verdict = fetchVerdict(result, { expectText: target.expectText });

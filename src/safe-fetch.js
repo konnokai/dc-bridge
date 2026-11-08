@@ -202,6 +202,7 @@ export async function validateFetchUrl(raw, opts = {}) {
   return { url, ip: addresses[0], addresses };
 }
 
+const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
 const REQUEST_TIMEOUT_MS = 20000;
 // 多地址时的单次尝试预算：够一次 TCP+TLS+首字节，又不至于让「第一个地址是坏的 IPv6」
 // 把整个 20 秒总预算耗光。
@@ -262,7 +263,7 @@ function validateLimit(value, name) {
  * 返回 `{ok:true,result}` 或 `{ok:false,error,retryable}`；retryable 只标记网络层失败
  * （连接失败/超时/正文中断），大小与图片签名等策略性拒绝不重试。
  */
-function attemptOnce(url, address, limit, binary, budgetMs) {
+function attemptOnce(url, address, limit, binary, budgetMs, userAgent) {
   return new Promise((resolve) => {
     let settled = false;
     let req;
@@ -293,7 +294,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
         method: 'GET',
         headers: {
           host: url.host,
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36',
+          'user-agent': userAgent || DEFAULT_USER_AGENT,
           accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'accept-language': 'zh-CN,zh;q=0.9',
         },
@@ -390,7 +391,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
  * 而「第一个地址是坏的 IPv6」不会再白等 20 秒。
  * 所有地址都失败时抛最后一个错误（保留原始错误文案，便于日志排查）。
  */
-async function requestOnce(url, addresses, limit, binary = false) {
+async function requestOnce(url, addresses, limit, binary = false, userAgent = '') {
   const list = (Array.isArray(addresses) ? addresses : [addresses]).filter(Boolean);
   if (!list.length) throw new Error(`没有可用地址：${url.hostname}`);
   const deadline = Date.now() + REQUEST_TIMEOUT_MS;
@@ -402,7 +403,7 @@ async function requestOnce(url, addresses, limit, binary = false) {
     const budget = list.length === 1
       ? REQUEST_TIMEOUT_MS
       : Math.min(ATTEMPT_TIMEOUT_MS, remaining);
-    const outcome = await attemptOnce(url, list[i], limit, binary, budget);
+    const outcome = await attemptOnce(url, list[i], limit, binary, budget, userAgent);
     if (outcome.ok) return outcome.result;
     lastError = outcome.error;
     if (!outcome.retryable) throw outcome.error;
@@ -419,10 +420,12 @@ async function requestOnce(url, addresses, limit, binary = false) {
 
 export async function safeFetch(urlString, maxChars = 50000, opts = {}) {
   validateLimit(maxChars, 'maxChars');
+  // 有的 API 會擋瀏覽器 UA（FxTwitter 背後的 Cloudflare 就是），呼叫端可指定自己的。
+  const userAgent = typeof opts.userAgent === 'string' ? opts.userAgent.trim().slice(0, 200) : '';
   const MAX_REDIRECTS = 5;
   let { url, addresses } = await validateFetchUrl(urlString, opts);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, addresses, maxChars);
+    const result = await requestOnce(url, addresses, maxChars, false, userAgent);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();

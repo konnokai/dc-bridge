@@ -1114,6 +1114,14 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   yt-dlp 整支失敗（私人影片、會員限定、地區鎖、直播、沒裝）只多一行「影片連結看不了：原因」，其它內容照回。
   白名單是防 SSRF：yt-dlp 會連原站，不能讓群友丟任何網址就讓伺服器去抓。抓 YouTube 違反其服務條款，要不要開由管理員決定；
   預設關閉，而且 yt-dlp 要自己定期更新，沒更新就會整條失效。
+- `view_message` 的 X／Twitter 連結：訊息本文（或修復 bot 補的訊息）裡有 `x.com`、`twitter.com`、`fixvx.com`、`fixupx.com`、
+  `fxtwitter.com`、`vxtwitter.com` 的 `/status/<id>` 時，橋接改用 FxEmbed 的公開 API（`api.fxtwitter.com/2/status/<id>`）
+  取作者、正文與媒體；貼文的照片與影片縮圖會跟 Discord 附件一起附給模型（最多 `media.maxCount` 張）。
+  修復 bot 預覽已經附過的同一張圖會用檔名去重，不重複吃名額；貼文標 `possibly_sensitive` 或連結預覽被 Discord
+  標成敏感時只回文字，不附媒體圖。影片只標出長度與縮圖，不抽格；貼文權限、刪文或 API 壞掉只多一行
+  「X 貼文看不了：原因」，其它內容照回。整通工具剩不到 12 秒就不等結果，跟 YouTube 連結同一條預算規則。
+  這條路不用設定、不用金鑰，但貼文 ID 會送給第三方（FxEmbed）；API 限流 1000 次/分鐘/IP。
+  使用 FxEmbed 是管理員在回饋 `df_mw7etjk73dae52` 指定的做法。
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
   伺服器頻道走 Discord 的訊息搜尋 API（`/guilds/{guild}/messages/search`），不用從最新一則一則往回翻；
   一次最多比對 75 個符合（3 頁 × 25），更早的符合要再給 `date` 縮小範圍。
@@ -1193,6 +1201,8 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   HTML 回標題、說明與前 2000 字可見文字；純文字最多 50000 字。
   `Content-Encoding` 是 gzip／deflate／br 會先解壓再讀（有些站沒被要求也會壓縮，例如 bilibili）；不支援的編碼或二進位內容回「無法解析」，不把亂碼當正文。
   Google Docs／Slides／Sheets 的 `/edit`、`/view` 會自動改寫成 `export?format=txt`／`csv`（公開文件才有效；私人文件回登入頁時明確說打不開）。
+  X／Twitter 貼文（`x.com`、`twitter.com` 與 `fixvx.com`／`fixupx.com`／`fxtwitter.com`／`vxtwitter.com` 的 `/status/<id>`）不抓原頁，
+  改用 FxEmbed 公開 API（`api.fxtwitter.com`）回作者、正文與媒體清單；貼文 ID 會送給第三方，不用金鑰。
   HTML 會抽 `og:title`／`og:description`／`<title>` 與可見文字；只有標題、沒有正文時明講「只有標題」。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
 - `mcp__prts__*`（24 個，全部唯讀）：明日方舟 PRTS Wiki 與遊戲資料。`search_prts` 找詞條、`get_operator_basic_info`
