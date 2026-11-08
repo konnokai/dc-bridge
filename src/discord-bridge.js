@@ -195,6 +195,7 @@ import {
 } from './core/discord-memes.mjs';
 import { resolvePrtsArtwork } from './core/prts-artwork.mjs';
 import { fetchVideoLink, formatChapters, formatVideoTime, videoLinks } from './core/discord-video-link.mjs';
+import { fetchTwitterImage, fetchTwitterPost, firstTwitterPost, twitterImageUrls, twitterPostLines } from './core/twitter-post.mjs';
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
@@ -2674,6 +2675,16 @@ async function main() {
           lines.push(...componentLines(messageParts(message).components, message, `${flat(authorName(message), 40)} 補的元件內容`));
         }
       }
+      // X 貼文先開始抓，跟後面的 Discord 附件下載並行；等到要排版時再收結果。
+      // 這個工具整通只有 60 秒，附件可能吃掉 55 秒，所以不能等附件全部跑完才開始連外。
+      const tweetSource = firstTwitterPost([
+        targetParts.text,
+        ...(repliedMessage ? [messageParts(repliedMessage).text] : []),
+        ...fixMessages.map((message) => message.content),
+      ]);
+      const tweetPromise = tweetSource
+        ? fetchTwitterPost(tweetSource).catch((error) => ({ ok: false, reason: error?.message ?? String(error) }))
+        : null;
       if (target.poll) {
         const poll = target.poll;
         const answers = [...poll.answers.values()].map((answer) => `${flat(resolveMentions(answer.text ?? answer.emoji?.name ?? '?', target), 60)} ${answer.voteCount ?? 0} 票`);
@@ -2712,6 +2723,72 @@ async function main() {
         ...media.skipped.map((s) => `${flat(s.name, 60)}（${s.reason}）`),
         ...settled.map((r, i) => (r.status === 'rejected' ? `${flat(media.accepted[i].name, 60)}（${flat(r.reason?.message ?? r.reason, 80)}）` : '')).filter(Boolean),
       ];
+
+      // 群友貼的 X／Twitter 連結：走 FxEmbed 公開 API，取作者、正文與媒體。
+      // 影片只附縮圖，不抽格：抽格要多下載一次影片，文字與縮圖已經夠回答。
+      if (tweetPromise) {
+        // 跟 YouTube 同一條規矩：剩不到 12 秒就放棄，保住前面已經拿到的文字。
+        const tweetLeft = 55_000 - (Date.now() - viewStart);
+        if (tweetLeft < 12_000) {
+          lines.push('X 貼文這次沒看：前面的內容已經花掉大部分時間，要看就再呼叫一次 view_message。');
+        } else {
+          const post = await withTimeout(tweetPromise, Math.min(20_000, tweetLeft), 'X 貼文')
+            .catch((error) => ({ ok: false, reason: error?.message ?? String(error) }));
+          for (const line of twitterPostLines(post)) {
+            // 推文正文最多 4000 字，這裡跟其他內容一樣收在 1500 字；截斷要看得出來。
+            const text = flat(line, 1501);
+            lines.push(text.length > 1500 ? `${text.slice(0, 1500)}…` : text);
+          }
+          const previewSensitive = [
+            ...targetParts.embeds,
+            ...(repliedMessage ? messageParts(repliedMessage).embeds : []),
+            ...fixMessages.flatMap((message) => messageParts(message).embeds),
+          ].some((embed) => embedIsSensitive(embed));
+          if (post.ok && previewSensitive && !post.sensitive) lines.push('（連結預覽標成敏感，貼文媒體不附圖）');
+          if (post.ok && cfg.discord.media.enabled && !post.sensitive && !previewSensitive) {
+            const room = Math.max(0, cfg.discord.media.maxCount - images.length);
+            // 修復 bot 的預覽可能已經附了同一張 pbs 圖；用檔名去重，別白吃名額。
+            const delivered = new Set(settled.flatMap((result, index) => {
+              if (result.status !== 'fulfilled') return [];
+              try {
+                return [new URL(media.accepted[index].url).pathname.split('/').pop()];
+              } catch {
+                return [];
+              }
+            }));
+            const candidates = twitterImageUrls(post, room).filter((item) => {
+              try {
+                return !delivered.has(new URL(item.url).pathname.split('/').pop());
+              } catch {
+                return true;
+              }
+            });
+            const imageLeft = 55_000 - (Date.now() - viewStart);
+            if (candidates.length && imageLeft >= 10_000) {
+              const attached = await withTimeout(
+                Promise.allSettled(candidates.map(async (item) => {
+                  const buffer = await fetchTwitterImage(item.url, cfg.discord.media.maxBytes);
+                  const prepared = await prepareMediaBlock(buffer, item.name, cfg.discord.media, { deadline: viewStart + 55_000 });
+                  if (!prepared.block) throw new Error(prepared.error);
+                  return { data: prepared.block.data, mimeType: prepared.block.mediaType };
+                })),
+                Math.max(5_000, Math.min(20_000, imageLeft - 3_000)),
+                'X 貼文圖片',
+              ).catch(() => null);
+              if (!attached) {
+                missed.push('X 貼文圖片（下載逾時）');
+              } else {
+                for (const [index, result] of attached.entries()) {
+                  if (result.status === 'fulfilled') images.push(result.value);
+                  else missed.push(`${candidates[index].name}（${flat(result.reason?.message ?? result.reason, 80)}）`);
+                }
+              }
+            } else if (candidates.length) {
+              missed.push('X 貼文圖片（時間不夠，沒下載）');
+            }
+          }
+        }
+      }
 
       // 群友貼的影片連結（YouTube 等）：一次 yt-dlp 取字幕文字、標題／章節與直連網址，再跟附件同一套抽格。
       // 字幕與影片資訊是文字，不受 media 開關與圖片名額限制；只有抽格受這兩個條件管。

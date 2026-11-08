@@ -57,6 +57,31 @@ function mockTransport(t, script) {
   t.mock.method(https, 'request', request);
 }
 
+test('safeFetch sends the caller user-agent when one is given', async (t) => {
+  let seen = '';
+  const request = (options, callback) => {
+    seen = options.headers['user-agent'];
+    const req = new EventEmitter();
+    req.destroy = () => {};
+    req.end = () => queueMicrotask(() => {
+      const res = new PassThrough();
+      res.statusCode = 200;
+      res.headers = {};
+      res.complete = true;
+      callback(res);
+      res.end('ok');
+    });
+    return req;
+  };
+  t.mock.method(https, 'request', request);
+  const result = await safeFetch('https://93.184.216.34/', 50000, { userAgent: 'dc-bridge-test' });
+  assert.equal(result.body, 'ok');
+  assert.equal(seen, 'dc-bridge-test');
+
+  await safeFetch('https://93.184.216.34/', 50000);
+  assert.match(seen, /^Mozilla\/5\.0/, '不指定時仍用預設瀏覽器 UA');
+});
+
 for (const [encoding, encode] of [['gzip', zlib.gzipSync], ['br', zlib.brotliCompressSync]]) {
   test(`${encoding} responses are decompressed before the model sees them`, async (t) => {
     const html = '<!doctype html><html><head><title>頁面標題</title>'
