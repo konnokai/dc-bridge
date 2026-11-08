@@ -2901,7 +2901,7 @@ async function main() {
       return { text: `已記下這條頻道筆記（${days} 天後過期）。` };
     },
     async 'notes-search'(body) {
-      const { channel } = await agentSender.resolve(body.token);
+      const { key, channel } = await agentSender.resolve(body.token);
       if (!cfg.discord.notes.enabled) throw toolError('頻道筆記沒開（config.json 的 discord.notes.enabled）', 403);
       if (!channel.guildId) throw toolError('私聊沒有頻道筆記', 403);
       if (pruneNotes(notesStore) > 0) markNotesDirty();
@@ -2914,6 +2914,8 @@ async function main() {
       }
       const terms = searchTerms(body.query);
       if (terms.length) list = list.filter((note) => matchesTerms(note.text, terms));
+      // 查詢與命中數留著，之後要判斷「沒人查」還是「查了沒命中」才有資料。
+      log(`MCP 查頻道筆記 ${key}（query=${flat(body.query, 40) || '（無）'}，days=${body.days ?? '全部'}，命中 ${list.length} 條）`);
       if (list.length === 0) return { text: '這個頻道沒有符合的筆記。' };
       return { text: `這個頻道的筆記（舊→新，共 ${list.length} 條；編號給 forget_note 用）：\n${formatNoteList(list)}` };
     },

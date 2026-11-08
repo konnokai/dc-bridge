@@ -92,7 +92,7 @@
     },
     "notes": {
       "enabled": false,
-      "injectMax": 5,
+      "injectMax": 8,
       "maxChars": 600,
       "dailySummary": {
         "enabled": false,

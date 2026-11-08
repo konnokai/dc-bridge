@@ -202,7 +202,7 @@ export function normalizeDiscordConfig(raw) {
     notes: {
       // 頻道事件筆記：預設關閉（會保存頻道文字；自動摘要還會另外花 token）。
       enabled: src.notes?.enabled === true,
-      injectMax: clamp(src.notes?.injectMax, 5, 1, 20),
+      injectMax: clamp(src.notes?.injectMax, 8, 1, 20),
       maxChars: clamp(src.notes?.maxChars, 600, 100, 3000),
       dailySummary: {
         enabled: src.notes?.dailySummary?.enabled === true,

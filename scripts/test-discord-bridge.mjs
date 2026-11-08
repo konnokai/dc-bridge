@@ -178,8 +178,8 @@ console.log('## 1. 設定收斂');
     '沒開 Message Content 意圖一律要 @bot');
   ok(cfg.messageContentIntent === true, '預設申請 Message Content 意圖');
   ok(cfg.maxMessageChars === DISCORD_MAX_CHARS, '單則上限預設 2000');
-  ok(cfg.notes.enabled === false && cfg.notes.injectMax === 5 && cfg.notes.maxChars === 600,
-    '頻道筆記預設關閉，注入 5 條、600 字');
+  ok(cfg.notes.enabled === false && cfg.notes.injectMax === 8 && cfg.notes.maxChars === 600,
+    '頻道筆記預設關閉，注入 8 條事件、600 字');
   ok(cfg.notes.dailySummary.enabled === false && cfg.notes.dailySummary.hour === 4,
     '每日摘要預設關閉，4 點後才做');
   ok(cfg.followup.enabled === false, '回訪預設關閉');
