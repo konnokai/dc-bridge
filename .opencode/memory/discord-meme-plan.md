@@ -4,7 +4,7 @@ description: Discord bot 自製表情包（meme）功能計畫：規格、工具
 ---
 
 - 範圍：bot 自己的小圖庫，命名一律叫 `meme`（repo 的 `sticker` 已代表 Discord 伺服器貼圖，混用會混淆）。核心模組 `src/core/discord-memes.mjs`、MCP 工具 `save_meme`/`search_memes`/`forget_meme`、設定 `config.discord.memes`、測試 `scripts/test-discord-memes.mjs` 已落地（2026-11-07）；計畫已過 opus 審查；2026-11-07 使用者追加決策（跨服共用、模型自動留存、安全規則例外 A、預設尺寸 256）。
-- 規格（2026-11-07 調整）：長邊 128～256（預設 256）、保持比例、不補邊、來源 <128 拒絕；方形補邊會讓橫幅台詞看不清，所以永不放大；靜態存 PNG、動態存 GIF（≤3 秒、24 格、15 fps）；PNG ≤256KB、GIF ≤512KB，超限依序降色→降 fps→降尺寸；容量全域 300 張／總磁碟 100MB，每個伺服器每天最多新增 20 張；私聊不開放。
+- 規格（2026-11-07 調整）：長邊 128～256（預設 256）、保持比例、不補邊、來源 <128 拒絕；方形補邊會讓橫幅台詞看不清，所以永不放大；靜態存 PNG、動態存 GIF（≤3 秒、24 格、15 fps）；PNG ≤256KB、GIF ≤512KB，超限依序降色→降 fps→降尺寸；容量全域 300 張／總磁碟 100MB；每頻道每天 5 張、每伺服器每天 20 張；私聊不開放。
 - 跨伺服器共用分兩層（2026-11-07）：`guild`（預設，從群友圖／聊天衍生，只來源伺服器可見）與 `global`（bot 自己畫的通用圖，不含群友圖片／名字／私人內容，所有伺服器可見）。`save_meme` 加 `shared` 參數；來源是 `ref`／`message` 的群友圖時橋接端強制 `guild`。【常用梗圖】清單：本服 8＋全域 4，每筆帶 `when`。
 - 模型自動留存（2026-11-07）：只限 `generate_image` 產出；每個頻道每天最多自動存 1 張，且要走 `drawQuotaBlock`（額度低不畫）；存完要在頻道講一句（透明）；內容規則圖上不放真人姓名／群友長相／私人事（靠模型自律，管理員可在控制台刪）。
 - 安全規則例外 A（2026-11-07）：persona 第 6 條（`dc-chat.patch.yml:137`）加例外，只回「這個不聊」可換成貼一張 `when` 含「拒絕」的梗圖，仍只有那一張、不加字；兩份 preset 都要改。
@@ -26,4 +26,5 @@ description: Discord bot 自製表情包（meme）功能計畫：規格、工具
 - 控制台頁面（2026-11-07）：「記憶」分頁的「梗圖」卡片列出全部梗圖（縮圖、名稱、情境、標籤、範圍、來源、尺寸、使用次數），可逐張刪除。端點 `GET /api/memes`、`GET /api/memes/image?id=`（縮圖；頁面用 Authorization 標頭抓成 blob，token 不進網址，所以控制台 CSP 加了 `img-src 'self' blob:`）、`POST /api/memes/delete`（`{id}`）。縮圖 id 必須符合 `/^m_[a-z0-9]+$/`，含路徑一律當不存在。
 - 生圖後 `requesters` 補法（2026-11-07）：`createSentImageOwners`（`src/core/discord-memes.mjs`）在記憶體維護「bot 送出的生圖訊息 id → 要求畫圖的人」對照（TTL 24 小時、上限 200 筆、LRU 丟最舊）。橋接送出生圖時，用生圖開始時記下的人（`drawUsersForFile`，查不到就用那一輪的 ★ 觸發者）對照那則訊息 id 記下；`save_meme` 存圖時 `requesters` = 存圖那一輪的 ★ 觸發者 + 這份對照（bot 自己的圖）。生圖完成那一輪是系統提示觸發、沒有 ★，所以靠這份對照；橋接重啟後對照消失，`requesters` 就只剩存圖那一輪的 ★ 觸發者，管理員仍可刪。測試在 `scripts/test-discord-memes.mjs`（`## 7c`）。
 
-相關：[[discord-media-handling]]、[[discord-quiet-gate]]、[[discord-image-jobs]]。
+- 部署落地（2026-11-07）：commit `cb1624c`（merge of `feat/memes`），已部署到測試伺服器；DSH 重啟後用暫時 stdio client 驗證 `save_meme`／`search_memes`／`forget_meme` 已註冊，伺服器 ffmpeg 7.1.3。真實 Discord 頻道的存圖／送圖端到端尚未驗證；回退 `deploy-discord.mjs --sha 1acf389...`。
+- 相關：[[discord-media-handling]]、[[discord-quiet-gate]]、[[discord-image-jobs]]。
