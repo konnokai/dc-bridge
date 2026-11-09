@@ -2,7 +2,7 @@
 name: dream
 schedule: 0 3 * * *
 enabled: true
-model: opencode-go/beam-free#high
+model: opencode-go/beam-free
 timezone: Asia/Taipei
 ---
 
