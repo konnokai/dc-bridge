@@ -280,12 +280,12 @@ export function apply(ctx, config = {}) {
     }
     if (named.startsWith('mcp__prts__')) {
       if (!allowPrts || !exact.has(named)) return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
-      // operator_artwork 的 large 在 prts-mcp 3.2.3 有 1 MiB 硬上限，超過就整張失敗；
-      // 要看 1024px 走橋接的 get_prts_artwork（同一張圖，不受 container 上限影響）。
+      // prts-mcp 3.2.4 起 large 可以到 8 MiB，但原圖不經縮圖直接進模型；模型看圖上限
+      // media.maxModelBytes 預設 1MB，所以 large 一律導去橋接的 get_prts_artwork。
       if (named === 'mcp__prts__operator_artwork') {
         const args = exec?.arguments ?? {}
         if (args.action === 'get' && args.variant !== 'preview') {
-          return 'operator_artwork 的 large 會被上游 1MB 上限擋掉；要看 1024px 立繪用 mcp__discord__get_prts_artwork，要生圖參考直接在 generate_image 填 prts:<幹員>/<檔名>'
+          return 'operator_artwork 的 large 會把 8MB 原圖直接送進模型；要看 1024px 立繪用 mcp__discord__get_prts_artwork（會先縮圖），要生圖參考直接在 generate_image 填 prts:<幹員>/<檔名>'
         }
       }
       return

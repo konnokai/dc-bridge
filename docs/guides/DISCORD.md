@@ -71,7 +71,7 @@ pm2 logs dc-bridge
 > `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
 > profile 裡你自己加的其它 MCP。
 >
-> `mcp-prts` 是獨立的 Docker container（`ghcr.io/3akhp/prts-mcp:3.2.3`），DSH 連 `http://127.0.0.1:3011/mcp`。
+> `mcp-prts` 是獨立的 Docker container（`ghcr.io/3akhp/prts-mcp:3.2.4`），DSH 連 `http://127.0.0.1:3011/mcp`。
 > compose 在 `/root/bot/nadeko-docker/docker-compose.yml`，資料在 `prts-data` volume（掛到 `/data`），restart policy 是 `unless-stopped`。
 > 先 `docker compose up -d prts-mcp`，再 `curl http://127.0.0.1:3011/health` 確認回 `{"status":"ok"}`；
 > container 的 `IMAGES_ENABLED=true` 決定 `operator_artwork` 在不在。`GITHUB_TOKEN` 放在 container 的環境變數，
@@ -1076,7 +1076,8 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   佔「一輪 5 則」的名額，不計入畫圖次數
 - `mcp__discord__get_prts_artwork`（`artwork_id`、`variant` 可省略）：把 PRTS 官方立繪回給模型看，不會貼到頻道。
   `variant` 預設 `large`（1024px），`preview` 是 256px。走跟 `send_prts_artwork` 同一條橋接抓圖路徑，
-  不受 `prts-mcp` container 的 1 MiB 上限影響；要貼圖用 `send_prts_artwork`，要生圖參考直接填 `prts:`。
+  不受 `prts-mcp` container 的 8 MiB 上限影響，而且會先縮到 `media.maxModelBytes`；
+  要貼圖用 `send_prts_artwork`，要生圖參考直接填 `prts:`。
 - `mcp__discord__send_sticker`（`sticker`、`content`／`reply_to` 可省略）：送一張當前伺服器的貼圖，回傳格式跟 `send_message` 一樣
 - `mcp__discord__edit_message`（`message`、`content`）：改自己送出的一則訊息。只認**這個模型自己用工具送出**的訊息
   （送出時橋接記下的，每個頻道最近 200 則，橋接重啟就清空）；進度、壓縮提示、審批、提問、錯誤、指令回覆這些橋接自己發的不能改。
@@ -1210,8 +1211,8 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   operators／enemies／stages／items／skills、`read_story`／`get_story_summary` 查劇情。
   幹員名要填遊戲內的簡體中文（`阿米娅`、`凯尔希`），填繁體會回「未找到干员」並提示正確名稱。
   `operator_artwork` 用 `action=list` 拿立繪檔名（純文字，很便宜）；`action=get` 只建議用 `preview`
-  （256px，約 41KB）。`large`（1024px）可能超過 container 的 1 MiB 上限（例如佩佩 skin1 約 2.3MB），
-  會被擋成「image exceeds 1048576 byte cap」；要看 large 用 `mcp__discord__get_prts_artwork`。
+  （256px，約 41KB）。`large`（1024px）從 3.2.4 起上限是 8 MiB（常見 1~3MB），但原圖不經縮圖直接進模型；
+  要看 large 用 `mcp__discord__get_prts_artwork`（會先縮到 `media.maxModelBytes`）。
   貼圖用 `mcp__discord__send_prts_artwork`，生圖參考用 `generate_image` 的
   `inputImage: prts:<幹員>/<檔名>`；參考固定抓 `large`。
 - `mcp__discord__run_script`（`language`、`code`、`stdin` 可省略）：在一次性 Docker 容器裡跑一小段
@@ -1229,7 +1230,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 
 `mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__slang__*` 來自 `src/mcp-slang.js`，
 `mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__prts__*` 來自 Docker container
-`ghcr.io/3akhp/prts-mcp:3.2.3`（HTTP MCP，`http://127.0.0.1:3011/mcp`）。五個 MCP 都由
+`ghcr.io/3akhp/prts-mcp:3.2.4`（HTTP MCP，`http://127.0.0.1:3011/mcp`）。五個 MCP 都由
 `node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
@@ -1414,7 +1415,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
    判斷的是 persona 的固定拒絕句
    （「這題我不碰，換一個」「這個不聊」「這個我不寫」「這個我不畫」「我只會當大肥魚」）；改 persona 時要同步
    `src/core/discord-ignore.mjs` 的 `REFUSAL_LINES`。
-9. **PRTS 是獨立 container**：`mcp-prts` 跑在 Docker container `ghcr.io/3akhp/prts-mcp:3.2.3`，不掛主機目錄，
+9. **PRTS 是獨立 container**：`mcp-prts` 跑在 Docker container `ghcr.io/3akhp/prts-mcp:3.2.4`，不掛主機目錄，
    看不到 `config.json`、`state/discord-agent.json` 與 `~/.dsh`。但 HTTP MCP 綁在 `0.0.0.0:3011` 且沒有認證，
    內網任何裝置都能呼叫這些唯讀工具；目前是使用者接受這個風險。container 需要對外連 GitHub／prts.wiki。
 
@@ -1431,8 +1432,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   只有 1024px）會再試一次 `media.prts.wiki` 原圖；原圖可能大於 1024px，超過 8MB 才放棄。網路逾時
   直接回錯，不再多查一次 API；只有 HTTP 4xx／5xx 才 fallback。送出失敗（例如沒有 Attach Files
   權限）時才回直連網址；PRTS 抓不到就只回錯誤。只認 `prts.wiki`／`media.prts.wiki`，轉址的每一跳也會檢查網域。
-  `prts-mcp` container 的 `operator_artwork action=get` 有 1 MiB 硬上限，large 超過就整張失敗；
-  模型看 large 要走橋接的 `get_prts_artwork`（會先用 `media.maxModelBytes`／`maxLongEdge` 縮圖再進模型，
+  `prts-mcp` 3.2.4 起 `operator_artwork action=get` 的圖上限是 8 MiB（`PRTS_MAX_IMAGE_BYTES` 可覆蓋），
+  但原圖不經縮圖直接進模型；模型看 large 要走橋接的 `get_prts_artwork`（會先用 `media.maxModelBytes`／`maxLongEdge` 縮圖再進模型，
   生圖參考的 `prts:` 仍拿原檔）。
 - **語音訊息與音檔聽不到**：沒有 ASR，`audio/*` 一律不進模型；只 @bot 時回一句請對方打字。
 - **影片只看前 60 秒、只有畫面沒有聲音**：超過 `media.maxVideoSeconds` 的部分不看；要描述對話內容做不到。
