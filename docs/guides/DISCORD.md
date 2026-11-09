@@ -407,6 +407,11 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 新的 preset 要等 DSH 重新載入 profile 或重啟才會生效。`/reload-system-prompt` **不會**自己重啟 DSH；
 它會排進這個頻道的同一條會話佇列，不會因為前面還有回合就直接拒絕：
 
+> 重啟 DSH 之後，既有會話在下一個回合就會自己換成新的 system prompt，不用另外 reload。
+> 實測 2026-11-09：重啟後第一次發言，`system/message` 用 replace 換掉原本那一則（不是疊加），
+> 長度跟著 persona 改動變化。`/reload-system-prompt` 只在想清掉舊對話、換一段乾淨上下文時才需要。
+
+
 1. 等前面的回合結束，用目前的 DSH 會話產生一段對話總結（這是後台回合，不會貼到頻道，也不會公開）。
 2. 把總結存進 `state/discord-reload-summaries.json`。摘要以 600 字為目標，硬上限 1200 字；真的超過才會截斷。
 3. 停掉並歸檔舊會話（跟 `/reset` 一樣）。
