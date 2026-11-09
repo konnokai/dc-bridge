@@ -38,5 +38,6 @@ cmd /c "node scripts/test-discord-bridge.mjs > test-out.txt 2>&1"; "exit=$LASTEX
 - `npm run test:console-ui` = `scripts/test-console-ui.mjs`，用 Playwright + Chromium；**缺任一就直接中止**，不會自動改用本機 Chrome/Edge。要跑先裝：`npm install --no-save playwright` + `npx playwright install chromium`，或設 `PLAYWRIGHT_MODULE` / `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`。
 - OpenChamber 這台沒有本機 Chrome/Playwright，`npm run test:console-ui` 會直接中止，不算失敗。目視檢查改用 `openchamber_web`（`browser.open`／`snapshot`／`click`／`close`）開 `http://127.0.0.1:...`；要先起臨時 server（照 `test-console-ui.mjs` 的 `startConsole({ host, port, token, htmlPath, handlers })` 寫法，handlers 必須包含頁面會打的每個 `/api/*`，缺一個就 500）。不要用 obscura：它會擋私有 IP，`127.0.0.1` 和區網都開不了。
 - 覆蓋含 Discord 控制台「回訪排程」卡片與取消按鈕、固定欄寬、375px 不溢出；沒有 Playwright 時手機寬度溢出**未驗證**，只驗桌面。
+- 2026-11-08 觀察到 `npm run test:console-ui` 有兩支 FAIL：「All submitted payloads exactly match the pre-redesign console baseline」與「Token usage trend chart renders bars, tiers and range/metric switching（切到 7 天後桶寬變成 6 小時）」。未確認是否與當次改動相關；部署前應再跑一次確認。
 
 相關：[[codex-imagegen-internals]]、[[opencode-local-inspection]]（同一套亂碼處理）、[[discord-media-handling]]。

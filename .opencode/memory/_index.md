@@ -29,7 +29,7 @@
 - [[discord-mention-names]] — mention 轉名字、回覆標記、id 不外洩
 - [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying 與 REST member 補抓；互動次數接在記憶那一行（你回過他 N 回合，最後一次 X 前）
 - [[discord-group-consensus-memory]] — 提議中的「群共識」記憶類型缺口：管理員新增一句、可過期、每輪注入、擋貶低評價；feedback df_mw6f6fbe08b055；未實作（2026-11-07）
-- [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂
+- [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂；摘要 301 字上限、19 條別名回填、測試保護力
 - [[discord-chatty-channels]] — chattyChannels 頻道主動參與模式：config 驗證、【參與度】提示、persona 優先規則、followup 2/天、spoofing 防護
 - [[discord-codex-quota]] — Codex 額度查詢（app-server JSON-RPC）、生圖守門 15%/5%、快照、5 小時窗口重置 ping（gpt-6-luna test）
 - [[discord-commandcode-provider]] — Command Code provider switch：預設 provider/model、價目表別名、額度 API 與每月 $70 shortcut（2026-11-07）
@@ -52,9 +52,10 @@
 - [[discord-persona]] — 鯨魚娘 persona 重構與長距摘要限制
 - [[discord-usage-pricing]] — 花費看板改用美元價目、evict cur 換算、2027 假日、部署備份
 - [[discord-image-jobs]] — 背景生圖工作追蹤、取消語意、GIF 拒絕、send_image 送圖、畫圖外掛路徑鎖、scoped 守衛、Codex permission profile（/mnt）、AttachFiles 權限
-- [[discord-prts-mcp]] — PRTS MCP 改為 Docker HTTP（container 3.2.3，DSH 連 127.0.0.1:3011）、GITHUB_TOKEN、1MB 上限與 DNS 不穩
+- [[discord-prts-mcp]] — PRTS MCP 改為 Docker HTTP（container 3.2.4，DSH 連 127.0.0.1:3011）、GITHUB_TOKEN、8MB 原圖不縮圖與 DNS 不穩
 - [[discord-prts-artwork]] — PRTS 立繪改走 Cloudflare Worker + R2 快取：MediaWiki 路徑、large 404 fallback 原圖、bridge /prtsImage
 - [[discord-trade]] — 模擬股票交易 MVP（台股）：資料來源（含三大法人）、漲跌停、市場狀態、19:00 後結算、Bot 交易員與 19:10 復盤、權限與控制台
+- [[discord-twitter-post]] — X／Twitter 貼文用 FxEmbed 公開 API 解析：模組、view_message/web_fetch 整合、預算、媒體、測試（回饋 df_mw7etjk73dae52）
 - [[discord-run-script-sandbox]] — run_script 沙箱：一次性 Docker 容器、無網路、無主機檔案、非 root；只看 sandbox.channels、不再要求 owner，任何能放文字進會話的人都能觸發；兩 image、逾時 5~30 秒、控制台只編 enabled/channels (2026-11-07)
 - [[discord-security-baseline]] — SnowLuma EULA 合規、state/ ACL 收緊、start.bat 前置、run_script 沙箱觸發範圍與殘存風險
 - [[discord-sensitive-gate]] — 敏感閘門擋下時回報命中種類與片段、繁中關鍵字與表情目錄比對修正（commit 6c5f981）

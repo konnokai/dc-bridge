@@ -10,7 +10,7 @@ PRTS 幹員立繪不再先打 prts.wiki API，改成直接組 MediaWiki 路徑�
 - Worker 原始碼：`cloudflare/prts-artwork-cache/`（`src/index.js`、`wrangler.jsonc`、`test.mjs`）。
 - 橋接端點：`/prtsImage`，回傳 `large` PNG；`src/core/prts-artwork.mjs`、`src/mcp-discord.js`、`src/discord-bridge.js`。
 - 設定鍵：`config.discord.prts = { proxyUrl, proxyToken }`（Worker 網址與 token）；`config.example.json` 同步。
-- `operator_artwork` 的 `large` 在圖片超過 1 MiB 時會失敗；模型看圖改走橋接的 `get_prts_artwork`，生圖參考仍拿 `large` 原檔。
+- `operator_artwork` 的 `large` 在 3.2.4 起可到 8 MiB，但原圖不經縮圖直接進模型；模型看圖改走橋接的 `get_prts_artwork`（會先縮到 `media.maxModelBytes`），生圖參考仍拿 `large` 原檔。
 
 ## 橋接端工具（2026-11-07）
 
@@ -29,7 +29,7 @@ PRTS 幹員立繪不再先打 prts.wiki API，改成直接組 MediaWiki 路徑�
 ## 已知限制
 
 - Worker token 與 R2 bucket 為外部資源，部署 Worker 需 wrangler 憑證。
-- `large` 超過 1 MiB 時 `operator_artwork` 仍失敗；需用橋接路徑（`/prtsImage` 或 `prts:`）。
+- `large` 雖然 3.2.4 起可到 8 MiB，但原圖不經縮圖直接進模型；模型看圖要用橋接路徑（`/prtsImage` 或 `prts:`）。
 - 橋接 `resolvePrtsArtwork` 受 `prts.wiki` DNS 8 個 A record 影響：safe-fetch 最多嘗試前 4 個，部分不可達時會 20s 超時。
 
 ## 修正（2026-11-07，code review 後）

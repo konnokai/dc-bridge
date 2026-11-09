@@ -1,9 +1,9 @@
 ---
 name: discord-prts-mcp
-description: PRTS MCP 外部 npx stdio MCP、釘版本 3.2.3、IMAGES_ENABLED=true、operator_artwork 白名單、send_prts_artwork 與 generate_image prts: 參考
+description: PRTS MCP Docker HTTP container 3.2.4、IMAGES_ENABLED=true、operator_artwork 白名單、send_prts_artwork 與 generate_image prts: 參考
 ---
 
-PRTS（明日方舟資料）走外部 npm 套件 `prts-mcp@3.2.3`，由 DSH 的 MCP 客戶端透過 npx stdio 拉起，不是橋接自己起的行程。
+PRTS（明日方舟資料）走 Docker container `ghcr.io/3akhp/prts-mcp:3.2.4` 提供的 HTTP MCP（DSH 連 `http://127.0.0.1:3011/mcp`），不是橋接自己起的行程；舊做法是 npx stdio `prts-mcp@3.2.3`（已 superseded，見下方）。
 
 - DSH 端：`scripts/setup-dsh.mjs` 註冊 `mcp-prts`，`serverName: 'prts'`，
   `command` 用 node 同目錄的 npx（`path.join(path.dirname(node), 'npx.cmd'/'npx')`，找不到才退回 `'npx'`），
@@ -39,8 +39,8 @@ PRTS（明日方舟資料）走外部 npm 套件 `prts-mcp@3.2.3`，由 DSH 的 
   `scripts/test-discord-prts-artwork.mjs`（新增）；`scripts/test-discord-bridge.mjs` 的 DISCORD_TOOL_NAMES 含 send_prts_artwork（31 個）。
 - DISCORD 工具數從 29 → 31。
 - prts-mcp 的 SQLite 遊戲資料同步靠 GitHub Releases（`3aKHP/arknights-data-pipeline`）；未認證每小時 60 次會被限流，容器 log 會出現 `SQLite release discovery failed` 並退回內建資料，設定 `GITHUB_TOKEN` env 可提高。資料同步與 release discovery 走外部 repo 的 `src/sync/discovery.rs`／`database.rs`。
-- Transport（2026-11-07）：改為 Docker HTTP。container `ghcr.io/3akhp/prts-mcp:3.2.3` 跑 HTTP 模式，DSH 以 `transport: streamable-http` 連 `http://127.0.0.1:3011/mcp`；`scripts/setup-dsh.mjs` 已同步產生此條目。npx stdio 為舊做法，npx 快取（~600MB）可清。
-- `operator_artwork action=get` 的 large 變體受 prts-mcp 內部 1MB 上限（`MAX_IMAGE_BYTES=1024*1024`）限制，large 立繪常超過而失敗；橋接 `/prtsImage`（`src/core/prts-artwork.mjs`，`MAX_IMAGE_BYTES=8MB`）不受此限，生圖參考與大圖貼圖應走橋接路徑。
+- Transport（2026-11-07）：改為 Docker HTTP。container `ghcr.io/3akhp/prts-mcp:3.2.4` 跑 HTTP 模式，DSH 以 `transport: streamable-http` 連 `http://127.0.0.1:3011/mcp`；`scripts/setup-dsh.mjs` 已同步產生此條目。npx stdio 為舊做法，npx 快取（~600MB）可清。
+- `operator_artwork action=get` 的 large 變體：prts-mcp 3.2.4 起圖上限是 8 MiB（`PRTS_MAX_IMAGE_BYTES` 可覆蓋），但原圖不經縮圖直接進模型；橋接 `get_prts_artwork`（`/prtsImage`，`src/core/prts-artwork.mjs`，`MAX_IMAGE_BYTES=8MB`）會先縮到 `media.maxModelBytes`，模型看圖應走橋接路徑，生圖參考仍拿 large 原檔。
 - 已知不穩定：`prts.wiki` DNS 回 8 個 A record，`safe-fetch` 最多嘗試前 4 個，其中部分可能不可達，造成 `請求超時：prts.wiki（已嘗試 4 個地址）`（約 20s）。橋接 `resolvePrtsArtwork` 受此影響。
 
 superseded：舊做法是 npx stdio transport（`prts-mcp@3.2.3` 由 DSH 用 npx 拉起）；

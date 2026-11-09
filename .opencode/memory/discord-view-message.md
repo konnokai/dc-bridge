@@ -10,6 +10,7 @@ description: view_message 找修復 bot、連結路徑比對、bot 訊息可見�
 - 每日頻道摘要：fetch 最近 `SUMMARY_MAX_MESSAGES`，過濾 `deny.users`、過濾 bot 或非 skip、since 24h、>= `SUMMARY_MIN_MESSAGES` 才生成；包含 bot 訊息。
 - 引文帶編號：`formatQuote`（`src/core/discord-context.mjs`）多收 `ref`，輸出 `[引用 #k7f3ab 阿華：…]`；`buildBatchPrompt` 把被引用那則登記進編號表，模型可直接 `view_message` 看全文／附件。`【新訊息】` 標頭改成「#編號 用來指定要回覆、查看或按 reaction 的訊息」；dc-chat persona 加一句：看到 `[引用 #編號 …]` 要看全文、圖片或附件就用 `view_message`。已知缺口：`【最近頻道訊息】` 的 `↪回覆 X` 仍只有名字沒有編號。
 - `view_message` 附圖：`src/core/discord-media.mjs` 新增 `viewMediaItems()`，圖片來源加上**被回覆那則的附件**（本則＋引文＋貼圖＋兩邊連結預覽＋修復 bot 預覽）；`src/discord-bridge.js` 的 `/view` 改用它。工具說明與文件同步。測試 +3 斷言。已知缺口：文字沒標「哪張圖來自被回覆那則」，本則與引文都有圖時模型可能分不出來源。
+- X／Twitter 連結：`firstTwitterPost` 照本文→被回覆→修復 bot 順序找第一條；用 FxEmbed 公開 API 取作者、正文、媒體，與 Discord 附件並行；預算 12 秒放棄、圖片去重；詳見 [[discord-twitter-post]]。
 - 引用抓取：`referencedMessage()`（`src/core/discord-context.mjs`）只認同一頻道 type 0 回覆；快取命中且非 partial 才用快取，否則 `channel.messages.fetch(id)`。不依賴 `direct`／`fetchReference`，避免跨頻道抓取與 partial 訊息。
 - preset dc-chat 規則：群友丟 URL 問內容時先用 `view_message`（連結修復 bot 的完整網址與正文），預覽沒正文才 `web_fetch`（commit 696d78c；避免模型自己去抓原網址）。`view_message` 工具說明同步寫明。
 - Components V2 已修（2026-11-07）：`componentParts` 走訪容器抽文字／檔案／媒體；`embedLines`／`embedImages` 補 `embed.author`、`provider`、`footer`、完整 URL 與 component media；`viewMediaItems` 加 component media、gallery 優先 thumbnail、敏感 embed（`embed.flags`）不按 reaction；`searchableText` 擴充；batch 加 `[連結預覽：…]`。詳見 [[discord-message-preview]]。
