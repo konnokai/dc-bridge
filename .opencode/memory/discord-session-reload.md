@@ -12,6 +12,10 @@ description: /reload-system-prompt 交接摘要系統：產生摘要、新會話
 - 每個 key 只刪自己那一筆；中間被新的 reload 覆蓋就不能動別人的摘要。
 - 會話重置後第一批先說話（`b15b5ba`）。
 - 重載摘要只在 retire 後代次仍為 `epochBeforeRetire + 1` 時寫回；中間被另一個 /reset 插進來就跳過，避免覆蓋別人的摘要；`turnGate.resume` 的 `force` 跟著 `cleared`。
+- DSH 重啟就會換 system prompt（2026-11-09 實測）：重啟後既有會話下一個回合，`system/message` 用 `replace` 換掉原本那一則（surfaceOp `{"op":"replace","startSeq":...,"endSeq":...}`），不是疊加；
+  persona／preset 改動只要部署重啟就生效，`/reload-system-prompt` 只在要乾淨上下文（清掉舊對話）時才需要。
+- DSH 0.2.1 system prompt projection 兩條路徑：provider 支援中途插 system 時是 append（舊 prompt 還留在前綴，模型同時看到新舊規則）；
+  不支援才 replace node 0。persona 大改時 append 那條不理想，這才是 reload 的真正價值。
 - 重連期間 `/ask` 不再直接拒絕，會排進佇列等快照到齊再跑。
 - `/ask` 檢查必須原子：`privateTurnBlock` 集中檢查（DSH 佇列、頻道回合、/ask 是否進行中），檢查完到 `turnGate.submit` 之間不能再 await，避免 TOCTOU 插隊；`pendingPrompts` 失敗回 `code: 'unavailable'`。
 - `/reset` 與 `/reload-system-prompt` 的執行權限改為 **Administrator**（不再接受只有 ManageGuild）：Discord 選單 `default_member_permissions` 與執行期 `canResetConversation()` 都只看 Administrator bit；ManageGuild 加其他權限也不放行。私聊仍只認 ownerIds。

@@ -6,18 +6,13 @@ description: PRTS MCP Docker HTTP container 3.2.4、IMAGES_ENABLED=true、operat
 PRTS（明日方舟資料）走 Docker container `ghcr.io/3akhp/prts-mcp:3.2.4` 提供的 HTTP MCP（DSH 連 `http://127.0.0.1:3011/mcp`），不是橋接自己起的行程；舊做法是 npx stdio `prts-mcp@3.2.3`（已 superseded，見下方）。
 
 - DSH 端：`scripts/setup-dsh.mjs` 註冊 `mcp-prts`，`serverName: 'prts'`，
-  `command` 用 node 同目錄的 npx（`path.join(path.dirname(node), 'npx.cmd'/'npx')`，找不到才退回 `'npx'`），
-  `args: ['-y', '--package=prts-mcp@3.2.3', 'prts-mcp']`，
-  `env: { PRTS_TRANSPORT: 'stdio', IMAGES_ENABLED: 'true' }`。
-  釘版本避免每次啟動被 latest 換掉；DSH 0.2.1-rc.2 的 env 會 scrub credential-shaped 與 `DSH_*` 名稱，
-  但 configured env 會 merge on top，所以 explicit overrides 生效。用 node 同目錄的 npx 是因為
-  DSH 子程序的 PATH 可能找不到 npx（Windows 啟動器 `npx.cmd` 由 cross-spawn 處理）。
+  `url: 'http://127.0.0.1:3011/mcp'`（streamable-http），不再用 npx stdio args。
+  立繪工具（24 個）由 container 的 `IMAGES_ENABLED=true` 決定，橋接這邊只寫 URL。
 - `IMAGES_ENABLED=true` 開啟 `operator_artwork`（共 24 個工具）：`action=list` 只回檔名（純文字，便宜），
   `action=get` 才會把圖送進模型（`preview` 256px 約 41KB、`large` 1024px 約 276KB）。
   貼圖用 `mcp__discord__send_prts_artwork`，生圖參考用 `generate_image` 的 `inputImage: prts:<幹員>/<檔名>`。
-- `prts-mcp` 第一次跑會下載約 600MB（原生 binary＋離線資料）；DSH 的 60 秒初始化逾時會讓它這次沒有工具，
-  所以部署前先跑一次 `PRTS_TRANSPORT=stdio npx -y --package=prts-mcp@3.2.3 prts-mcp --help` 預熱，
-  **要用跑 DSH 的同一個使用者**（npx 快取在 `~/.npm/_npx`，換使用者要重跑）；沒預熱時 DSH 的 60 秒初始化逾時會讓它這次沒有工具。
+- Docker image `ghcr.io/3akhp/prts-mcp:3.2.4` 首次 pull 約 600MB；DSH 的 60 秒初始化逾時會讓它這次沒有工具，
+  所以部署前先 `docker pull` 預熱，DSH 啟動後 `curl http://127.0.0.1:3011/health` 確認 `{"status":"ok"}`。
 - 幹員名要填遊戲內的簡體中文（`阿米娅`、`凯尔希`），填繁體會回「未找到干员」並提示正確名稱；
   回話仍照平常繁體。
 - `dc-tool-restrict.mjs` 的 `PRTS_TOOLS` 必須列齊所有 `mcp__prts__*` 工具（目前 24 個，含 `operator_artwork`）；
@@ -42,8 +37,12 @@ PRTS（明日方舟資料）走 Docker container `ghcr.io/3akhp/prts-mcp:3.2.4` 
 - Transport（2026-11-07）：改為 Docker HTTP。container `ghcr.io/3akhp/prts-mcp:3.2.4` 跑 HTTP 模式，DSH 以 `transport: streamable-http` 連 `http://127.0.0.1:3011/mcp`；`scripts/setup-dsh.mjs` 已同步產生此條目。npx stdio 為舊做法，npx 快取（~600MB）可清。
 - `operator_artwork action=get` 的 large 變體：prts-mcp 3.2.4 起圖上限是 8 MiB（`PRTS_MAX_IMAGE_BYTES` 可覆蓋），但原圖不經縮圖直接進模型；橋接 `get_prts_artwork`（`/prtsImage`，`src/core/prts-artwork.mjs`，`MAX_IMAGE_BYTES=8MB`）會先縮到 `media.maxModelBytes`，模型看圖應走橋接路徑，生圖參考仍拿 large 原檔。
 - 已知不穩定：`prts.wiki` DNS 回 8 個 A record，`safe-fetch` 最多嘗試前 4 個，其中部分可能不可達，造成 `請求超時：prts.wiki（已嘗試 4 個地址）`（約 20s）。橋接 `resolvePrtsArtwork` 受此影響。
+- 2026-11-09 升到 3.2.4（commit `5bfae9a`）：Wiki 立繪上限 1MB→8MB（`PRTS_MAX_IMAGE_BYTES` 可覆蓋）。
+  舊的「large 會被上游擋」理由不再成立，但規則仍留，因為原圖不經縮圖直接進模型；
+  模型看圖走橋接 `get_prts_artwork`（`/prtsImage`，先縮到 `media.maxModelBytes`），
+  生圖參考仍拿 `large` 原檔。docs 同步 6 處、`dc-tool-restrict.mjs` 擋法理由、persona 一句、preset patch 重產。
 
 superseded：舊做法是 npx stdio transport（`prts-mcp@3.2.3` 由 DSH 用 npx 拉起）；
-2026-11-07 起改為 Docker HTTP transport（container `ghcr.io/3akhp/prts-mcp:3.2.3`，DSH 連 `http://127.0.0.1:3011/mcp`），npx 快取可清。
+2026-11-07 起改為 Docker HTTP transport（container `ghcr.io/3akhp/prts-mcp:3.2.4`，DSH 連 `http://127.0.0.1:3011/mcp`），npx 快取可清。
 
 相關：[[discord-web-fetch]]。
