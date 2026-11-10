@@ -142,7 +142,7 @@ const DISCORD_TOOL_NAMES = [
   'send_message', 'send_image', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
-  'note_event', 'search_notes', 'forget_note', 'save_meme', 'search_memes', 'forget_meme',
+  'note_event', 'search_notes', 'forget_note', 'propose_knowledge', 'save_meme', 'search_memes', 'forget_meme',
   'submit_feedback', 'list_feedback', 'edit_feedback',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);

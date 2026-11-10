@@ -53,6 +53,26 @@ const handler = createImageJobHandler({
 const started = await handler({ phase: 'start', sessionId: 's1', jobId: 'j1' });
 ok(started.key === 'ch:1' && jobs.get('j1')?.users[0]?.userId === 'u1', 'start 記下會話與觸發者');
 
+{
+  let knowledgeCalls = 0;
+  const withKnowledge = createImageJobHandler({
+    jobs: new Map(),
+    pendingDraws: new Map(),
+    turnUsers,
+    reverse,
+    sessions,
+    enqueuePrompt: () => {},
+    epochOf: () => 7,
+    knowledgeFor: async () => (knowledgeCalls++ === 0 ? ['設定：鯨魚尾'] : []),
+    now: () => clock,
+    error: (message, statusCode) => Object.assign(new Error(message), { statusCode }),
+  });
+  const hit = await withKnowledge({ phase: 'start', sessionId: 's1', jobId: 'k1' });
+  ok(hit.knowledge?.[0] === '設定：鯨魚尾', 'start 會回傳工具觸發的群知識');
+  const miss = await withKnowledge({ phase: 'start', sessionId: 's1', jobId: 'k2' });
+  ok(!('knowledge' in miss), '沒有知識就不帶欄位');
+}
+
 await handler({ phase: 'done', sessionId: 's1', jobId: 'j1', file: '/tmp/state/discord-images/a.png', text: '【生圖完成】' });
 ok(!jobs.has('j1'), 'done 後工作清掉');
 ok(enqueued.length === 1 && enqueued[0].key === 'ch:1'

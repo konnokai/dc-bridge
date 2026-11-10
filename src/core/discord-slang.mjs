@@ -465,7 +465,7 @@ export function buildSlangHint(store, { text = '', max = 8, maxChars = 1500, sho
 }
 
 // 一個字的詞（6、w、草）幾乎每則都撞得到；英文詞要整個字對上，免得 gg 撞到 eggs。
-function saidTerm(said, key) {
+export function saidTerm(said, key) {
   if ([...key].length < 2) return false;
   if (!/^[\x20-\x7e]+$/.test(key)) return said.includes(key);
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

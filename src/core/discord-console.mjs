@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -301,6 +301,62 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
           force: body.force === true,
         });
         sendJson(res, 200, { ok: true, started: started === true });
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/knowledge') {
+        sendJson(res, 200, handlers.knowledge());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/knowledge/create') {
+        const body = await readJson(req);
+        try {
+          sendJson(res, 200, await handlers.knowledgeCreate(body));
+        } catch (error) {
+          sendJson(res, 400, { error: String(error?.message ?? error) });
+        }
+        return;
+      }
+      if (req.method === 'POST' && url.pathname.startsWith('/api/knowledge/')) {
+        const action = url.pathname.slice('/api/knowledge/'.length);
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        if (!id) {
+          sendJson(res, 400, { error: '缺少知識 id' });
+          return;
+        }
+        if (action === 'delete') {
+          const removed = handlers.knowledgeDelete(id);
+          sendJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: '找不到這條知識' });
+          return;
+        }
+        // 確認一定要帶 updatedAt：管理員看過的內容不能被別人用同標題換掉。
+        if (action === 'confirm' && typeof body.updatedAt !== 'string') {
+          sendJson(res, 400, { error: '缺少 updatedAt：重新整理後再按確認' });
+          return;
+        }
+        let entry = null;
+        try {
+          if (action === 'confirm') entry = handlers.knowledgeConfirm(id, { updatedAt: body.updatedAt });
+          else if (action === 'reject') entry = handlers.knowledgeReject(id);
+          else if (action === 'update') {
+            entry = handlers.knowledgeUpdate(id, {
+              title: body.title,
+              body: body.body,
+              keywords: body.keywords,
+              tools: body.tools,
+              always: body.always,
+              scope: body.scope,
+            });
+          } else {
+            sendJson(res, 404, { error: 'not found' });
+            return;
+          }
+        } catch (error) {
+          // 409：候選在管理員看過之後被改過，或已確認額度滿了。
+          sendJson(res, 409, { error: String(error?.message ?? error) });
+          return;
+        }
+        sendJson(res, entry ? 200 : 404, entry ? { ok: true, entry } : { error: '找不到這條知識' });
         return;
       }
       if (url.pathname === '/api/slang' || url.pathname.startsWith('/api/slang/')) {
