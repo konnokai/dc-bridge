@@ -440,6 +440,10 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
 **狀態：✅ 已完成（2026-10-28，commit `c590ad8`，已部署；伺服器 `followup.enabled: true`）。**
 - 選了「回訪」：`schedule_followup` 5~180 分鐘、同時 2 個、每天 6 個、`/reset` 取消、安靜期間延後、DSH 暫時不可用就放棄。
 - 到點只送【回訪】提示，模型自己決定要不要說話。
+- 2026-11-10 改版：`minutes` 放寬到 2~43200（2 分鐘～1 個月，1 個月以 30 天算）；
+  拿掉「每個 key 同時最多 2 個」與 chatty 頻道每天 2 次的上限，只剩每個 key 每天 6 個。
+  排得比一小時久的回訪，提示與【排程】清單會寫成「小時／天」（例如「30 天前」）。
+  對應 `src/core/discord-followup.mjs` 的 `FOLLOWUP_MIN_MINUTES` / `FOLLOWUP_MAX_MINUTES` 與 `formatFollowupDelay`。
 
 建議做法（「回訪」，不是排程發言）：
 - 新工具 `schedule_followup(token, minutes, note)`：`minutes` 後 bridge 對這個會話送一批只有

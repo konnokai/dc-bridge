@@ -269,7 +269,7 @@ tool(
   '排一個之後的「回訪」：時間到了 bridge 會給你一個提示，你再決定要不要說話（不是預先寫好直接送出）。用在「我等一下回來看結果」「晚點再確認」這種；做不到的事不要拿它敷衍。',
   {
     token: sessionToken,
-    minutes: z.number().int().min(5).max(180).describe('幾分鐘後回訪（5~180）'),
+    minutes: z.number().int().min(2).max(43200).describe('幾分鐘後回訪（2~43200；最少 2 分鐘、最多 1 個月）'),
     note: z.string().max(200).describe('要提醒自己什麼，例如「回來看比賽結果」'),
   },
   '/followup',

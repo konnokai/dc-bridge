@@ -4,13 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  FOLLOWUP_MAX_ENTRIES,
   FOLLOWUP_MAX_MINUTES,
   FOLLOWUP_MAX_PER_DAY,
-  FOLLOWUP_MAX_PER_KEY,
   FOLLOWUP_MIN_MINUTES,
   FOLLOWUP_STALE_MS,
   FOLLOWUP_VERSION,
   createFollowupStore,
+  formatFollowupDelay,
   formatFollowupPrompt,
   formatFollowupStatus,
   loadFollowupFile,
@@ -52,15 +53,22 @@ console.log('## 2. 輸入檢查');
   ok(store.add('ch:1', { minutes: 10.5, note: 'x' }).entry?.minutes === 11, '分鐘四捨五入');
   ok(store.add('ch:1', { minutes: 10, note: '   ' }).error === 'note 是空的', 'note 不能空');
   ok(store.pending('ch:1') === 1, '被擋掉的不佔名額');
+  // 允許範圍：2 分鐘 ~ 1 個月（30 天）；兩端都要真的排得進去。
+  ok(store.add('ch:9', { minutes: 2, note: '最短' }).entry?.at === now + 2 * MIN, '2 分鐘可以排');
+  const month = store.add('ch:9', { minutes: 30 * 24 * 60, note: '一個月' }).entry;
+  ok(month?.at === now + 30 * 24 * 60 * MIN, '1 個月可以排');
+  ok(store.add('ch:9', { minutes: 30 * 24 * 60 + 1, note: 'x' }).error?.includes('minutes'), '超過 1 個月擋掉');
+  store.forget('ch:9');
 }
 
 console.log('## 3. 額度');
 {
   const store = make();
-  for (let i = 0; i < FOLLOWUP_MAX_PER_KEY; i += 1) {
-    ok(Boolean(store.add('ch:1', { minutes: 10 + i, note: `第 ${i} 個` }).entry), `同時第 ${i + 1} 個可以排`);
+  // 同一個會話同時排幾個都行，只有每天的上限。
+  for (let i = 0; i < 3; i += 1) {
+    ok(Boolean(store.add('ch:1', { minutes: 10 + i, note: `第 ${i} 個` }).entry), `同一個會話第 ${i + 1} 個可以排`);
   }
-  ok(store.add('ch:1', { minutes: 10, note: '第三個' }).error?.includes('已經排'), '同時最多 2 個');
+  ok(store.pending('ch:1') === 3, '同一個會話同時排 3 個都留著');
   ok(Boolean(store.add('ch:2', { minutes: 10, note: '別的會話' }).entry), '別的會話不受影響');
 
   const daily = make();
@@ -91,6 +99,16 @@ console.log('## 4. 取消與提示文字');
   const text = formatFollowupPrompt({ minutes: 30, note: '回來看比賽結果' });
   ok(text.startsWith('【回訪】') && text.includes('30 分鐘前') && text.includes('回來看比賽結果'), '提示有分鐘數與 note');
   ok(text.includes('不是新訊息') && text.includes('send_message'), '提示說明要不要說話自己決定');
+
+  // 長排程不能寫成幾萬分鐘。
+  ok(formatFollowupDelay(2) === '2 分鐘' && formatFollowupDelay(59) === '59 分鐘', '一小時以內講分鐘');
+  ok(formatFollowupDelay(60) === '1 小時' && formatFollowupDelay(90) === '1.5 小時', '一天以內講小時');
+  ok(formatFollowupDelay(1440) === '1 天' && formatFollowupDelay(30 * 24 * 60) === '30 天', '一天以上講天');
+  ok(formatFollowupDelay(1439) === '24 小時' && formatFollowupDelay(1440) === '1 天', '跨到天的邊界');
+  ok(formatFollowupDelay(0) === '0 分鐘' && formatFollowupDelay(-5) === '0 分鐘' && formatFollowupDelay(Number.NaN) === '0 分鐘',
+    '0、負數、NaN 都講 0 分鐘');
+  const month = formatFollowupPrompt({ minutes: 30 * 24 * 60, note: '回來看' });
+  ok(month.includes('30 天前'), '一個月的回訪說 30 天前，不是 43200 分鐘');
 
   const base = new Date(2026, 9, 28, 12, 0, 0).getTime();
   const onTime = formatFollowupPrompt({ minutes: 30, note: 'x', at: base + 30 * MIN }, { now: base + 30 * MIN });
@@ -186,6 +204,21 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-followup-test-'));
   // 讀不到檔案（這裡用資料夾模擬 EISDIR）不能讓橋接啟動時當掉。
   const unreadable = loadFollowupFile(tmp);
   ok(unreadable.saved === null && /讀不到/.test(unreadable.warning ?? ''), '讀檔失敗只回警告，不丟例外');
+
+  // 一個月的排程要能跨重啟；上限調小就會在讀檔時被靜靜丟掉，測試要抓得到。
+  const longFile = path.join(tmp, 'long.json');
+  const longStore = createFollowupStore({ now: () => clock, onChange: (snapshot) => saveFollowupFile(longFile, snapshot) });
+  longStore.add('ch:5', { minutes: 30 * 24 * 60, note: '一個月後' });
+  const longReborn = createFollowupStore({ saved: loadFollowupFile(longFile).saved, now: () => clock });
+  ok(longReborn.pending('ch:5') === 1 && longReborn.due(clock + 30 * 24 * 60 * MIN).length === 1,
+    '一個月的回訪重啟後還在，時間也對');
+
+  // 筆數要先擋在 1MB 讀檔上限之前，否則重啟時整份檔案會被備份重建、排程全丟。
+  const big = createFollowupStore({ now: () => clock });
+  for (let i = 0; i < FOLLOWUP_MAX_ENTRIES; i += 1) big.add(`ch:big${i}`, { minutes: 10, note: 'x' });
+  ok(big.all().length === FOLLOWUP_MAX_ENTRIES, `塞到 ${FOLLOWUP_MAX_ENTRIES} 筆`);
+  const overflow = big.add('ch:over', { minutes: 10, note: 'x' });
+  ok(overflow.error?.includes('太多') && big.all().length === FOLLOWUP_MAX_ENTRIES, '超過筆數上限擋掉，不多寫一筆');
 }
 fs.rmSync(tmp, { recursive: true, force: true });
 
@@ -205,6 +238,8 @@ console.log('## 6. 每輪的排程提示');
   ok(!text.includes('【回訪】'), '用【排程】，不跟回訪提示撞名');
 
   ok(formatFollowupStatus([{ at: base - MIN, note: '逾期' }], { now: base }).includes('已到時間'), '逾期的不印負數');
+  const far = formatFollowupStatus([{ at: base + 30 * 24 * 60 * MIN, note: '月底' }], { now: base });
+  ok(far.includes('30 天後'), '一個月後的排程在【排程】寫 30 天後');
   const many = Array.from({ length: 5 }, (_, i) => ({ at: base + (i + 1) * MIN, note: `第 ${i + 1} 個` }));
   const capped = formatFollowupStatus(many, { now: base });
   ok(capped.includes('另外 2 個') && !capped.includes('第 5 個'), '最多列 3 筆');

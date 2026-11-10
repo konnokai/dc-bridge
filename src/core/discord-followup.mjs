@@ -8,12 +8,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { defang } from './discord-batch.mjs';
 
-export const FOLLOWUP_MIN_MINUTES = 5;
-export const FOLLOWUP_MAX_MINUTES = 180;
-export const FOLLOWUP_MAX_PER_KEY = 2;
+export const FOLLOWUP_MIN_MINUTES = 2;
+// 1 個月以 30 天算；分鐘數是唯一的輸入單位，長排程由 formatFollowupDelay 講成天。
+export const FOLLOWUP_MAX_MINUTES = 30 * 24 * 60;
 export const FOLLOWUP_MAX_PER_DAY = 6;
 export const FOLLOWUP_VERSION = 1;
 export const FOLLOWUP_STALE_MS = 30 * 60_000;
+// 讀檔上限 1MB，超過會整份備份重建；筆數先擋住，別讓檔案長到那裡。
+// 500 筆 ×（200 字 note + 欄位）約 400KB，一般用量遠低於這個數字。
+export const FOLLOWUP_MAX_ENTRIES = 500;
 // 正常情況只有幾十筆；上限只是防止壞檔把整個檔案讀進記憶體。
 export const FOLLOWUP_MAX_BYTES = 1024 * 1024;
 
@@ -21,6 +24,14 @@ const dayKey = (now) => {
   const date = new Date(now);
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 };
+
+/** 分鐘數講成人看得懂的時間：一小時以上換成小時，一天以上換成天。 */
+export function formatFollowupDelay(minutes) {
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  if (value < 60) return `${value} 分鐘`;
+  if (value < 1440) return `${Number((value / 60).toFixed(1))} 小時`;
+  return `${Number((value / 1440).toFixed(1))} 天`;
+}
 
 /** 回訪的 prompt 本文：只有提示，要不要說話交給模型。
  *  openTopic：chatty 頻道回訪時，舊話題冷了可以直接起一個新的。 */
@@ -32,7 +43,7 @@ export function formatFollowupPrompt({ minutes, note, at } = {}, { openTopic = f
   const tail = openTopic
     ? '（這是回訪，不是新訊息。這個頻道可以自己開話題：舊話題冷了就直接起一個新的，不用硬接。想說話就呼叫 send_message，不想就別送。）'
     : '（這是回訪，不是新訊息；想說話就呼叫 send_message，不想就別送。）';
-  return `【回訪】你 ${elapsed} 分鐘前說要回來看：${note}\n${tail}`;
+  return `【回訪】你 ${formatFollowupDelay(elapsed)}前說要回來看：${note}\n${tail}`;
 }
 
 /**
@@ -43,7 +54,7 @@ export function formatFollowupStatus(entries, { now = Date.now(), max = 3 } = {}
   if (!Array.isArray(entries) || entries.length === 0) return '';
   const label = (entry) => {
     const left = Math.round((Number(entry.at) - now) / 60_000);
-    const when = left > 0 ? `${left} 分鐘後` : '已到時間';
+    const when = left > 0 ? `${formatFollowupDelay(left)}後` : '已到時間';
     const note = String(entry.note ?? '');
     return `${when}（${note.length > 24 ? `${note.slice(0, 24)}…` : note}）`;
   };
@@ -57,14 +68,12 @@ export function formatFollowupStatus(entries, { now = Date.now(), max = 3 } = {}
  * @param options.onChange 排程變動時呼叫，參數是 snapshot()；由橋接負責寫檔
  * @param options.now 測試用的時鐘
  * @param options.minMinutes / options.maxMinutes 允許的分鐘數
- * @param options.maxPerKey 同時最多排幾個
  * @param options.maxPerDay 每個會話每天最多排幾個
  */
 export function createFollowupStore({
   now = Date.now,
   minMinutes = FOLLOWUP_MIN_MINUTES,
   maxMinutes = FOLLOWUP_MAX_MINUTES,
-  maxPerKey = FOLLOWUP_MAX_PER_KEY,
   maxPerDay = FOLLOWUP_MAX_PER_DAY,
   saved = null,
   onChange = () => {},
@@ -125,20 +134,19 @@ export function createFollowupStore({
   /**
    * @returns {{entry: object}|{error: string}}
    */
-  function add(key, { minutes, note, maxPerDay: perCallMax } = {}) {
+  function add(key, { minutes, note } = {}) {
     const value = Math.round(Number(minutes));
     if (!Number.isInteger(value) || value < minMinutes || value > maxMinutes) {
       return { error: `minutes 要在 ${minMinutes}~${maxMinutes} 之間` };
     }
     const text = defang(note).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
     if (!text) return { error: 'note 是空的' };
-    if (pending(key) >= maxPerKey) {
-      return { error: `這個會話已經排了 ${maxPerKey} 個回訪，等其中一個到再排` };
+    if (entries.size >= FOLLOWUP_MAX_ENTRIES) {
+      return { error: '回訪排程太多，等一些到點再排' };
     }
-    // chatty 頻道自己開話題更容易排回訪，用比較小的每日上限。
-    const dailyCap = Number.isFinite(perCallMax) ? perCallMax : maxPerDay;
-    if (todayCount(key) >= dailyCap) {
-      return { error: `今天已經排了 ${dailyCap} 次回訪，明天再排` };
+    // 每個會話每天的上限，chatty 頻道也一樣。
+    if (todayCount(key) >= maxPerDay) {
+      return { error: `今天已經排了 ${maxPerDay} 次回訪，明天再排` };
     }
     dayCounts.set(key, { day: dayKey(now()), count: todayCount(key) + 1 });
     const entry = { id: `f${nextId += 1}`, key, note: text, minutes: value, at: now() + value * 60_000 };

@@ -65,7 +65,7 @@ import { createMaterialProvider } from './core/material-provider.mjs';
 import { findSymbol } from './core/trade-symbols.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { loadStatusFile, parseStatusText, saveStatusFile } from './core/discord-status.mjs';
-import { createFollowupStore, formatFollowupPrompt, formatFollowupStatus, loadFollowupFile, saveFollowupFile } from './core/discord-followup.mjs';
+import { createFollowupStore, formatFollowupDelay, formatFollowupPrompt, formatFollowupStatus, loadFollowupFile, saveFollowupFile } from './core/discord-followup.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import {
   DEV_FEEDBACK_EDITS_PER_TURN,
@@ -1144,8 +1144,8 @@ async function main() {
     // 重載提示：後續訊息要跟著新會話走。換代次後立刻改排隊批次的 epoch，
     // deliverPrompt 才不會把它們當成舊對話丟掉。
     if (preservePending) turnGate.rebase(key, epochOf(key));
-    // 回訪屬於舊對話，/reset 之後不要再送。
-    followups.forget(key);
+    // 回訪屬於舊對話，/reset 之後不要再送。重載人格不算重置，排程跟著同一個 key 留著。
+    if (!preservePending) followups.forget(key);
     // 還沒送出的那批（含 DSH 斷線時排著的）屬於舊對話，不能進新會話；新會話要重新帶一次頻道上下文。
     // 重載提示是例外：排隊中的訊息要留著，等新會話開好再送。
     if (!preservePending) {
@@ -2439,15 +2439,10 @@ async function main() {
       if (!cfg.discord.followup.enabled) {
         throw toolError('回訪沒開（config.json 的 discord.followup.enabled）', 403);
       }
-      const result = followups.add(key, {
-        minutes: body.minutes,
-        note: body.note,
-        // chatty 頻道由機器人自己開話題；每日 2 次就夠，免得沒人接還一直回來。
-        maxPerDay: key.startsWith('ch:') && isChattyChannel(cfg.discord, key.slice(3)) ? 2 : undefined,
-      });
+      const result = followups.add(key, { minutes: body.minutes, note: body.note });
       if (result.error) throw toolError(result.error, /^(minutes|note)/.test(result.error) ? 400 : 429);
-      log(`MCP 排回訪 ${key}（${result.entry.minutes} 分鐘後：${flat(result.entry.note, 60)}）`);
-      return { text: `已排定 ${result.entry.minutes} 分鐘後回訪。時間到了會給你一個提示，要不要說話由你決定；這個會話目前還排著 ${followups.pending(key)} 個。` };
+      log(`MCP 排回訪 ${key}（${formatFollowupDelay(result.entry.minutes)}後：${flat(result.entry.note, 60)}）`);
+      return { text: `已排定 ${formatFollowupDelay(result.entry.minutes)}後回訪。時間到了會給你一個提示，要不要說話由你決定；這個會話目前還排著 ${followups.pending(key)} 個。` };
     },
     async edit(body) {
       const content = typeof body.content === 'string' ? body.content : '';
@@ -4336,9 +4331,11 @@ async function main() {
           ? {
             // 回訪沒有【新訊息】，只有這幾行：先校正黑名單，再給回訪提示。
             // 少了黑名單，模型會拿舊 prompt 的名單去 @ 已經退出的人。
+            // 回訪可能隔好幾天，沒有【現在】模型就判斷不出「比賽是不是今天」。
             text: [
               job.channel?.guild ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild)) : '',
               formatFollowupPrompt(job.followup, { openTopic: isChattyChannel(cfg.discord, job.channel?.id) }),
+              formatTimeContext(),
             ].filter(Boolean).join('\n'),
             images: [],
             feedbackEntries: [],
@@ -4432,7 +4429,7 @@ async function main() {
     log(job.reminder
       ? `已投遞提醒 ${key}`
       : job.followup
-        ? `已投遞回訪 ${key}（${job.followup.minutes} 分鐘）`
+        ? `已投遞回訪 ${key}（${formatFollowupDelay(job.followup.minutes)}）`
         : `已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}${job.dropped ? `，略過 ${job.dropped} 則` : ''}）`);
     if (job.direct && cfg.discord.ackMessage) await sendLong(key, cfg.discord.ackMessage).catch(() => {});
     return true;

@@ -67,25 +67,21 @@ console.log('## 4. 回訪開話題');
   ok(open.includes('看話題冷了沒'), 'note 原樣保留');
 }
 
-console.log('## 5. chatty 回訪的每日額度');
+console.log('## 5. 回訪的每日額度（chatty 跟一般一樣）');
 {
+  // 拿掉 chatty 每天 2 次的特殊上限之後，只剩每天 6 次的共同上限。
   const store = createFollowupStore({ now: () => 0 });
-  for (let i = 0; i < 2; i += 1) {
-    const result = store.add(`ch:${ID_A}`, { minutes: 10 + i, note: `第 ${i} 次`, maxPerDay: 2 });
-    ok(Boolean(result.entry), `第 ${i + 1} 次可以排`);
-    store.remove(result.entry.id);
-  }
-  const third = store.add(`ch:${ID_A}`, { minutes: 20, note: '第 3 次', maxPerDay: 2 });
-  ok(third.error?.includes('2 次'), 'chatty 一天最多 2 次');
-
-  const normal = createFollowupStore({ now: () => 0 });
   let accepted = 0;
-  for (let i = 0; i < 6; i += 1) {
-    const result = normal.add(`ch:${ID_B}`, { minutes: 10 + i, note: `一般 ${i}` });
-    if (result.entry) { accepted += 1; normal.remove(result.entry.id); }
+  for (let i = 0; i < 7; i += 1) {
+    const result = store.add(`ch:${ID_A}`, { minutes: 10 + i, note: `第 ${i} 次` });
+    if (result.entry) {
+      accepted += 1;
+      store.remove(result.entry.id);
+      continue;
+    }
+    ok(result.error?.includes('6 次'), 'chatty 第 7 次被擋（跟一般頻道同一個上限）');
   }
-  ok(accepted === 6, '一般頻道一天可以排 6 次');
-  ok(normal.add(`ch:${ID_B}`, { minutes: 20, note: '第 7 次' }).error?.includes('6 次'), '一般頻道第 7 次被擋');
+  ok(accepted === 6, 'chatty 一天可以排 6 次');
 }
 
 console.log('## 6. 橋接有接上');
@@ -100,7 +96,6 @@ console.log('## 6. 橋接有接上');
     '⊘ 名單排除這批 ★ 的退出者');
   ok(bridge.includes('{ stars: guildBlacklistNames([...starredIds], job.channel.guild) }'),
     '★ 名單跟 ⊘ 名單用同一份成員資料');
-  ok(bridge.includes('isChattyChannel(cfg.discord, key.slice(3)) ? 2 : undefined'), 'chatty 回訪套用每日 2 次');
   const persona = fs.readFileSync(path.resolve('dsh/agent-presets/dc-chat/agent.cordis.yml'), 'utf8');
   ok(persona.includes('這批有【參與度】區塊時'), 'persona 說明【參與度】優先');
   ok(persona.includes('★ 優先於黑名單'), 'persona 明講 ★ 優先於黑名單');

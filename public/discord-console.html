@@ -498,7 +498,7 @@
 
   <section class="card">
     <h2>回訪排程 <span id="followup-count" class="muted"></span></h2>
-    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 schedule_followup 排的「N 分鐘後回來看」。時間到會給它一個提示，要不要說話由它決定；重啟不會清掉，停機超過 30 分鐘的會丟掉。</p>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 schedule_followup 排的「之後回來看」（2 分鐘～1 個月）。時間到會給它一個提示，要不要說話由它決定；重啟不會清掉，停機超過 30 分鐘的會丟掉。</p>
     <div class="table-wrap">
       <table style="min-width:640px">
         <colgroup><col style="width:20%"><col><col style="width:13%"><col style="width:19%"><col style="width:9%"></colgroup>
@@ -600,6 +600,12 @@
     if (sec < 3600) return Math.round(sec / 60) + ' 分前';
     if (sec < 86400) return Math.round(sec / 3600) + ' 小時前';
     return new Date(ts).toLocaleString();
+  };
+  // 回訪可以排到一個月，剩餘時間要換算，不然會看到「43200 分鐘」。
+  const fmtWait = (minutes) => {
+    if (minutes >= 1440) return `${Number((minutes / 1440).toFixed(1))} 天`;
+    if (minutes >= 60) return `${Number((minutes / 60).toFixed(1))} 小時`;
+    return `${minutes} 分鐘`;
   };
   const lines = (value) => String(value ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
   function parseMentionChannels(value) {
@@ -1322,7 +1328,7 @@
     $('followup-rows').replaceChildren(...(items.length ? items.map((item) => el('tr', {},
       el('td', {}, el('strong', {}, item.where || item.key)),
       el('td', {}, item.note || '—'),
-      el('td', { className: 'num' }, item.remainingMinutes > 0 ? `${item.remainingMinutes} 分鐘` : '已到點'),
+      el('td', { className: 'num' }, item.remainingMinutes > 0 ? fmtWait(item.remainingMinutes) : '已到點'),
       el('td', { className: 'muted' }, item.at ? new Date(item.at).toLocaleString() : '—'),
       el('td', {}, el('button', { className: 'danger', dataset: { followupId: item.id }, textContent: '取消' })),
     )) : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' },

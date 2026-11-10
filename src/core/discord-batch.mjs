@@ -463,7 +463,7 @@ export const CHATTY_HINT_LINES = [
 ];
 
 /** followup.enabled 才帶這行：工具沒開時叫模型排回訪只會拿到 403。 */
-export const CHATTY_FOLLOWUP_HINT = '- 話題收尾或大家安靜下來時，可以順手用 schedule_followup 排 30~90 分鐘後回來看；回來話題冷了，就自己起一個新的。一天最多排 1~2 次，對方沒接的新話題就放下。';
+export const CHATTY_FOLLOWUP_HINT = '- 話題收尾或大家安靜下來時，可以順手用 schedule_followup 排 30~90 分鐘後回來看；回來話題冷了，就自己起一個新的。一天最多 6 次，對方沒接的新話題就放下。';
 
 /** @param chatty 這個頻道在 discord.chattyChannels 裡才回傳內容；followup 要 followup.enabled 才帶開話題提示。 */
 export function formatParticipationHint(chatty = false, { followup = false } = {}) {
