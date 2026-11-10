@@ -36,6 +36,9 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 ## 市場狀態
 
 - 台北時間 09:00–13:30 盤中；週末與行事曆休市；`nextOpen` 給下一次開盤時間。
+- 預約單：交易日 14:50 至次一交易日 09:00；休市日整天都在上一交易日起的預約窗裡；13:30–14:50 不收單。
+  `marketState()` 回 `canOrder`、`orderDate`（這筆單的 `trade_date`）、`orderRefFloor`（報價可接受的最舊日期）、`nextOrderAt`。
+- 不模擬 09:10 第一次撮合與之後每 5 秒的集合競價；A 模式統一用當日收盤價結算。
 - 結算只在收盤後進行（`market.phase` 為 after）。
 - 結算開始時間由 `trade.settlement.twSettleAfter` 控制，預設 `19:00`（HH:MM）；19:00 前即使有收盤資料也不結算，等收盤價、法人、晚報資料較齊。
 
@@ -49,7 +52,8 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 ## 結算
 
 - `settleDue`：收盤後成交；`market.minutes >= twSettleAfter`（預設 19:00）才開始；資料日期等於 trade_date 才成交；逾期拒絕並釋放保留。
-- `prevPrevTradingDate` 空時 fail-closed（拒絕舊資料過關）；春節後第一個交易日的前兩個交易日仍可算出。
+- 預約單的 `trade_date` 是下一個交易日，當天晚上不結算；到該交易日 19:00 後才成交。
+- `orderRefFloor` 空時 fail-closed（拒絕舊資料過關）；預約單用 `orderDate` 往前推兩個交易日，春節後第一個交易日仍可算出。
 - 漲停買單、跌停賣單不成交。
 - 結算與 Bot 排程有執行旗標防重疊；`rejectOrder` 遇非 pending 回 null。
 

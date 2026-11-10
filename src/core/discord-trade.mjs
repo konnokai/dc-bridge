@@ -1,4 +1,4 @@
-// 模擬股票的交易規則：台股、A 模式（盤中排隊、收盤結算）、股數下單。
+// 模擬股票的交易規則：台股、A 模式（盤中或預約排隊、收盤結算）、股數下單。
 //
 // 這裡只碰交易域：帳戶、訂單、持倉、費用、結算與排行榜。報價由 quote-provider 提供，
 // Discord 身分與訊息由橋接處理。模型看不到這裡的計算，也不能自己決定成交價。
@@ -41,12 +41,12 @@ export function limitPrices(referenceCents) {
 }
 
 /**
- * 盤中估漲跌停的參考價：最新一筆資料還停在昨天時，今天的參考價就是昨天收盤，
- * 不是「昨天收盤 − 昨天漲跌」（那會變成前天的參考價）。同一天的資料才用 Change 回推。
+ * 估漲跌停的參考價：最新一筆資料還停在 trade_date 之前時，參考價就是那筆收盤，
+ * 不是「收盤 − 漲跌」（那會變成前一天的參考價）。同一天的資料才用 Change 回推。
  */
-function referenceForToday(latest, marketDate) {
+function referenceForTradeDate(latest, tradeDate) {
   if (!latest) return 0;
-  if (latest.date < marketDate) return latest.closeCents;
+  if (latest.date < tradeDate) return latest.closeCents;
   return latest.referenceCents > 0 ? latest.referenceCents : latest.closeCents;
 }
 /** 手續費：成交金額 × 費率，無條件進位到分；最低手續費可設定。 */
@@ -105,6 +105,11 @@ export const MARKET_PHASES = Object.freeze({
   AFTER: 'after',
 });
 
+// 台股盤中零股：交易日 09:00–13:30；預約單：14:50 至次一交易日 09:00。
+const OPEN_MINUTES = 9 * 60;
+const CLOSE_MINUTES = 13 * 60 + 30;
+const PREORDER_MINUTES = 14 * 60 + 50;
+
 function previousTradingDate(fromDate, holidays) {
   if (!fromDate) return '';
   const start = new Date(`${fromDate}T00:00:00Z`);
@@ -136,20 +141,33 @@ function nextTradingDate(fromDate, holidays) {
   return '';
 }
 
-/** 台股市場狀態。holidays 是 YYYY-MM-DD 的休市日（不含週末）。 */
+/**
+ * 台股市場狀態。holidays 是 YYYY-MM-DD 的休市日（不含週末）。
+ * canOrder／orderDate：能不能下單，以及這筆單記在哪個交易日（預約單記在下一個交易日）。
+ */
 export function marketState(now = new Date(), holidays = new Set()) {
-  const { date, minutes, dayOfWeek } = taipeiClock(now);
+  const { date, minutes } = taipeiClock(now);
   const prevTradingDate = previousTradingDate(date, holidays);
   const prevPrevTradingDate = previousTradingDate(prevTradingDate, holidays);
   const base = { date, minutes, prevTradingDate, prevPrevTradingDate };
-  if (dayOfWeek === 0 || dayOfWeek === 6 || holidays.has(date) || date.endsWith('-01-01')) {
-    const nextOpen = nextTradingDate(date, holidays);
-    return { ...base, phase: MARKET_PHASES.HOLIDAY, open: false, label: '休市', nextOpen: nextOpen ? `${nextOpen} 09:00` : '' };
+  const nextDate = nextTradingDate(date, holidays);
+  const nextOpen = nextDate ? `${nextDate} 09:00` : '';
+  // 報價至少要抓到「下兩個交易日」的位置；預約單的基準日是 orderDate，不是今天。
+  const nextRefFloor = nextDate ? previousTradingDate(previousTradingDate(nextDate, holidays), holidays) : '';
+  if (!isTradingDate(date, holidays)) {
+    // 休市日的任何時間都還在上一交易日 14:50 開始的預約窗裡。
+    return { ...base, phase: MARKET_PHASES.HOLIDAY, open: false, canOrder: Boolean(nextDate), orderDate: nextDate, orderRefFloor: nextRefFloor, nextOrderAt: '', label: '休市', nextOpen };
   }
-  if (minutes < 9 * 60) return { ...base, phase: MARKET_PHASES.PREOPEN, open: false, label: '尚未開盤（09:00 開盤）', nextOpen: `${date} 09:00` };
-  if (minutes < 13 * 60 + 30) return { ...base, phase: MARKET_PHASES.OPEN, open: true, label: '盤中（09:00–13:30）', nextOpen: '' };
-  const nextOpen = nextTradingDate(date, holidays);
-  return { ...base, phase: MARKET_PHASES.AFTER, open: false, label: '已收盤（13:30）', nextOpen: nextOpen ? `${nextOpen} 09:00` : '' };
+  if (minutes < OPEN_MINUTES) {
+    return { ...base, phase: MARKET_PHASES.PREOPEN, open: false, canOrder: true, orderDate: date, orderRefFloor: prevPrevTradingDate, nextOrderAt: '', label: '尚未開盤（09:00 開盤）', nextOpen: `${date} 09:00` };
+  }
+  if (minutes < CLOSE_MINUTES) {
+    return { ...base, phase: MARKET_PHASES.OPEN, open: true, canOrder: true, orderDate: date, orderRefFloor: prevPrevTradingDate, nextOrderAt: '', label: '盤中（09:00–13:30）', nextOpen: '' };
+  }
+  if (minutes < PREORDER_MINUTES) {
+    return { ...base, phase: MARKET_PHASES.AFTER, open: false, canOrder: false, orderDate: '', orderRefFloor: '', nextOrderAt: `${date} 14:50`, label: '已收盤（13:30）', nextOpen };
+  }
+  return { ...base, phase: MARKET_PHASES.AFTER, open: false, canOrder: Boolean(nextDate), orderDate: nextDate, orderRefFloor: nextRefFloor, nextOrderAt: '', label: '已收盤（13:30）', nextOpen };
 }
 
 function tradeError(message, code) {
@@ -365,23 +383,32 @@ export function createTradeService({
         : `「${symbol}」不在可交易清單：先用 get_quote 查代號`;
       throw tradeError(hint, 'BAD_SYMBOL');
     }
-    const market = await state();
-    if (!market.open) {
-      const next = market.nextOpen ? `（下一次開盤 ${market.nextOpen}）` : '';
-      throw tradeError(`現在${market.label}${next}，不能下單；下一個交易日開盤再排隊`, 'MARKET_CLOSED');
-    }
-    const latest = await quotes.getLatest(entry);
-    if (!latest || latest.closeCents <= 0) throw tradeError('查不到最近收盤價，暫時不能下單', 'NO_QUOTE');
-    // 資料至少要是「前兩個交易日」之一：TWSE／TPEx 更新時間不同，留一個交易日的緩衝。
-    // 超過就代表來源停擺或連假後還沒更新，不要用太舊的價格估保留額。
-    if (!market.prevPrevTradingDate || latest.date < market.prevPrevTradingDate) {
-      throw tradeError(`最近收盤資料太舊（${latest.asOf}），暫時不能下單`, 'STALE_QUOTE');
-    }
-    const reference = referenceForToday(latest, market.date);
-    const limit = limitPrices(reference);
     const isBot = actorKind === ACCOUNT_KIND.BOT;
     const accountId = isBot ? botAccount : playerAccountId(actorId);
     if (isBot && !accountId) throw tradeError('Bot 帳戶還沒建立', 'NO_BOT');
+    const request = String(requestId ?? '').trim();
+    if (!request) throw tradeError('缺少 request_id（橋接沒有帶到觸發訊息）', 'BAD_REQUEST');
+    // 先回重送的單：市場狀態幾分鐘就換一段，不能因為時間窗變了就把已存在的單說成不能下單。
+    const existing = db.findOrderByRequest(request)
+      ?? (messageId ? db.findOrderByMessage(accountId, String(messageId)) : null);
+    if (existing) {
+      if (existing.account_id !== accountId) throw tradeError('這筆請求不屬於你的帳戶', 'BAD_REQUEST');
+      return { duplicate: true, order: existing };
+    }
+    const market = await state();
+    if (!market.canOrder) {
+      throw tradeError(`現在${market.label}，不能下單；下一段下單時間 ${market.nextOrderAt || '未定'}`, 'MARKET_CLOSED');
+    }
+    const tradeDate = market.orderDate;
+    const latest = await quotes.getLatest(entry);
+    if (!latest || latest.closeCents <= 0) throw tradeError('查不到最近收盤價，暫時不能下單', 'NO_QUOTE');
+    // 資料至少要是「預約日的前兩個交易日」之一：TWSE／TPEx 更新時間不同，留一個交易日的緩衝。
+    // 超過就代表來源停擺或連假後還沒更新，不要用太舊的價格估保留額。
+    if (!market.orderRefFloor || latest.date < market.orderRefFloor) {
+      throw tradeError(`最近收盤資料太舊（${latest.asOf}），暫時不能下單`, 'STALE_QUOTE');
+    }
+    const reference = referenceForTradeDate(latest, tradeDate);
+    const limit = limitPrices(reference);
     const existingAccount = db.getAccount(accountId);
     // 帳戶要到真的排隊成功才建立；先用起始資金做 30% 與現金檢查的假帳戶。
     const accountForCheck = existingAccount ?? {
@@ -391,17 +418,7 @@ export function createTradeService({
       reserved_cents: 0,
       starting_cash_cents: startingCashCents,
     };
-    const request = String(requestId ?? '').trim();
-    if (!request) throw tradeError('缺少 request_id（橋接沒有帶到觸發訊息）', 'BAD_REQUEST');
     const nowIso = new Date(now()).toISOString();
-    const tradeDate = market.date;
-
-    const existing = db.findOrderByRequest(request)
-      ?? (messageId ? db.findOrderByMessage(accountId, String(messageId)) : null);
-    if (existing) {
-      if (existing.account_id !== accountId) throw tradeError('這筆請求不屬於你的帳戶', 'BAD_REQUEST');
-      return { duplicate: true, order: existing };
-    }
 
     // 保留額：買單用漲停價估算，成交價不可能高於它；多保留的差額結算時釋放。
     const reservedCents = orderSide === 'buy'
@@ -423,7 +440,7 @@ export function createTradeService({
         ?? (messageId ? db.findOrderByMessage(accountId, String(messageId)) : null);
       if (again) return { duplicate: true, order: again };
       if (db.hasOppositePending(accountId, entry.symbol, tradeDate, orderSide)) {
-        throw tradeError('同一個標的今天已經有反向的排隊單；MVP 不模擬當沖', 'OPPOSITE_PENDING');
+        throw tradeError('同一個標的同一個交易日已經有反向的排隊單；MVP 不模擬當沖', 'OPPOSITE_PENDING');
       }
       // 帳戶到這裡才建立；同一筆 transaction 裡的檢查失敗會一起 rollback，不會留下空帳戶。
       let order;
@@ -529,10 +546,17 @@ export function createTradeService({
   async function settleDue() {
     const pending = db.listPendingOrders();
     if (pending.length === 0) return [];
-    const market = await state();
+    const closed = await holidaySet();
+    const market = marketState(now(), closed);
     // 19:00 前不結算：收盤價、法人與晚報都還沒齊，太早結算只會拿到半套資料。
     const settleAfter = parseHhmm(config.settlement.twSettleAfter);
     if (!Number.isFinite(settleAfter) || market.minutes < settleAfter) return [];
+    const settledAt = new Date(now()).toISOString();
+    const events = [];
+    const reject = (order, reason) => {
+      const rejected = db.rejectOrder(order, { reason, settledAt });
+      if (rejected) events.push({ type: 'rejected', order: rejected, reason });
+    };
     const jobs = new Map();
     for (const order of pending) {
       const entry = findSymbol(order.symbol);
@@ -540,7 +564,12 @@ export function createTradeService({
         reject(order, '標的已不在商品主檔');
         continue;
       }
-      if (order.trade_date > market.date) continue; // 未來單（正常不會有）
+      if (order.trade_date > market.date) continue; // 預約單要等它的交易日
+      // 預約單排好之後才宣布的休市（颱風、行事曆補上）：那天不會有收盤資料，直接失效。
+      if (!isTradingDate(order.trade_date, closed)) {
+        reject(order, `${order.trade_date} 休市，訂單失效`);
+        continue;
+      }
       jobs.set(`${order.symbol}|${order.trade_date}`, { entry, date: order.trade_date });
     }
     const quoteByKey = new Map();
@@ -548,13 +577,9 @@ export function createTradeService({
       quoteByKey.set(key, await quotes.getForDate(job.entry, job.date));
     }));
 
-    const settledAt = new Date(now()).toISOString();
-    const events = [];
-    const reject = (order, reason) => {
-      const rejected = db.rejectOrder(order, { reason, settledAt });
-      if (rejected) events.push({ type: 'rejected', order: rejected, reason });
-    };
     for (const order of pending) {
+      if (order.trade_date > market.date) continue;
+      if (!isTradingDate(order.trade_date, closed)) continue;
       // 當天還沒收盤就不結算，就算報價來源先偷跑也不行。
       if (order.trade_date === market.date && (market.phase === MARKET_PHASES.OPEN || market.phase === MARKET_PHASES.PREOPEN)) continue;
       const entry = findSymbol(order.symbol);

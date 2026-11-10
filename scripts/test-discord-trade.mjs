@@ -128,6 +128,22 @@ console.log('## 3. 市場狀態');
   const newYear = marketState(new Date('2026-12-31T05:40:00Z'));
   ok(newYear.nextOpen === '2027-01-04 09:00', '跨年跳過 01-01 休市');
   ok(marketState(new Date('2026-11-05T02:00:00Z'), new Set(['2026-11-05'])).open === false, '行事曆休市');
+  const gap = marketState(new Date('2026-11-05T06:10:00Z')); // 14:10
+  ok(gap.canOrder === false && gap.nextOrderAt === '2026-11-05 14:50', '13:30–14:50 不能下單，下一段是 14:50');
+  const evening = marketState(new Date('2026-11-05T07:00:00Z')); // 15:00
+  ok(evening.canOrder === true && evening.orderDate === '2026-11-06', '14:50 後可以預約下一交易日');
+  const early = marketState(new Date('2026-11-05T00:30:00Z')); // 08:30
+  ok(early.canOrder === true && early.orderDate === '2026-11-05', '09:00 前是當日預約單');
+  const weekend = marketState(new Date('2026-11-07T03:00:00Z')); // 週六 11:00
+  ok(weekend.canOrder === true && weekend.orderDate === '2026-11-09', '週末預約單排到週一');
+  ok(marketState(new Date('2026-11-05T00:59:00Z')).canOrder === true, '08:59 仍是預約單');
+  ok(marketState(new Date('2026-11-05T01:00:00Z')).phase === 'open', '09:00 開盤');
+  ok(marketState(new Date('2026-11-05T05:29:00Z')).phase === 'open', '13:29 盤中');
+  ok(marketState(new Date('2026-11-05T05:30:00Z')).canOrder === false, '13:30 起停止下單');
+  ok(marketState(new Date('2026-11-05T06:49:00Z')).canOrder === false, '14:49 還不能下單');
+  ok(marketState(new Date('2026-11-05T06:50:00Z')).orderDate === '2026-11-06', '14:50 開始預約');
+  ok(marketState(new Date('2026-11-06T15:59:00Z')).orderDate === '2026-11-09', '週五 23:59 預約排到週一');
+  ok(marketState(new Date('2026-12-31T07:00:00Z')).orderDate === '2027-01-04', '跨年預約跳過 01-01');
 }
 
 console.log('## 4. 排隊買入');
@@ -143,6 +159,65 @@ const h = harness();
   ok(h.db.getPosition(playerAccountId('42'), '2330') === null, '排隊不增加持倉');
   const again = await h.service.placeOrder(BUY);
   ok(again.duplicate === true && again.order.id === order.id, '同一筆訊息重送回原訂單');
+}
+
+console.log('## 4b. 預約單');
+{
+  const pre = harness();
+  pre.setClock('2026-11-05T07:00:00.000Z'); // 台北 15:00，已收盤
+  const result = await pre.service.placeOrder(BUY);
+  ok(result.order.trade_date === '2026-11-06', '15:00 的預約單排到下一交易日');
+  pre.setQuote({ date: '2026-11-06' }); // 來源先偷跑週五資料，也不能提早結算
+  pre.setClock('2026-11-05T11:05:00.000Z'); // 當天 19:05
+  const tonight = await pre.service.settleDue();
+  ok(tonight.length === 0 && pre.db.findOrderByRequest('msg:m1').status === 'pending', '當天晚上不結算下一交易日的預約單');
+  pre.setClock('2026-11-06T11:05:00.000Z'); // 隔天 19:05
+  const events = await pre.service.settleDue();
+  ok(events[0]?.type === 'filled', '下一交易日收盤後才成交');
+  ok(pre.db.findOrderByRequest('msg:m1').status === 'filled', '預約單成交狀態正確');
+
+  const replay = harness();
+  replay.setClock('2026-11-05T05:29:00.000Z'); // 13:29 下單
+  const firstOrder = await replay.service.placeOrder(BUY);
+  replay.setClock('2026-11-05T05:35:00.000Z'); // 13:35 重送同一則
+  const again = await replay.service.placeOrder(BUY);
+  ok(again.duplicate === true && again.order.id === firstOrder.order.id, '重送已存在的單不會被時間窗擋下');
+
+  const early = harness();
+  early.setClock('2026-11-05T00:30:00.000Z'); // 台北 08:30
+  ok((await early.service.placeOrder(BUY)).order.trade_date === '2026-11-05', '早上 09:00 前是當日預約單');
+
+  const closed = harness();
+  closed.setClock('2026-11-05T06:10:00.000Z'); // 台北 14:10
+  await assert.rejects(closed.service.placeOrder(BUY), /14:50/);
+  ok(true, '13:30–14:50 不能下單，訊息指向 14:50');
+
+  const weekend = harness();
+  weekend.setClock('2026-11-07T03:00:00.000Z'); // 週六 11:00
+  ok((await weekend.service.placeOrder(BUY)).order.trade_date === '2026-11-09', '週末預約單排到週一');
+
+  const ref = harness();
+  ref.setClock('2026-11-05T07:00:00.000Z'); // 週四 15:00，預約週五
+  ref.setQuote({ date: '2026-11-05', closeCents: 109_000, changeCents: 9_000, referenceCents: 100_000 });
+  const refOrder = await ref.service.placeOrder(BUY);
+  ok(refOrder.order.trade_date === '2026-11-06', '預約單記在週五');
+  ok(refOrder.order.reserved_cents === 1_196_703, `保留額用週五的參考價（${refOrder.order.reserved_cents}）`);
+
+  const stalePre = harness();
+  stalePre.setClock('2026-11-05T07:00:00.000Z');
+  stalePre.setQuote({ date: '2026-11-03', closeCents: 100_000, changeCents: 0, referenceCents: 100_000 });
+  await assert.rejects(stalePre.service.placeOrder(BUY), /資料太舊/);
+  ok(true, '預約單的報價基準看下一個交易日（只到週二就拒絕）');
+
+  const typhoonSet = new Set();
+  const typhoon = harness({ holidays: typhoonSet });
+  typhoon.setClock('2026-11-05T07:00:00.000Z');
+  ok((await typhoon.service.placeOrder(BUY)).order.trade_date === '2026-11-06', '週四晚上先預約週五');
+  typhoonSet.add('2026-11-06'); // 週五當天才宣布颱風假
+  typhoon.setClock('2026-11-06T11:05:00.000Z'); // 週五 19:05
+  const typhoonEvents = await typhoon.service.settleDue();
+  ok(typhoonEvents[0]?.type === 'rejected' && /休市/.test(typhoonEvents[0].order.reject_reason), '預約日後來變休市就失效');
+  ok(typhoon.db.getAccount(playerAccountId('42')).reserved_cents === 0, '休市失效後釋放保留');
 }
 
 console.log('## 5. 收盤結算（買）');
@@ -275,7 +350,9 @@ console.log('## 9b2. 連假後與資料落後');
   ok(true, '落後超過兩個交易日就拒絕');
 
   const extra = harness({ config: { ...TRADE, extraHolidays: ['2026-11-05'] } });
-  ok((await extra.service.state()).phase === 'holiday', 'config 的 extraHolidays 會擋臨時休市');
+  const extraState = await extra.service.state();
+  ok(extraState.phase === 'holiday', 'config 的 extraHolidays 算休市日');
+  ok(extraState.canOrder === true && extraState.orderDate === '2026-11-06', '臨時休市日照樣可以預約下一交易日');
 }
 
 console.log('## 9b3. 名稱比對與 rollback');
