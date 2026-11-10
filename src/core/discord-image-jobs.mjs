@@ -27,6 +27,7 @@ const MAX_FILE_NAME = 255;
  * @param options.sessions     key -> sessionId
  * @param options.enqueuePrompt (key, job) => void，走回合閘門
  * @param options.epochOf      (key) => number
+ * @param options.knowledgeFor 選填 async ({ key }) => string[]|string：工具觸發的群知識，只附在 start 的回應
  */
 export function createImageJobHandler({
   jobs,
@@ -36,6 +37,7 @@ export function createImageJobHandler({
   sessions,
   enqueuePrompt,
   epochOf,
+  knowledgeFor = null,
   ttlMs = IMAGE_JOB_TTL_MS,
   now = Date.now,
   error = (message, statusCode) => Object.assign(new Error(message), { statusCode }),
@@ -64,7 +66,13 @@ export function createImageJobHandler({
     if (!key || sessions[key] !== sessionId) throw error('這個會話已經結束，丟棄生圖通知', 403);
     if (phase === 'start') {
       jobs.set(jobId, { key, users: turnUsers.get(key) ?? [], at });
-      return { key };
+      // 查知識失敗不能擋生圖：回空陣列，圖照畫。知識是一條一個字串，外掛逐條過濾。
+      let knowledge = [];
+      try {
+        const value = knowledgeFor ? await knowledgeFor({ key }) : null;
+        knowledge = (Array.isArray(value) ? value : [value]).filter((item) => typeof item === 'string' && item.trim());
+      } catch { /* 知識不是生圖的必要條件 */ }
+      return knowledge.length ? { key, knowledge } : { key };
     }
     const job = jobs.get(jobId);
     if (!job || job.key !== key) throw error('找不到這個生圖工作（橋接重啟過？）', 404);

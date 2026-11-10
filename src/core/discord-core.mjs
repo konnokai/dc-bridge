@@ -209,6 +209,13 @@ export function normalizeDiscordConfig(raw) {
         hour: clamp(src.notes?.dailySummary?.hour, 4, 0, 23),
       },
     },
+    knowledge: {
+      // 群知識：群友提供的設定與規則；候選要管理員確認。預設關閉（會保存並注入頻道文字）。
+      enabled: src.knowledge?.enabled === true,
+      // 預設要放得下一條 2000 字的知識（含標頭），否則長設定會被截成一行。
+      maxChars: clamp(src.knowledge?.maxChars, 2500, 300, 4000),
+      toolMaxChars: clamp(src.knowledge?.toolMaxChars, 3000, 300, 6000),
+    },
     followup: {
       // 回訪：模型自己排「N 分鐘後回來看」。預設關閉（時間到了會多一個模型回合）。
       enabled: src.followup?.enabled === true,
@@ -582,6 +589,7 @@ const PROGRESS_LABELS = {
   'mcp__discord__note_event': ['📝 記下頻道事件'],
   'mcp__discord__search_notes': ['📝 查頻道筆記', (args) => args.query],
   'mcp__discord__forget_note': ['🗑️ 刪頻道筆記'],
+  'mcp__discord__propose_knowledge': ['📝 收下知識（等管理員確認）'],
   'mcp__discord__save_meme': ['🖼️ 存梗圖', (args) => args.name],
   'mcp__discord__search_memes': ['🖼️ 找梗圖', (args) => args.query],
   'mcp__discord__forget_meme': ['🗑️ 刪梗圖', (args) => args.name],

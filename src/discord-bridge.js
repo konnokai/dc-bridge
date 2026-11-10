@@ -104,6 +104,25 @@ import {
   saveNotesFile,
 } from './core/discord-notes.mjs';
 import {
+  BODY_MAX_CHARS as KNOWLEDGE_BODY_MAX_CHARS,
+  KEYWORDS_MAX as KNOWLEDGE_KEYWORDS_MAX,
+  KEYWORD_MAX_CHARS,
+  KNOWLEDGE_TOOLS,
+  MAX_APPROVED,
+  TITLE_MAX_CHARS,
+  confirmKnowledge,
+  deleteKnowledge,
+  formatKnowledgeBlock,
+  formatKnowledgeForTool,
+  knowledgeOverview,
+  knowledgeStats,
+  loadKnowledgeFile,
+  rejectKnowledge,
+  saveCandidate as saveKnowledgeCandidate,
+  saveKnowledgeFile,
+  updateKnowledge,
+} from './core/discord-knowledge.mjs';
+import {
   buildReloadSummaryPrompt,
   clearReloadSummaryOrThrow,
   forgetReloadSummaryIfCurrent,
@@ -230,6 +249,7 @@ const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
 const CUSTOM_STATUS_FILE = path.join(STATE_DIR, 'discord-custom-status.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
+const KNOWLEDGE_FILE = path.join(STATE_DIR, 'discord-knowledge.json');
 const FOLLOWUPS_FILE = path.join(STATE_DIR, 'discord-followups.json');
 const DEV_FEEDBACK_FILE = path.join(STATE_DIR, 'discord-dev-feedback.json');
 const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
@@ -265,6 +285,7 @@ const SLANG_WINDOW_MAX = 80; // 每個頻道保留幾則語料（記憶體，重
 const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
 const MEMORY_WRITES_PER_TURN = 3; // 記憶會留存、又是群友文字推動的，一輪寫幾次要有上限
 const NOTE_WRITES_PER_TURN = 2; // 頻道筆記也是群友文字推動的，一輪最多記 2 條
+const KNOWLEDGE_WRITES_PER_TURN = 1; // 知識是長文、又要人審；一輪最多提一條，避免洗版
 const MEME_SAVES_PER_TURN = 2; // 每次存都要下載＋跑 ffmpeg，一輪最多 2 次（失敗也算）
 const SLANG_WRITES_PER_TURN = 3; // 模型自己收錄黑話／標籤也一樣，避免每一批都往詞庫塞
 const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一次（DSH 可能已經壓縮掉了）
@@ -528,6 +549,33 @@ async function main() {
     }
   }
 
+  // 群知識：群友提供的設定與規則；候選要管理員在控制台確認才會注入。
+  const knowledgeLoaded = loadKnowledgeFile(KNOWLEDGE_FILE);
+  const knowledgeStore = knowledgeLoaded.store;
+  if (knowledgeLoaded.warning) log(`⚠️ 群知識：${knowledgeLoaded.warning}`);
+  let knowledgeDirty = false;
+  let knowledgeSaveTimer = null;
+
+  function markKnowledgeDirty() {
+    knowledgeDirty = true;
+    if (knowledgeSaveTimer) return;
+    knowledgeSaveTimer = setTimeout(() => {
+      knowledgeSaveTimer = null;
+      flushKnowledge();
+    }, 2000);
+    knowledgeSaveTimer.unref?.();
+  }
+
+  function flushKnowledge() {
+    if (!knowledgeDirty) return;
+    try {
+      saveKnowledgeFile(KNOWLEDGE_FILE, knowledgeStore);
+      knowledgeDirty = false;
+    } catch (error) {
+      log(`群知識存檔失敗：${error?.message ?? error}`);
+    }
+  }
+
   // 梗圖庫：索引在 state/discord-memes/index.json，圖檔在同目錄的 files/。
   const memesLoaded = loadMemesFile(MEMES_INDEX_FILE);
   const memeStore = memesLoaded.store;
@@ -675,6 +723,8 @@ async function main() {
   const memoryWrites = new Map(); // key -> 這一輪寫了幾次記憶
   const notesShown = new Map(); // key -> Map<noteId, { at, shownAt }>：這個會話帶過哪些頻道筆記
   const noteWrites = new Map(); // key -> 這一輪寫了幾條頻道筆記
+  const knowledgeShown = new Map(); // key -> Map<知識 id, { updatedAt, at }>：這個會話帶過哪些知識
+  const knowledgeWrites = new Map(); // key -> 這一輪提了幾條知識候選
   const memeSaves = new Map(); // key -> 這一輪試著存了幾張梗圖
   const devFeedbackWrites = new Map(); // key -> 這一輪送了幾筆開發回饋
   const devFeedbackEdits = new Map(); // key -> 這一輪改了幾個開發回饋
@@ -719,6 +769,7 @@ async function main() {
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushKnowledge(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushMemes(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushDevFeedback(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }
@@ -1165,6 +1216,8 @@ async function main() {
     memoryWrites.delete(key);
     notesShown.delete(key);
     noteWrites.delete(key);
+    knowledgeShown.delete(key);
+    knowledgeWrites.delete(key);
     memeSaves.delete(key);
     devFeedbackWrites.delete(key);
     devFeedbackEdits.delete(key);
@@ -1638,6 +1691,11 @@ async function main() {
     visibleName(member?.displayName, message.author?.displayName, message.author?.username) || '未知';
   // 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
   const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
+  // 控制台貼的訊息連結：抓 guild／channel／message 三段。只要完整網址，不吃裸 id。
+  const parseMessageLink = (value) => {
+    const match = /^(?:https?:\/\/)?(?:www\.)?(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d{5,25})\/(\d{5,25})\/(\d{5,25})\/?$/.exec(String(value ?? '').trim());
+    return match ? { guildId: match[1], channelId: match[2], messageId: match[3] } : null;
+  };
   const shortTime = (date) => (date ? date.toLocaleString('zh-TW', {
     hour12: false,
     // 讀到去年的訊息時，只有月日分不出是哪一年。
@@ -1899,6 +1957,21 @@ async function main() {
     log,
   });
 
+  // 生圖時要附上的群知識：只帶掛了 generate_image 的已確認條目。
+  // 外掛只給 sessionId，頻道從 key 反查；私聊沒有群知識。
+  function imageKnowledge(jobKey) {
+    if (!cfg.discord.knowledge.enabled) return [];
+    const channelId = String(jobKey ?? '').startsWith('ch:') ? String(jobKey).slice(3) : '';
+    const channel = channelId ? client.channels.cache.get(channelId) : null;
+    if (!channel?.guildId) return [];
+    return formatKnowledgeForTool(knowledgeStore, {
+      guildId: channel.guildId,
+      channelId: channel.id,
+      tool: 'generate_image',
+      maxChars: cfg.discord.knowledge.toolMaxChars,
+    });
+  }
+
   const handleImageJob = createImageJobHandler({
     jobs: imageJobs,
     pendingDraws,
@@ -1907,6 +1980,7 @@ async function main() {
     sessions,
     enqueuePrompt,
     epochOf,
+    knowledgeFor: ({ key: jobKey }) => imageKnowledge(jobKey),
     ttlMs: IMAGE_JOB_TTL_MS,
   });
 
@@ -3004,6 +3078,74 @@ async function main() {
       log(`MCP 刪頻道筆記 ${key}（第 ${number} 條「${flat(removed.text, 60)}」，剩 ${left.length} 條）`);
       return { text: left.length ? `已刪除「${flat(removed.text, 60)}」。剩下的筆記：\n${formatNoteList(left)}` : `已刪除「${flat(removed.text, 60)}」，這個頻道沒有筆記了。` };
     },
+    // 群知識：群友提供的設定、規則、世界觀。只收候選，管理員在控制台確認才注入。
+    async knowledge(body) {
+      const { key, channel, sessionId } = await agentSender.resolve(body.token);
+      if (!cfg.discord.knowledge.enabled) throw toolError('群知識沒開（config.json 的 discord.knowledge.enabled）', 403);
+      if (!channel.guildId) throw toolError('私聊不記群知識', 403);
+      const used = knowledgeWrites.get(key) ?? 0;
+      if (used >= KNOWLEDGE_WRITES_PER_TURN) throw toolError(`一輪最多提 ${KNOWLEDGE_WRITES_PER_TURN} 條知識，下一輪再提`, 429);
+
+      // 有給 message 就抓原文當正文；群友貼一長串設定時，模型不用自己重打。
+      const ref = textArg(body.message);
+      let target = null;
+      if (ref) {
+        target = await fetchByRef(key, ref);
+        if (target.author?.bot) throw toolError('不記 bot 的訊息', 400);
+        // 跟 remember_user 一樣：退出、被封鎖、在模型不理名單的人，訊息不能被永久收下。
+        if (!canReadMessage(cfg.discord, target, client.user.id, ignoredUser)) {
+          throw toolError('他的訊息不能記：對方已退出、被封鎖或在不理名單', 403);
+        }
+      }
+      const title = flat(body.title, TITLE_MAX_CHARS);
+      const rawBody = String(body.body ?? '').trim();
+      const sourceAuthor = target ? authorName(target, target.member ?? null) : '';
+      // 有 message 又自己寫 body＝模型整理過，來源不能再標成那個人的原話。
+      // 沒 message 時 body 也是模型寫的；標成「提出」而不是那個人說的。
+      const proposer = turnUsers.get(key)?.[0]?.name ?? '';
+      const byName = target
+        ? (rawBody ? `模型整理（來源：${sourceAuthor}）` : sourceAuthor)
+        : (proposer ? `模型整理（提出：${proposer}）` : '模型整理');
+      const text = rawBody || (target ? resolveMentions(String(target.content ?? '').trim(), target) : '');
+      if (!title) throw toolError('title 是空的', 400);
+      if (!text) throw toolError('body 是空的：可以給 body，或給 message 讓橋接抓原文', 400);
+      if (text.length > KNOWLEDGE_BODY_MAX_CHARS) {
+        throw toolError(`知識最多 ${KNOWLEDGE_BODY_MAX_CHARS} 字；一則訊息塞不下時，請管理員在控制台用訊息連結建檔`, 400);
+      }
+      agentSender.checkSensitive(sessionId, `${title}\n${text}`);
+
+      const keywords = Array.isArray(body.keywords) ? body.keywords : [];
+      if (keywords.length > KNOWLEDGE_KEYWORDS_MAX) throw toolError(`keywords 最多 ${KNOWLEDGE_KEYWORDS_MAX} 個`, 400);
+      if (keywords.some((term) => String(term ?? '').length > KEYWORD_MAX_CHARS)) {
+        throw toolError(`每個 keyword 最多 ${KEYWORD_MAX_CHARS} 字`, 400);
+      }
+      const tools = Array.isArray(body.tools) ? body.tools : [];
+      const unknownTool = tools.find((name) => !KNOWLEDGE_TOOLS.includes(String(name ?? '')));
+      if (unknownTool) throw toolError(`不認得的工具觸發：${flat(unknownTool, 40)}（目前只有 ${KNOWLEDGE_TOOLS.join('、')}）`, 400);
+      const scope = body.scope === undefined ? 'guild' : String(body.scope);
+      if (!['global', 'guild', 'channel'].includes(scope)) throw toolError('scope 只能是 global、guild 或 channel', 400);
+
+      const result = saveKnowledgeCandidate(knowledgeStore, {
+        guildId: channel.guildId,
+        channelId: channel.id,
+        title,
+        body: text,
+        keywords,
+        tools,
+        always: body.always === true,
+        scope,
+        by: 'model',
+        byName,
+        sources: target ? [{ channelId: target.channelId, messageId: target.id, at: target.createdTimestamp }] : [],
+      });
+      if (result.error) throw toolError(result.error, 400);
+      knowledgeWrites.set(key, used + 1);
+      markKnowledgeDirty();
+      log(`MCP 提群知識 ${key}（${flat(title, 40)}，${result.existing ? '更新候選' : '新候選'}，scope=${scope}）`);
+      return {
+        text: `已收下「${title}」，等管理員確認後才會出現在聊天裡。${result.existing ? '（同名的候選已更新）' : ''}`,
+      };
+    },
     // 梗圖庫：把頻道裡一則訊息的圖存成 128～256px 的小圖，之後用 send_image 的 meme:<名稱> 送出。
     async 'meme-save'(body) {
       const { key, channel, sessionId } = await agentSender.resolve(body.token);
@@ -3674,6 +3816,7 @@ async function main() {
       agentSender.startTurn(key);
       memoryWrites.delete(key);
       noteWrites.delete(key);
+      knowledgeWrites.delete(key);
       memeSaves.delete(key);
       devFeedbackWrites.delete(key);
       devFeedbackEdits.delete(key);
@@ -4236,6 +4379,21 @@ async function main() {
       });
     }
 
+    // 群知識：管理員確認過的長期資料。關鍵字命中或 always 才帶；工具用的在生圖那邊另外附。
+    let knowledgeHint = '';
+    if (cfg.discord.knowledge.enabled && guild) {
+      if (!knowledgeShown.has(key)) knowledgeShown.set(key, new Map());
+      knowledgeHint = formatKnowledgeBlock(knowledgeStore, {
+        guildId: job.guildId,
+        channelId: job.channel.id,
+        text: entries.map((entry) => `${entry.rawText ?? entry.text}\n${entry.quote}`).join('\n'),
+        shown: knowledgeShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+        maxChars: cfg.discord.knowledge.maxChars,
+        guildNameOf: (guildId) => client.guilds.cache.get(guildId)?.name ?? '',
+      });
+    }
+
     // 表情：本伺服器前 8 個＋跨伺服器前 4 個，加上本伺服器其餘表情的情緒索引。
     // 兩段各自去重（同會話帶過、沒變就不重帶），索引才不會被常用表情的排序拖著每批重送。
     let emojiHint = '';
@@ -4293,7 +4451,7 @@ async function main() {
       chatty ? '' : formatActivityLine(activity.stats(key)),
     ].filter(Boolean).join('\n');
     return {
-      text: [feedback, context, slangHint, styleHint, notesHint, memory, emojiHint, memeHintText, formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled }), blacklistStatus, batch, time].filter(Boolean).join('\n'),
+      text: [feedback, context, slangHint, styleHint, knowledgeHint, notesHint, memory, emojiHint, memeHintText, formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled }), blacklistStatus, batch, time].filter(Boolean).join('\n'),
       images,
       feedbackEntries,
     };
@@ -6190,6 +6348,7 @@ async function main() {
               today: slangDayKey === localDayKey() ? slangDayCount : 0,
               maxPerDay: cfg.discord.slang.maxPerDay,
             },
+            knowledge: { enabled: cfg.discord.knowledge.enabled, ...knowledgeStats(knowledgeStore) },
             triggers: triggerStats(triggerStore, { now: Date.now(), top: 3 }),
             ignored: ignoreList(ignoreStore),
             console: { host, port },
@@ -6241,6 +6400,105 @@ async function main() {
           deleteNote: (id) => {
             const removed = deleteNoteById(notesStore, id);
             if (removed) markNotesDirty();
+            return removed;
+          },
+          knowledge: () => ({
+            enabled: cfg.discord.knowledge.enabled,
+            stats: knowledgeStats(knowledgeStore),
+            entries: knowledgeOverview(knowledgeStore).map((entry) => {
+              const guild = client.guilds.cache.get(entry.guildId);
+              const channel = client.channels.cache.get(entry.channelId);
+              return {
+                ...entry,
+                guildName: guild?.name ?? entry.guildId,
+                channelName: channel?.name ?? entry.channelId,
+              };
+            }),
+          }),
+          // 管理員自己建的：貼訊息連結就抓原文，建完直接生效，不用再按確認。
+          knowledgeCreate: async (body) => {
+            const link = parseMessageLink(body?.link);
+            let title = flat(body?.title, TITLE_MAX_CHARS);
+            let text = String(body?.body ?? '').trim();
+            let guildId = '';
+            let channelId = '';
+            let source = null;
+            if (link) {
+              const channel = await client.channels.fetch(link.channelId).catch(() => null);
+              if (!channel?.guildId || channel.guildId !== link.guildId) {
+                throw new Error('找不到那個頻道：bot 要看得到，而且要是同一個伺服器');
+              }
+              if (typeof channel.messages?.fetch !== 'function') {
+                throw new Error('這個頻道類型不支援讀單一訊息（論壇／部分討論串），改貼一般頻道的訊息連結');
+              }
+              const message = await channel.messages.fetch(link.messageId).catch(() => null);
+              if (!message) throw new Error('找不到那則訊息（可能刪掉了）');
+              guildId = link.guildId;
+              channelId = link.channelId;
+              source = { channelId, messageId: message.id, at: message.createdTimestamp };
+              if (!text) text = resolveMentions(String(message.content ?? '').trim(), message);
+              if (!title) title = flat(text, Math.min(30, TITLE_MAX_CHARS));
+            } else {
+              const channelIdFromBody = String(body?.channelId ?? '').replace(/[^\d]/g, '').slice(0, 25);
+              const channel = channelIdFromBody ? client.channels.cache.get(channelIdFromBody) : null;
+              if (!channel?.guildId) throw new Error('要貼訊息連結，或指定一個 bot 看得到的頻道');
+              guildId = channel.guildId;
+              channelId = channel.id;
+            }
+            if (!title) throw new Error('title 是空的');
+            if (!text) throw new Error('沒有內容：貼的訊息是空的，或先在下面的欄位填內容');
+            if (text.length > KNOWLEDGE_BODY_MAX_CHARS) {
+              throw new Error(`內容超過 ${KNOWLEDGE_BODY_MAX_CHARS} 字，先在下面的欄位刪成重點再送出`);
+            }
+            if (knowledgeStats(knowledgeStore).approved >= MAX_APPROVED) {
+              throw new Error(`已確認的知識最多 ${MAX_APPROVED} 條，先刪掉一條再加`);
+            }
+            const result = saveKnowledgeCandidate(knowledgeStore, {
+              guildId,
+              channelId,
+              title,
+              body: text,
+              keywords: body?.keywords,
+              tools: body?.tools,
+              always: body?.always === true,
+              scope: body?.scope,
+              by: 'admin',
+              byName: '管理員',
+              sources: source ? [source] : [],
+            });
+            if (result.error) throw new Error(result.error);
+            confirmKnowledge(knowledgeStore, result.entry.id);
+            markKnowledgeDirty();
+            log(`控制台新增群知識「${flat(result.entry.title, 40)}」（${result.entry.scope}）`);
+            return { ok: true, entry: result.entry };
+          },
+          knowledgeConfirm: (id, patch = {}) => {
+            const entry = knowledgeStore.entries.find((item) => item.id === id);
+            if (!entry) return null;
+            // 候選可能在這段時間被別人用同一個標題覆寫；管理員審的是舊內容，不能直接確認。
+            if (!patch.updatedAt || entry.updatedAt !== patch.updatedAt) {
+              throw new Error('這條知識在確認前被改過，請重新整理再確認');
+            }
+            if (entry.status !== 'approved' && knowledgeStats(knowledgeStore).approved >= MAX_APPROVED) {
+              throw new Error(`已確認的知識最多 ${MAX_APPROVED} 條，先刪掉一條再確認`);
+            }
+            const updated = confirmKnowledge(knowledgeStore, id, patch);
+            if (updated) markKnowledgeDirty();
+            return updated;
+          },
+          knowledgeReject: (id) => {
+            const entry = rejectKnowledge(knowledgeStore, id);
+            if (entry) markKnowledgeDirty();
+            return entry;
+          },
+          knowledgeUpdate: (id, patch = {}) => {
+            const entry = updateKnowledge(knowledgeStore, id, patch);
+            if (entry) markKnowledgeDirty();
+            return entry;
+          },
+          knowledgeDelete: (id) => {
+            const removed = deleteKnowledge(knowledgeStore, id);
+            if (removed) markKnowledgeDirty();
             return removed;
           },
           memes: () => ({
@@ -6393,6 +6651,7 @@ async function main() {
     log(`收到 ${signal}，結束中…`);
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
+    try { flushKnowledge(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushMemes(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushDevFeedback(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushEmojiUsage(); } catch { /* 收尾失敗不影響結束 */ }

@@ -461,6 +461,30 @@ tool(
 );
 
 tool(
+  'propose_knowledge',
+  '把群友提供的設定、規則、世界觀收成候選知識（繪圖設定、角色關係、群規、作品背景都算）。'
+    + '這不是事件，不要用 note_event：知識是永久的、可以到 2000 字，之後靠關鍵字或工具命中才帶進 prompt。'
+    + '只有管理員在控制台確認後才會生效；收下時要跟對方說「等管理員確認」。'
+    + '群友貼了一長串原文時，message 給那則的 #編號、body 留空，橋接會抓原文，不要自己重打。',
+  {
+    token: sessionToken,
+    title: z.string().max(60).describe('標題，最多 60 字，例如「大肥魚的繪圖設定」「本群規則」'),
+    body: z.string().max(2000).optional().describe('內容，最多 2000 字；有給 message 可以省略（用原文）'),
+    message: messageRef('這份資料是在哪一則訊息說的（選填，用來標來源與抓原文）'),
+    keywords: z.array(z.string().max(24)).max(8).optional()
+      .describe('關鍵字，最多 8 個；這批訊息出現任何一個才帶進 prompt'),
+    tools: z.array(z.enum(['generate_image'])).max(4).optional()
+      .describe('工具觸發：generate_image = 每次生圖都附上'),
+    always: z.boolean().optional()
+      .describe('true = 每批都帶；只能放 300 字以內的短規則，長內容用 keywords'),
+    scope: z.enum(['global', 'guild', 'channel']).optional()
+      .describe('可見範圍：guild（預設，同伺服器）／channel（只這個頻道）／global（所有伺服器，只有管理員確認後才生效）'),
+  },
+  '/knowledge',
+  (result) => String(result.text ?? ''),
+);
+
+tool(
   'save_meme',
   '把頻道裡一則訊息的圖存進梗圖庫（縮成長邊 256px 以內的小圖），之後用 send_image 的 file="meme:名稱" 送出。'
     + '自己畫的圖要先 send_image 送進頻道，再用那則回傳的 #編號存；群友貼的圖只有他本人或管理員叫你存的那一輪才存得了。'

@@ -594,6 +594,7 @@ try {
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries, learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         logs: () => [],
       },
     });
@@ -666,6 +667,86 @@ try {
     }
   });
 
+  if (!original) await test('Discord 控制台：群知識可確認、可從訊息連結新增', async () => {
+    const entries = [
+      {
+        id: 'k1', title: '繪圖設定', body: '畫大肥魚時保留鯨魚尾', scope: 'guild', guildId: 'g1', channelId: 'c1',
+        triggers: { always: false, keywords: ['畫圖'], tools: [] }, status: 'candidate', byName: 'Sora',
+        guildName: '測試伺服器', channelName: '閒聊', updatedAt: '2026-11-10T00:00:00.000Z',
+      },
+      {
+        id: 'k2', title: '群規', body: '不要貼政治', scope: 'channel', guildId: 'g1', channelId: 'c1',
+        triggers: { always: true, keywords: [], tools: [] }, status: 'approved', byName: '管理員',
+        guildName: '測試伺服器', channelName: '閒聊', updatedAt: '2026-11-10T00:00:00.000Z',
+      },
+    ];
+    const writes = [];
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({
+          enabled: true,
+          stats: { total: 2, candidate: 1, approved: 1, rejected: 0 },
+          entries,
+        }),
+        knowledgeConfirm: (id, patch) => {
+          writes.push({ action: 'confirm', id, patch });
+          return entries.find((entry) => entry.id === id) ?? null;
+        },
+        knowledgeCreate: (body) => {
+          writes.push({ action: 'create', body });
+          return { ok: true, entry: { title: body.title || '#閒聊 的資料' } };
+        },
+        logs: () => [],
+      },
+    });
+    const dcBase = `http://127.0.0.1:${dc.server.address().port}`;
+    const dcContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    try {
+      const dcErrors = [];
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      p.on('pageerror', error => dcErrors.push(error.message));
+      await p.goto(`${dcBase}/?token=t#knowledge`);
+      await p.waitForFunction(() => document.querySelectorAll('#knowledge-rows tr').length === 2);
+      const bodyText = await p.locator('#knowledge-rows').textContent();
+      assert.match(bodyText, /繪圖設定/);
+      assert.match(bodyText, /詞：畫圖/);
+      assert.match(bodyText, /每批/);
+      assert.match(await p.locator('#knowledge-count').textContent(), /待確認 1｜已確認 1/);
+
+      const confirmRequest = p.waitForRequest(r => new URL(r.url()).pathname === '/api/knowledge/confirm');
+      await p.locator('#knowledge-rows tr').filter({ hasText: '繪圖設定' }).locator('button[data-action="confirm"]').click();
+      assert.deepEqual((await confirmRequest).postDataJSON(), { id: 'k1', updatedAt: '2026-11-10T00:00:00.000Z' });
+
+      await p.fill('#knowledge-link', 'https://discord.com/channels/1/2/3');
+      await p.fill('#knowledge-title', '新的設定');
+      await p.fill('#knowledge-keywords', '畫圖, 繪圖');
+      await p.locator('#knowledge-create').click();
+      await p.waitForFunction(() => document.querySelector('#knowledge-create-note').textContent.includes('已建立'));
+      const create = writes.find((item) => item.action === 'create');
+      assert.equal(create.body.link, 'https://discord.com/channels/1/2/3');
+      assert.equal(create.body.title, '新的設定');
+      assert.deepEqual(create.body.keywords, ['畫圖', '繪圖']);
+      assert.equal(create.body.always, false);
+      assert.equal(create.body.scope, 'guild');
+      assert.equal(await p.locator('#knowledge-link').inputValue(), '', '建立後清空表單');
+      assert.deepEqual(dcErrors, []);
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   if (!original) await test('Discord 控制台：黑話與頻道標籤可搜尋', async () => {
     let entries = [
       { id: 's1', kind: 'slang', term: '大肥魚', meaning: '群內 AI 的暱稱', usage: '呼叫 AI 時用', status: 'confirmed', seen: 1 },
@@ -686,6 +767,7 @@ try {
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries, learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         logs: () => [],
       },
     });
@@ -764,6 +846,7 @@ try {
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries, learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         logs: () => [],
       },
     });
@@ -826,6 +909,7 @@ try {
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         triggers: () => ({ todayUsers: users.length, totalUsers: users.length, totalTriggers: 100, totalDraws: 0, users }),
         logs: () => [],
       },
@@ -895,6 +979,7 @@ try {
         sessions: () => [{ key: 'discord:ch:123456789012345678', label: '#很長的頻道名稱 · 很長的伺服器名稱', sessionId: 'ses_0123456789abcdefghijklmn', lastActive: old, quietUntil: old, pending: 'question' }],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         // 伺服器已按「次數多、最近觸發」排好；同次數時前端不能再重排。
         triggers: () => ({ todayUsers: 2, totalUsers: 2, totalTriggers: 2, totalDraws: 0, users: [
           { userId: '2', name: 'b-user', count: 1, drawCount: 0, channelName: '#很長的頻道名稱', lastAt: old + 1000, firstAt: old },
@@ -958,6 +1043,7 @@ try {
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         logs: () => [],
       },
     });
@@ -1030,6 +1116,7 @@ try {
         config: () => current,
         updateConfig: async (body) => { posts.push(body); return current; },
         slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         logs: () => [],
       },
     });
@@ -1102,6 +1189,7 @@ try {
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         logs: () => [],
         devFeedback: () => ({ items }),
         deleteDevFeedback: (id) => {

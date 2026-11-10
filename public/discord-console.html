@@ -125,6 +125,7 @@
     <button role="tab" id="tabbtn-overview" aria-controls="tab-overview" data-tab="overview">總覽</button>
     <button role="tab" id="tabbtn-usage" aria-controls="tab-usage" data-tab="usage">花費</button>
     <button role="tab" id="tabbtn-slang" aria-controls="tab-slang" data-tab="slang">黑話</button>
+    <button role="tab" id="tabbtn-knowledge" aria-controls="tab-knowledge" data-tab="knowledge">知識</button>
     <button role="tab" id="tabbtn-triggers" aria-controls="tab-triggers" data-tab="triggers">對話</button>
     <button role="tab" id="tabbtn-memory" aria-controls="tab-memory" data-tab="memory">記憶</button>
     <button role="tab" id="tabbtn-sessions" aria-controls="tab-sessions" data-tab="sessions">會話</button>
@@ -416,6 +417,54 @@
   </section>
   </div>
 
+  <div class="tab-panel" role="tabpanel" id="tab-knowledge" aria-labelledby="tabbtn-knowledge" hidden>
+  <section class="card">
+    <h2>群知識 <span id="knowledge-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">
+      群友提供的設定、規則、世界觀。候選要確認後才會進 prompt：
+      「每批」= 每次對話都帶（單條 300 字以內）、「關鍵字」= 這批訊息命中才帶、「工具」= 呼叫那個工具時由橋接帶（生圖目前是 generate_image）。
+    </p>
+    <div class="row" style="margin-bottom:10px">
+      <input id="knowledge-search" type="search" aria-label="搜尋群知識" placeholder="搜尋標題、內容、觸發詞、來源" style="max-width:300px">
+      <div class="seg" id="knowledge-filter"></div>
+    </div>
+    <div class="table-wrap">
+      <table class="entry-table">
+        <colgroup><col style="width:20%"><col style="width:22%"><col style="width:14%"><col style="width:64px"><col style="width:14%"><col style="width:112px"></colgroup>
+        <thead><tr><th>標題</th><th>觸發</th><th>範圍</th><th>狀態</th><th>來源</th><th>操作</th></tr></thead>
+        <tbody id="knowledge-rows"></tbody>
+      </table>
+    </div>
+    <div class="row pager" id="knowledge-pager"></div>
+  </section>
+
+  <section class="card">
+    <h2>新增（直接生效）</h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">貼一則 Discord 訊息連結就抓原文當內容；也可以自己填。建立後立刻生效，不用再按確認。</p>
+    <div class="row" style="margin-bottom:8px">
+      <input id="knowledge-link" type="url" placeholder="https://discord.com/channels/伺服器/頻道/訊息" style="flex:1;min-width:280px" aria-label="訊息連結">
+      <select id="knowledge-scope" aria-label="可見範圍">
+        <option value="guild">同伺服器</option>
+        <option value="channel">只這個頻道</option>
+        <option value="global">所有伺服器</option>
+      </select>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <input id="knowledge-title" maxlength="60" placeholder="標題（最多 60 字）" style="flex:1;min-width:240px" aria-label="標題">
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <input id="knowledge-keywords" placeholder="關鍵字，逗號分開（最多 8 個）" style="flex:1;min-width:260px" aria-label="關鍵字">
+      <input id="knowledge-tools" placeholder="工具觸發（目前只有 generate_image）" style="flex:1;min-width:240px" aria-label="工具觸發">
+      <label style="display:flex;align-items:center;gap:6px;white-space:nowrap"><input id="knowledge-always" type="checkbox" style="width:auto"> 每批都帶</label>
+    </div>
+    <textarea id="knowledge-body" rows="6" maxlength="2000" placeholder="內容（最多 2000 字）；貼了連結就留空用原文" style="margin-bottom:8px"></textarea>
+    <div class="row">
+      <button id="knowledge-create">建立</button>
+      <span id="knowledge-create-note" class="muted" style="font-size:12px"></span>
+    </div>
+  </section>
+  </div>
+
   <div class="tab-panel" role="tabpanel" id="tab-triggers" aria-labelledby="tabbtn-triggers" hidden>
   <section class="card">
     <h2>對話次數 <span id="trigger-summary" class="muted"></span></h2>
@@ -559,6 +608,7 @@
     if (location.hash !== '#' + target.dataset.tab) history.replaceState(null, '', '#' + target.dataset.tab);
     if (target.dataset.tab === 'triggers') void refreshTriggers();
     if (target.dataset.tab === 'dev-feedback') void refreshDevFeedback();
+    if (target.dataset.tab === 'knowledge') void refreshKnowledge();
   }
   document.getElementById('tabs').addEventListener('click', (event) => {
     const button = event.target.closest('[role="tab"]');
@@ -693,6 +743,7 @@
       ['圖片', s.media.enabled ? ('≤' + Math.round(s.media.maxBytes / 1048576) + 'MB，長邊 ≤' + s.media.maxLongEdge + '，最多 ' + s.media.maxCount + ' 張') : '關閉'],
       ['表情目錄', (s.emoji?.entries ?? 0) + ' 條／' + (s.emoji?.guilds ?? 0) + ' 個伺服器'],
       ['黑話', s.slang ? (s.slang.enabled ? ('待確認 ' + s.slang.candidate + '｜已確認 ' + s.slang.confirmed) : '關閉') : '—'],
+      ['群知識', s.knowledge ? (s.knowledge.enabled ? ('待確認 ' + s.knowledge.candidate + '｜已確認 ' + s.knowledge.approved) : '關閉') : '—'],
       ['觸發對話', s.triggers
         ? ('今天 ' + s.triggers.todayUsers + ' 人｜總計 ' + s.triggers.totalUsers + ' 人（' + s.triggers.totalTriggers + ' 次｜畫圖 ' + (s.triggers.totalDraws ?? 0) + ' 次）' + (topTriggers ? '｜最常：' + topTriggers : ''))
         : '—'],
@@ -1047,10 +1098,12 @@
   let slangEntries = [];
   let lastSlangLearning = null;
   const SLANG_LABEL = { candidate: '待確認', confirmed: '已確認', rejected: '已拒絕' };
+  let knowledgeEntries = [];
+  const KNOWLEDGE_LABEL = { candidate: '待確認', approved: '已確認', rejected: '已拒絕' };
 
   const LIST_PAGE_SIZE = 20;
   // 自動重新整理每 5 秒重畫一次，過濾和頁碼放在這裡才不會被重設。
-  const listView = { slang: { status: 'all', page: 1, query: '' }, style: { status: 'all', page: 1, query: '', channel: 'all' } };
+  const listView = { slang: { status: 'all', page: 1, query: '' }, style: { status: 'all', page: 1, query: '', channel: 'all' }, knowledge: { status: 'all', page: 1, query: '' } };
   // 群友記憶、頻道筆記、梗圖共用：名稱／ID 篩選，每頁 20 筆。
   const pagedLists = { memory: { query: '', page: 1, data: null }, note: { query: '', page: 1, data: null }, meme: { query: '', page: 1, data: null } };
   const LIST_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']];
@@ -1099,17 +1152,22 @@
     );
   }
 
-  function renderEntryList(kind, all, { cells, fields, empty }) {
+  function renderEntryList(kind, all, { cells, fields, empty, filters = LIST_FILTERS }) {
     const view = listView[kind];
     // 搜尋欄位由呼叫端決定；篩選後的筆數才是分頁和狀態計數的基準。
     const query = view.query.trim().toLowerCase();
     const matched = query
       ? all.filter((entry) => fields(entry).some((value) => String(value ?? '').toLowerCase().includes(query)))
       : all;
-    const counts = { all: matched.length, candidate: 0, confirmed: 0, rejected: 0 };
+    const counts = { all: matched.length };
+    for (const [status] of filters) counts[status] ??= 0;
     for (const entry of matched) if (counts[entry.status] !== undefined) counts[entry.status] += 1;
-    $(kind + '-count').textContent = `（待確認 ${counts.candidate}｜已確認 ${counts.confirmed}｜已拒絕 ${counts.rejected}）`;
-    $(kind + '-filter').replaceChildren(...LIST_FILTERS.map(([status, label]) => {
+    const summary = filters
+      .filter(([status]) => status !== 'all')
+      .map(([status, label]) => `${label} ${counts[status]}`)
+      .join('｜');
+    $(kind + '-count').textContent = `（${summary}）`;
+    $(kind + '-filter').replaceChildren(...filters.map(([status, label]) => {
       const button = el('button', { type: 'button', dataset: { list: kind, status }, textContent: `${label} ${counts[status]}` });
       button.setAttribute('aria-pressed', String(view.status === status));
       return button;
@@ -1195,6 +1253,57 @@
           el('td', { title: String(entry.meaning ?? '') }, el('div', { className: 'cell-clamp' }, entry.meaning)),
           el('td', { className: 'nowrap' }, SLANG_LABEL[entry.status] ?? entry.status),
           el('td', { className: 'nowrap' }, String(entry.seen ?? 0)),
+        ];
+      },
+    });
+  }
+
+  const KNOWLEDGE_FILTERS = [['all', '全部'], ['candidate', '待確認'], ['approved', '已確認'], ['rejected', '已拒絕']];
+  const KNOWLEDGE_SCOPES = { global: '全域', guild: '同伺服器', channel: '只這個頻道' };
+
+  function knowledgeTriggerLabel(entry) {
+    const triggers = entry.triggers ?? {};
+    const parts = [];
+    if (triggers.always) parts.push('每批');
+    if (triggers.keywords?.length) parts.push('詞：' + triggers.keywords.join('、'));
+    if (triggers.tools?.length) parts.push('工具：' + triggers.tools.join('、'));
+    return parts.join('｜');
+  }
+
+  function renderKnowledge(data) {
+    knowledgeEntries = data?.entries ?? [];
+    renderEntryList('knowledge', knowledgeEntries, {
+      filters: KNOWLEDGE_FILTERS,
+      empty: '還沒有群知識。群友請模型記下設定時會進候選；也可以直接貼訊息連結新增。',
+      fields: (entry) => [
+        entry.title,
+        entry.body,
+        (entry.triggers?.keywords ?? []).join(' '),
+        (entry.triggers?.tools ?? []).join(' '),
+        entry.byName,
+        entry.guildName,
+        entry.channelName,
+      ],
+      cells: (entry) => {
+        const scope = KNOWLEDGE_SCOPES[entry.scope] ?? entry.scope;
+        const where = entry.scope === 'channel'
+          ? `#${entry.channelName || entry.channelId}`
+          : (entry.scope === 'guild' ? (entry.guildName || entry.guildId) : '所有伺服器');
+        const source = (entry.sources ?? [])[0];
+        const link = source
+          ? `https://discord.com/channels/${entry.guildId}/${source.channelId}/${source.messageId}`
+          : '';
+        const sourceCell = link
+          ? el('a', { href: link, target: '_blank', rel: 'noreferrer', textContent: entry.byName || '原訊息' })
+          : (entry.byName || '—');
+        return [
+          el('td', { title: String(entry.body ?? '') }, el('div', { className: 'cell-clamp' },
+            el('strong', {}, entry.title),
+            el('div', { className: 'muted' }, entry.body))),
+          el('td', { className: 'muted', title: knowledgeTriggerLabel(entry) }, el('div', { className: 'cell-clamp' }, knowledgeTriggerLabel(entry) || '—')),
+          el('td', { className: 'muted', title: where }, el('div', { className: 'cell-clamp' }, `${scope}：${where}`)),
+          el('td', { className: 'nowrap' }, KNOWLEDGE_LABEL[entry.status] ?? entry.status),
+          el('td', { className: 'muted', title: entry.byName || '' }, el('div', { className: 'cell-clamp' }, sourceCell)),
         ];
       },
     });
@@ -1628,14 +1737,22 @@
     } catch { /* 5 秒後的 refresh 會再試 */ }
   }
 
+  async function refreshKnowledge() {
+    try {
+      renderKnowledge(await api('/api/knowledge'));
+    } catch { /* 5 秒後的 refresh 會再試 */ }
+  }
+
   async function refresh() {
     const triggersPromise = !$('tab-triggers').hidden ? api('/api/triggers') : Promise.resolve(null);
     const devFeedbackPromise = !$('tab-dev-feedback').hidden ? api('/api/dev-feedback') : Promise.resolve(null);
+    // 知識分頁才抓：條目可能很長，沒在看就不要每 5 秒搬一次。
+    const knowledgePromise = !$('tab-knowledge').hidden ? api('/api/knowledge') : Promise.resolve(null);
     const results = await Promise.allSettled([
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
       api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise, api('/api/followups'),
-      api('/api/trade/overview'), api('/api/memes'),
+      api('/api/trade/overview'), api('/api/memes'), knowledgePromise,
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -1654,6 +1771,7 @@
     if (results[12].status === 'fulfilled') renderFollowups(results[12].value);
     if (results[13].status === 'fulfilled') renderTrade(results[13].value);
     if (results[14].status === 'fulfilled') renderMemes(results[14].value);
+    if (results[15].status === 'fulfilled' && results[15].value) renderKnowledge(results[15].value);
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -1798,6 +1916,105 @@
       });
     }
   }
+
+  // 群知識：搜尋、篩選、分頁各自重畫；新增表單只處理建立。
+  $('knowledge-search').value = listView.knowledge.query;
+  $('knowledge-rows').addEventListener('click', onKnowledgeAction);
+  $('knowledge-search').addEventListener('input', (event) => {
+    listView.knowledge.query = event.target.value;
+    listView.knowledge.page = 1;
+    renderKnowledge({ entries: knowledgeEntries });
+  });
+  for (const part of ['-filter', '-pager']) {
+    $('knowledge' + part).addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-list]');
+      if (!button || button.disabled) return;
+      const view = listView[button.dataset.list];
+      if (button.dataset.status) { view.status = button.dataset.status; view.page = 1; }
+      else view.page = Number(button.dataset.page) || 1;
+      renderKnowledge({ entries: knowledgeEntries });
+    });
+  }
+
+  const splitCommaList = (value) => String(value ?? '').split(/[,，、]+/).map((item) => item.trim()).filter(Boolean);
+
+  async function onKnowledgeAction(event) {
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const entry = knowledgeEntries.find((item) => item.id === button.dataset.id);
+    if (!entry) return;
+    const action = button.dataset.action;
+    button.disabled = true;
+    try {
+      if (action === 'delete') {
+        if (!confirm('刪除「' + entry.title + '」？')) return;
+        await api('/api/knowledge/delete', { method: 'POST', body: JSON.stringify({ id: entry.id }) });
+      } else if (action === 'edit') {
+        const title = prompt('標題', entry.title);
+        if (title === null) return;
+        const keywords = prompt('關鍵字（逗號分開，可留空）', (entry.triggers?.keywords ?? []).join('，'));
+        if (keywords === null) return;
+        const tools = prompt('工具觸發（目前只有 generate_image，可留空）', (entry.triggers?.tools ?? []).join('，'));
+        if (tools === null) return;
+        const scope = prompt('範圍：global／guild／channel', entry.scope);
+        if (scope === null) return;
+        // 編輯不會動正文：要改長文就刪掉重貼一次，避免 prompt() 把換行壓成一條。
+        await api('/api/knowledge/update', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: entry.id,
+            title,
+            keywords: splitCommaList(keywords),
+            tools: splitCommaList(tools),
+            scope: scope.trim(),
+            // 原本是 always 的就維持，避免編輯一次就默默失去「每批都帶」。
+            always: entry.triggers?.always === true,
+          }),
+        });
+      } else {
+        const payload = action === 'confirm' ? { id: entry.id, updatedAt: entry.updatedAt } : { id: entry.id };
+        await api('/api/knowledge/' + action, { method: 'POST', body: JSON.stringify(payload) });
+      }
+      await refresh();
+    } catch (error) {
+      alert('操作失敗：' + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  $('knowledge-create').addEventListener('click', async () => {
+    const link = $('knowledge-link').value.trim();
+    if (!link) {
+      $('knowledge-create-note').textContent = '先貼一則訊息連結：建立時要用它決定伺服器和頻道。';
+      return;
+    }
+    const button = $('knowledge-create');
+    button.disabled = true;
+    $('knowledge-create-note').textContent = '建立中…';
+    try {
+      const result = await api('/api/knowledge/create', {
+        method: 'POST',
+        body: JSON.stringify({
+          link,
+          title: $('knowledge-title').value.trim(),
+          body: $('knowledge-body').value.trim(),
+          keywords: splitCommaList($('knowledge-keywords').value),
+          tools: splitCommaList($('knowledge-tools').value),
+          always: $('knowledge-always').checked,
+          scope: $('knowledge-scope').value,
+        }),
+      });
+      $('knowledge-create-note').textContent = `已建立「${result.entry?.title ?? ''}」`;
+      for (const id of ['knowledge-link', 'knowledge-title', 'knowledge-keywords', 'knowledge-tools', 'knowledge-body']) $(id).value = '';
+      $('knowledge-always').checked = false;
+      await refresh();
+    } catch (error) {
+      $('knowledge-create-note').textContent = '失敗：' + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   $('style-channel').addEventListener('change', (event) => {
     listView.style.channel = event.target.value;

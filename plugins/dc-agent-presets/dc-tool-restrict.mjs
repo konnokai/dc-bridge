@@ -91,6 +91,7 @@ const DISCORD_TOOLS = [
   'mcp__discord__note_event',
   'mcp__discord__search_notes',
   'mcp__discord__forget_note',
+  'mcp__discord__propose_knowledge',
   'mcp__discord__save_meme',
   'mcp__discord__search_memes',
   'mcp__discord__forget_meme',
