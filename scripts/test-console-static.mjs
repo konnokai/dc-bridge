@@ -88,7 +88,7 @@ console.log('## Discord 控制台');
   ok(/id="memes-count"/.test(dc) && /id="meme-rows"/.test(dc), '梗圖卡片有計數與表格');
   ok(/api\('\/api\/memes'\)/.test(dc) && /api\('\/api\/memes\/delete'/.test(dc) && /\/api\/memes\/image\?id=/.test(dc),
     '梗圖卡片接上查詢、刪除與縮圖端點');
-  ok(/authorization: 'Bearer ' \+ token/.test(dc.slice(dc.indexOf('async function loadMemeThumb'), dc.indexOf('function renderMemes'))),
+  ok(/authorization: 'Bearer ' \+ token/.test(dc.slice(dc.indexOf('async function fetchMemeThumb'), dc.indexOf('function renderMemes'))),
     '梗圖縮圖用標頭帶 token，不放進網址');
   ok(/img-src 'self' blob:/.test(fs.readFileSync(path.join(ROOT, 'src', 'core', 'discord-console.mjs'), 'utf8')),
     '控制台 CSP 允許 blob: 圖片（縮圖用）');

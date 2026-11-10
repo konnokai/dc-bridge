@@ -6274,6 +6274,9 @@ async function main() {
     .sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));
 
   let consoleHandle = null;
+  // 控制台股盤顯示名稱：uid -> { name, at }，避免每 5 秒都打 REST。
+  const tradeNameCache = new Map();
+  const TRADE_NAME_TTL_MS = 10 * 60_000;
   if (cfg.discord.console.enabled) {
     const { token: consoleToken, created } = resolveConsoleToken({
       configured: cfg.discord.console.token || process.env.DISCORD_CONSOLE_TOKEN || '',
@@ -6628,11 +6631,50 @@ async function main() {
           trade: async (name) => {
             if (!tradeService) return { enabled: false, reason: '模擬股票沒有開啟或啟動失敗' };
             const data = await tradeService.overview();
-            if (name === 'accounts') return { enabled: true, accounts: data.accounts, market: data.market };
-            if (name === 'orders') return { enabled: true, orders: data.orders };
+            // 設定檔只存 uid；控制台要看得懂是誰，這裡補顯示名稱。
+            // 先查快取，再查 guild member／user 快取，都沒有才打一次 REST；同一個 uid 快取 10 分鐘。
+            const nameOf = async (userId, guildId = '') => {
+              const key = `${guildId}:${userId}`;
+              const cached = tradeNameCache.get(key);
+              if (cached && Date.now() - cached.at < (cached.name ? TRADE_NAME_TTL_MS : 60_000)) {
+                return cached.name;
+              }
+              const guild = guildId ? client.guilds.cache.get(guildId) : null;
+              const member = guild?.members.cache.get(userId)
+                ?? [...client.guilds.cache.values()].map((item) => item.members.cache.get(userId)).find(Boolean);
+              let display = member?.displayName
+                || client.users.cache.get(userId)?.displayName
+                || client.users.cache.get(userId)?.username
+                || '';
+              if (!display) {
+                display = (await client.users.fetch(userId).catch(() => null))?.displayName || '';
+              }
+              tradeNameCache.set(key, { name: display, at: Date.now() });
+              return display;
+            };
+            const withNames = async (list, key, guildKey = '') => {
+              const sources = new Map(); // id -> 下單的伺服器（同名 id 只查一次）
+              for (const item of list) {
+                const id = String(item[key] ?? '');
+                if (!id.startsWith('user:') || sources.has(id)) continue;
+                sources.set(id, guildKey ? String(item[guildKey] ?? '') : '');
+              }
+              const names = new Map();
+              await Promise.all([...sources].map(async ([id, guildId]) => {
+                names.set(id, await nameOf(id.slice('user:'.length), guildId));
+              }));
+              return list.map((item) => {
+                const display = names.get(String(item[key] ?? ''));
+                return display ? { ...item, accountName: display } : item;
+              });
+            };
+            const accounts = await withNames(data.accounts ?? [], 'accountId');
+            const orders = await withNames(data.orders ?? [], 'account_id', 'guild_id');
+            if (name === 'accounts') return { enabled: true, accounts, market: data.market };
+            if (name === 'orders') return { enabled: true, orders };
             if (name === 'quotes') return { enabled: true, quotes: data.quotes };
             if (name === 'bot') return { enabled: true, botRuns: data.botRuns, botEnabled: data.botEnabled, botAccount: data.botAccount };
-            return data;
+            return { ...data, accounts, orders };
           },
         },
       });

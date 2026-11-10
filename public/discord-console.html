@@ -50,6 +50,10 @@
   .nowrap { white-space: nowrap; }
   .entry-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-content: start; }
   .entry-actions button { height: 28px; padding: 0 6px; font-size: 12px; white-space: nowrap; }
+  .cell-title { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .cell-title strong { overflow-wrap: anywhere; }
+  .link-button { background: none; border: 0; padding: 0; color: var(--accent); font-size: 11px; cursor: pointer; }
+  .link-button:hover { text-decoration: underline; filter: none; }
   .action-slot { display: block; height: 28px; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   th .sort { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
@@ -92,6 +96,22 @@
   .gate { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
   .gate form { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px; display: grid; gap: 12px; }
   .hidden { display: none !important; }
+  [hidden] { display: none !important; }
+  /* 知識全文：表格塞不下的內容用彈窗看，不另開頁。 */
+  .modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.62); }
+  .modal[hidden] { display: none !important; }
+  .modal-card { width: min(720px, 100%); max-height: min(85vh, 900px); overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; }
+  .modal-head { display: flex; align-items: start; gap: 12px; margin-bottom: 12px; position: sticky; top: 0; z-index: 1; background: var(--panel); }
+  .modal-head h2 { margin: 0; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+  .modal-head button { margin-left: auto; flex: none; }
+  .modal-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; margin-bottom: 12px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .modal-meta a { color: var(--accent); }
+  .modal-card.wide { width: min(960px, 100%); }
+  .modal-body { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.65; }
+  .modal-body.mono { font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+  .detail-image { display: block; max-width: 100%; max-height: 60vh; margin: 0 0 12px; border-radius: 10px; background: var(--bg); object-fit: contain; }
+  .thumb-button { display: block; padding: 0; background: none; border: 0; cursor: zoom-in; }
+  .thumb-button:hover { filter: brightness(1.1); }
   .tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; margin: 0 0 14px; background: var(--bg); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs button { flex: none; background: transparent; color: var(--muted); border-radius: 0; padding: 10px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
@@ -572,11 +592,23 @@
 
   <div class="tab-panel" role="tabpanel" id="tab-logs" aria-labelledby="tabbtn-logs" hidden>
   <section class="card">
-    <h2>日誌</h2>
+    <h2>日誌 <button id="logs-expand" class="ghost" type="button" style="font-size:12px;padding:2px 8px;margin-left:8px">放大</button></h2>
     <pre id="logs"></pre>
   </section>
   </div>
 </main>
+
+<div id="detail-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="detail-title" hidden>
+  <div class="modal-card" role="document" id="detail-card">
+    <div class="modal-head">
+      <h2 id="detail-title"></h2>
+      <button id="detail-close" class="ghost" type="button">關閉</button>
+    </div>
+    <div class="modal-meta" id="detail-meta"></div>
+    <img id="detail-image" class="detail-image" alt="" hidden>
+    <div class="modal-body" id="detail-body"></div>
+  </div>
+</div>
 
 <script>
 (() => {
@@ -593,6 +625,10 @@
     history.replaceState(null, '', location.pathname + location.hash);
   }
 
+  // 彈窗狀態放在 selectTab 之前：selectTab 在初始化時就會呼叫 closeDetail。
+  let detailReturn = null;
+  let detailToken = 0;
+
   // ── 分頁 ──────────────────────────────────────────────────────────────────
   // 目前分頁記在網址的 #：重新整理、分享連結都會停在同一頁。資料照常每 5 秒全部刷新，切頁不用重抓。
   const tabButtons = [...document.querySelectorAll('#tabs [role="tab"]')];
@@ -606,6 +642,8 @@
     }
     if (focus) target.focus();
     if (location.hash !== '#' + target.dataset.tab) history.replaceState(null, '', '#' + target.dataset.tab);
+    // 彈窗是覆蓋層，切分頁時一起關掉，免得它浮在別的分頁上。
+    closeDetail();
     if (target.dataset.tab === 'triggers') void refreshTriggers();
     if (target.dataset.tab === 'dev-feedback') void refreshDevFeedback();
     if (target.dataset.tab === 'knowledge') void refreshKnowledge();
@@ -1152,7 +1190,22 @@
     );
   }
 
-  function renderEntryList(kind, all, { cells, fields, empty, filters = LIST_FILTERS }) {
+  // 知識的「放大」放在標題旁；操作區維持四格，列高跟黑話／風格一致。
+  function knowledgeActions(entry) {
+    const button = (action, text, className = '') => el('button', {
+      className,
+      dataset: { action, id: entry.id },
+      textContent: text,
+    });
+    return el('div', { className: 'entry-actions' },
+      entry.status === 'candidate' ? button('confirm', '確認') : el('span', { className: 'action-slot' }),
+      entry.status !== 'rejected' ? button('reject', '拒絕', 'ghost') : el('span', { className: 'action-slot' }),
+      button('edit', '編輯', 'ghost'),
+      button('delete', '刪除', 'danger'),
+    );
+  }
+
+  function renderEntryList(kind, all, { cells, fields, empty, filters = LIST_FILTERS, actions = entryActions }) {
     const view = listView[kind];
     // 搜尋欄位由呼叫端決定；篩選後的筆數才是分頁和狀態計數的基準。
     const query = view.query.trim().toLowerCase();
@@ -1178,7 +1231,7 @@
     view.page = Math.min(Math.max(1, view.page), pages);
     const rows = shown.slice((view.page - 1) * LIST_PAGE_SIZE, view.page * LIST_PAGE_SIZE);
     $(kind + '-rows').replaceChildren(...(rows.length
-      ? rows.map((entry) => el('tr', {}, ...cells(entry), el('td', {}, entryActions(entry))))
+      ? rows.map((entry) => el('tr', {}, ...cells(entry), el('td', {}, actions(entry))))
       : [el('tr', {}, el('td', { colSpan: 6, className: 'muted empty-cell' }, query && !matched.length ? '沒有符合的項目。' : all.length ? '這個狀態沒有項目。' : empty))]));
     $(kind + '-pager').replaceChildren(...(pages > 1 ? [
       el('button', { type: 'button', className: 'ghost', dataset: { list: kind, page: String(view.page - 1) }, textContent: '上一頁', disabled: view.page <= 1 }),
@@ -1274,6 +1327,7 @@
     knowledgeEntries = data?.entries ?? [];
     renderEntryList('knowledge', knowledgeEntries, {
       filters: KNOWLEDGE_FILTERS,
+      actions: knowledgeActions,
       empty: '還沒有群知識。群友請模型記下設定時會進候選；也可以直接貼訊息連結新增。',
       fields: (entry) => [
         entry.title,
@@ -1297,9 +1351,11 @@
           ? el('a', { href: link, target: '_blank', rel: 'noreferrer', textContent: entry.byName || '原訊息' })
           : (entry.byName || '—');
         return [
-          el('td', { title: String(entry.body ?? '') }, el('div', { className: 'cell-clamp' },
-            el('strong', {}, entry.title),
-            el('div', { className: 'muted' }, entry.body))),
+          el('td', { title: String(entry.body ?? '') },
+            el('div', { className: 'cell-title' },
+              el('strong', {}, entry.title),
+              el('button', { className: 'link-button', dataset: { action: 'view', id: entry.id }, textContent: '放大' })),
+            el('div', { className: 'muted cell-clamp' }, entry.body)),
           el('td', { className: 'muted', title: knowledgeTriggerLabel(entry) }, el('div', { className: 'cell-clamp' }, knowledgeTriggerLabel(entry) || '—')),
           el('td', { className: 'muted', title: where }, el('div', { className: 'cell-clamp' }, `${scope}：${where}`)),
           el('td', { className: 'nowrap' }, KNOWLEDGE_LABEL[entry.status] ?? entry.status),
@@ -1352,10 +1408,35 @@
     return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
   }
 
-  function tradeAccountName(id) {
+  function tradeAccountName(id, name = '') {
+    if (name) return name;
     const text = String(id ?? '');
     if (text.startsWith('bot:')) return '🤖 Bot';
-    return text.startsWith('user:') ? `玩家 ${text.slice(5)}` : text;
+    // 橋接查不到名字時才退回 uid 末六碼；完整 id 在放大視窗看。
+    return text.startsWith('user:') ? `玩家 …${text.slice(-6)}` : text;
+  }
+
+  let tradeOrders = [];
+
+  function openOrderDetail(order) {
+    const status = order.status === 'pending' ? '排隊中' : (order.status === 'filled' ? '已成交' : '未成交');
+    const meta = [
+      ['時間', String(order.created_at ?? '').replace('T', ' ').slice(0, 19)],
+      ['帳戶', `${tradeAccountName(order.account_id, order.accountName)}（${order.account_id}）`],
+      ['標的', String(order.symbol ?? '')],
+      ['方向', order.side === 'buy' ? '買' : '賣'],
+      ['股數', String(order.qty ?? '')],
+      ['狀態', status],
+      ['成交價', order.fill_price_cents ? tradeMoney(order.fill_price_cents) : '—'],
+      ['手續費', order.fee_cents ? tradeMoney(order.fee_cents) : '—'],
+      ['稅', order.tax_cents ? tradeMoney(order.tax_cents) : '—'],
+    ];
+    const reason = [order.reject_reason, order.reason].filter(Boolean).join('\n');
+    openDetail({
+      title: `訂單 ${order.symbol ?? ''} ${order.side === 'buy' ? '買' : '賣'} ${order.qty ?? ''} 股`,
+      meta,
+      body: reason || '（沒有備註）',
+    });
   }
 
   function renderTrade(data) {
@@ -1374,7 +1455,7 @@
     }
     const accounts = data.accounts ?? [];
     $('trade-accounts').replaceChildren(...(accounts.length ? accounts.map((account) => el('tr', {},
-      el('td', {}, tradeAccountName(account.accountId)),
+      el('td', { title: account.accountId }, tradeAccountName(account.accountId, account.accountName)),
       el('td', { className: 'muted' }, account.kind === 'bot' ? 'Bot' : '玩家'),
       el('td', { className: 'num' }, tradeMoney(account.cashCents)),
       el('td', { className: 'num' }, tradeMoney(account.reservedCents)),
@@ -1385,7 +1466,7 @@
     const positions = accounts.flatMap((account) => (account.positions ?? []).map((position) => ({ account, position })));
     $('trade-position-count').textContent = `（${positions.length} 筆）`;
     $('trade-positions').replaceChildren(...(positions.length ? positions.map(({ account, position }) => el('tr', {},
-      el('td', {}, tradeAccountName(account.accountId)),
+      el('td', { title: account.accountId }, tradeAccountName(account.accountId, account.accountName)),
       el('td', {}, `${position.symbol} ${position.name ?? ''}`),
       el('td', { className: 'num' }, String(position.qty ?? 0)),
       el('td', { className: 'num' }, tradeMoney(position.avgCostCents)),
@@ -1395,10 +1476,16 @@
     )) : [el('tr', {}, el('td', { colSpan: 7, className: 'muted' }, '目前沒有持股。'))]));
 
     const orders = data.orders ?? [];
+    tradeOrders = orders;
     $('trade-order-count').textContent = `（最近 ${orders.length} 筆）`;
-    $('trade-orders').replaceChildren(...(orders.length ? orders.map((order) => el('tr', {},
+    $('trade-orders').replaceChildren(...(orders.length ? orders.map((order, index) => el('tr', {
+      className: 'clickable',
+      dataset: { order: String(index) },
+      title: '點開看完整訂單',
+      tabIndex: 0,
+    },
       el('td', { className: 'muted nowrap' }, String(order.created_at ?? '').slice(0, 16).replace('T', ' ')),
-      el('td', {}, tradeAccountName(order.account_id)),
+      el('td', {}, tradeAccountName(order.account_id, order.accountName)),
       el('td', {}, order.symbol),
       el('td', {}, order.side === 'buy' ? '買' : '賣'),
       el('td', { className: 'num' }, String(order.qty ?? '')),
@@ -1577,17 +1664,55 @@
 
   // 縮圖要帶 Authorization 標頭，<img src> 帶不了：抓成 blob 再顯示，同一張只抓一次。
   const memeThumbs = new Map(); // 梗圖 id -> blob 網址
-  async function loadMemeThumb(id, img) {
-    if (memeThumbs.has(id)) { img.src = memeThumbs.get(id); return; }
+  async function fetchMemeThumb(id) {
+    if (memeThumbs.has(id)) return memeThumbs.get(id);
     try {
       const res = await fetch('/api/memes/image?id=' + encodeURIComponent(id), { headers: { authorization: 'Bearer ' + token } });
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const url = URL.createObjectURL(await res.blob());
       // 輪詢、搜尋、換頁都可能讓同一張圖同時抓好幾次：只留第一個，重複的馬上釋放。
-      if (memeThumbs.has(id)) { URL.revokeObjectURL(url); img.src = memeThumbs.get(id); return; }
+      if (memeThumbs.has(id)) { URL.revokeObjectURL(url); return memeThumbs.get(id); }
       memeThumbs.set(id, url);
-      img.src = url;
-    } catch { /* 下一次 refresh 會再試 */ }
+      return url;
+    } catch {
+      return null; // 下一次 refresh 會再試
+    }
+  }
+  async function loadMemeThumb(id, img) {
+    const url = await fetchMemeThumb(id);
+    if (url) img.src = url;
+  }
+
+  function openMemeDetail(meme) {
+    const meta = [
+      ['範圍', meme.scope === 'global' ? '所有伺服器共用' : (meme.guildName || '—')],
+      ['來源', (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName],
+      ['使用', `${meme.uses} 次`],
+      ['尺寸', `${meme.width}×${meme.height} · ${Math.round(meme.bytes / 1024)}KB`],
+    ];
+    if (meme.tags?.length) meta.push(['標籤', meme.tags.join('、')]);
+    const cached = memeThumbs.get(meme.id);
+    openDetail({
+      title: meme.name,
+      meta,
+      body: meme.when || '（沒有寫使用情境）',
+      imageUrl: cached || '',
+    });
+    if (cached) return;
+    // 非同步載入；回來時若已經換了別的彈窗或關掉了，就不要把圖塞進去。
+    const token = detailToken;
+    fetchMemeThumb(meme.id).then((url) => {
+      if (detailToken !== token) return;
+      if (!url) {
+        $('detail-meta').hidden = false;
+        $('detail-meta').append(el('div', { className: 'muted' }, '圖片載入失敗'));
+        return;
+      }
+      const image = $('detail-image');
+      image.src = url;
+      image.alt = meme.name;
+      image.hidden = false;
+    });
   }
 
   function renderMemes(data) {
@@ -1609,7 +1734,11 @@
         const img = el('img', { className: 'meme-thumb', alt: meme.name, width: meme.width, height: meme.height });
         loadMemeThumb(meme.id, img);
         return [
-          el('td', {}, img),
+          el('td', {}, el('button', {
+            className: 'thumb-button',
+            title: '放大',
+            dataset: { memeView: meme.id },
+          }, img)),
           el('td', {},
             el('div', {}, meme.name),
             el('div', { className: 'muted' }, meme.when),
@@ -1618,7 +1747,9 @@
           el('td', {}, meme.scope === 'global' ? '所有伺服器共用' : meme.guildName),
           el('td', { className: 'muted' }, (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName),
           el('td', { className: 'muted' }, meme.uses + ' 次 · ' + meme.width + '×' + meme.height + ' · ' + Math.round(meme.bytes / 1024) + 'KB'),
-          el('td', {}, el('button', { className: 'danger', dataset: { memeId: meme.id }, textContent: '刪除' })),
+          el('td', {}, el('div', { className: 'entry-actions' },
+            el('button', { dataset: { memeView: meme.id }, textContent: '放大' }),
+            el('button', { className: 'danger', dataset: { memeId: meme.id }, textContent: '刪除' }))),
         ];
       },
     });
@@ -1938,12 +2069,103 @@
 
   const splitCommaList = (value) => String(value ?? '').split(/[,，、]+/).map((item) => item.trim()).filter(Boolean);
 
+  function fmtWhen(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString('zh-TW', {
+      hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  }
+
+  function closeDetail() {
+    const modal = $('detail-modal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    detailToken += 1;
+    const image = $('detail-image');
+    if (image) {
+      image.removeAttribute('src');
+      image.hidden = true;
+    }
+    detailReturn?.focus?.();
+    detailReturn = null;
+  }
+
+  /**
+   * 共用放大視窗。
+   * meta: [[標籤, 字串或 DOM 節點], ...]；body: 純文字（預設保留換行）；mono: 日誌用等寬字。
+   */
+  function openDetail({ title, meta = [], body = '', imageUrl = '', mono = false, wide = false } = {}) {
+    const modal = $('detail-modal');
+    if (!modal) return;
+    detailToken += 1;
+    detailReturn = document.activeElement;
+    $('detail-title').textContent = title || '';
+    const nodes = meta.map(([label, value]) => el('div', {},
+      el('span', { className: 'muted' }, `${label}：`), value));
+    $('detail-meta').replaceChildren(...nodes);
+    $('detail-meta').hidden = nodes.length === 0;
+    const image = $('detail-image');
+    if (imageUrl) {
+      image.src = imageUrl;
+      image.alt = title || '';
+      image.hidden = false;
+    } else {
+      image.removeAttribute('src');
+      image.alt = '';
+      image.hidden = true;
+    }
+    $('detail-body').textContent = body || '';
+    $('detail-body').hidden = !body;
+    $('detail-body').classList.toggle('mono', mono);
+    $('detail-card').classList.toggle('wide', wide);
+    modal.hidden = false;
+    $('detail-close').focus();
+  }
+
+  function showKnowledgeModal(entry) {
+    const where = entry.scope === 'channel'
+      ? `#${entry.channelName || entry.channelId}`
+      : (entry.scope === 'guild' ? (entry.guildName || entry.guildId) : '所有伺服器');
+    const meta = [
+      ['狀態', KNOWLEDGE_LABEL[entry.status] ?? entry.status],
+      ['範圍', `${KNOWLEDGE_SCOPES[entry.scope] ?? entry.scope}：${where}`],
+      ['觸發', knowledgeTriggerLabel(entry) || '—'],
+      ['來源', entry.byName || '—'],
+      ['更新', fmtWhen(entry.updatedAt)],
+    ];
+    const source = (entry.sources ?? [])[0];
+    if (source) {
+      const link = `https://discord.com/channels/${entry.guildId}/${source.channelId}/${source.messageId}`;
+      meta.push(['原訊息', el('a', { href: link, target: '_blank', rel: 'noreferrer', textContent: '開啟' })]);
+    }
+    openDetail({ title: entry.title, meta, body: entry.body || '（沒有內容）' });
+  }
+
+  let detailPointerDown = null;
+  $('detail-close').addEventListener('click', closeDetail);
+  $('detail-modal').addEventListener('mousedown', (event) => {
+    detailPointerDown = event.target;
+  });
+  $('detail-modal').addEventListener('click', (event) => {
+    // 只在背景按下、也在背景放開時才關；卡片內拖選文字到背景放開不關。
+    if (event.target === event.currentTarget && detailPointerDown === event.currentTarget) closeDetail();
+    detailPointerDown = null;
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !$('detail-modal').hidden) closeDetail();
+  });
+
   async function onKnowledgeAction(event) {
     const button = event.target.closest('button[data-action]');
     if (!button) return;
     const entry = knowledgeEntries.find((item) => item.id === button.dataset.id);
     if (!entry) return;
     const action = button.dataset.action;
+    if (action === 'view') {
+      showKnowledgeModal(entry);
+      return;
+    }
     button.disabled = true;
     try {
       if (action === 'delete') {
@@ -2112,6 +2334,12 @@
   });
 
   $('meme-rows').addEventListener('click', async (event) => {
+    const view = event.target.closest('button[data-meme-view]');
+    if (view) {
+      const meme = (pagedLists.meme.data?.memes ?? []).find((item) => item.id === view.dataset.memeView);
+      if (meme) openMemeDetail(meme);
+      return;
+    }
     const button = event.target.closest('button[data-meme-id]');
     if (!button) return;
     if (!confirm('刪掉這張梗圖？模型之後就送不出它了。')) return;
@@ -2125,6 +2353,31 @@
     } finally {
       button.disabled = false;
     }
+  });
+
+  function openOrderRow(row) {
+    if (!row) return;
+    const order = tradeOrders[Number(row.dataset.order)];
+    if (order) openOrderDetail(order);
+  }
+
+  $('trade-orders').addEventListener('click', (event) => {
+    // 拖選文字時不要順便開彈窗。
+    if (String(window.getSelection() ?? '').trim()) return;
+    openOrderRow(event.target.closest('tr[data-order]'));
+  });
+  $('trade-orders').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const row = event.target.closest('tr[data-order]');
+    if (!row) return;
+    event.preventDefault();
+    openOrderRow(row);
+  });
+
+  $('logs-expand').addEventListener('click', () => {
+    openDetail({ title: '日誌', body: $('logs').textContent, mono: true, wide: true });
+    const card = $('detail-card');
+    card.scrollTop = card.scrollHeight;
   });
 
   $('followup-rows').addEventListener('click', async (event) => {

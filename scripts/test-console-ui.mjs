@@ -724,6 +724,23 @@ try {
       assert.match(bodyText, /每批/);
       assert.match(await p.locator('#knowledge-count').textContent(), /待確認 1｜已確認 1/);
 
+      // 放大：表格只看得到前三行，彈窗要能看到完整正文。
+      const viewButton = p.locator('#knowledge-rows tr').filter({ hasText: '繪圖設定' }).locator('button[data-action="view"]');
+      await viewButton.click();
+      assert.equal(await p.locator('#detail-modal').isVisible(), true);
+      assert.equal(await p.locator('#detail-title').textContent(), '繪圖設定');
+      assert.match(await p.locator('#detail-body').textContent(), /鯨魚尾/);
+      await p.keyboard.press('Escape');
+      assert.equal(await p.locator('#detail-modal').isVisible(), false, 'Esc 關閉');
+
+      await viewButton.click();
+      await p.mouse.click(4, 4);
+      assert.equal(await p.locator('#detail-modal').isVisible(), false, '點背景關閉');
+
+      await viewButton.click();
+      await p.locator('#detail-close').click();
+      assert.equal(await p.locator('#detail-modal').isVisible(), false);
+
       const confirmRequest = p.waitForRequest(r => new URL(r.url()).pathname === '/api/knowledge/confirm');
       await p.locator('#knowledge-rows tr').filter({ hasText: '繪圖設定' }).locator('button[data-action="confirm"]').click();
       assert.deepEqual((await confirmRequest).postDataJSON(), { id: 'k1', updatedAt: '2026-11-10T00:00:00.000Z' });
@@ -1039,7 +1056,11 @@ try {
           id: `m_${pad(i)}`, name: `梗圖${pad(i)}`, when: '', tags: [], scope: 'guild', guildName: '伺服器',
           createdBy: 'user', channelName: '頻道', uses: 0, width: 256, height: 256, bytes: 1024,
         })) }),
-        memeImage: () => null,
+        memeImage: () => ({
+          // 1×1 PNG：讓「放大後真的看得到圖」這條路徑有被測到。
+          buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+          mime: 'image/png',
+        }),
         sessions: () => [],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
@@ -1089,6 +1110,206 @@ try {
       await p.locator('#meme-search').fill('m_03');
       await p.waitForFunction(() => document.querySelectorAll('#meme-rows tr').length === 1);
       assert.match(await p.locator('#meme-rows tr').textContent(), /梗圖03/, '可用梗圖 id 找到圖');
+
+      await p.locator('#meme-rows button[data-meme-view]').first().click();
+      assert.equal(await p.locator('#detail-modal').isVisible(), true);
+      assert.equal(await p.locator('#detail-title').textContent(), '梗圖03');
+      assert.match(await p.locator('#detail-meta').textContent(), /使用：0 次/);
+      assert.match(await p.locator('#detail-body').textContent(), /沒有寫使用情境/);
+      await p.waitForFunction(() => document.querySelector('#detail-image').naturalWidth > 0);
+      assert.equal(await p.locator('#detail-image').isVisible(), true, '放大後看得到圖');
+      // 彈窗開著時每 5 秒會自動刷新；內容不能被換掉，圖也不能被 revoke。
+      const src = await p.locator('#detail-image').getAttribute('src');
+      await p.waitForTimeout(5500);
+      assert.equal(await p.locator('#detail-title').textContent(), '梗圖03');
+      assert.equal(await p.locator('#detail-image').getAttribute('src'), src);
+      await p.locator('#detail-close').click();
+      assert.equal(await p.locator('#detail-modal').isVisible(), false);
+      assert.equal(await p.locator('#detail-image').getAttribute('src'), null, '關閉後清掉圖片');
+
+      // 手機寬度：表格自己橫向捲動，頁面不能溢出，兩顆按鈕要在同一列。
+      await p.setViewportSize({ width: 375, height: 812 });
+      await p.waitForTimeout(150);
+      const layout = await p.evaluate(() => {
+        // 第一個 data-meme-view 是縮圖（高 54），要找文字「放大」那顆。
+        const view = [...document.querySelectorAll('#meme-rows button[data-meme-view]')]
+          .find((button) => button.textContent.includes('放大'));
+        const del = document.querySelector('#meme-rows button[data-meme-id]');
+        if (!view || !del) return null;
+        const a = view.getBoundingClientRect();
+        const b = del.getBoundingClientRect();
+        return {
+          overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          sameRow: Math.abs(a.top - b.top) < 2,
+          height: a.height,
+        };
+      });
+      assert.ok(layout);
+      assert.equal(layout.overflow, false, '手機沒有頁面級橫向溢出');
+      assert.equal(layout.sameRow, true, '放大與刪除在同一列');
+      assert(layout.height >= 24 && layout.height <= 36, '按鈕沒有被壓成多行');
+      assert.deepEqual(pageErrors, [], '頁面沒有 JS 錯誤');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
+  await test('Discord 控制台：梗圖載入失敗會提示', async () => {
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        notes: () => ({ notes: [] }),
+        memes: () => ({
+          enabled: true,
+          memes: [{
+            id: 'm_bad', name: '壞圖', when: '', tags: [], scope: 'guild', guildName: '伺服器',
+            createdBy: 'user', channelName: '頻道', uses: 0, width: 100, height: 100, bytes: 100,
+          }],
+        }),
+        memeImage: () => null,
+        devFeedback: () => ({ items: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        logs: () => [],
+        trade: async () => ({ enabled: false, reason: '未開啟' }),
+      },
+    });
+    const dcBase = `http://127.0.0.1:${dc.server.address().port}`;
+    const dcContext = await browser.newContext({ viewport: { width: 1000, height: 900 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`${dcBase}/?token=t#memory`);
+      await p.waitForSelector('#meme-rows button[data-meme-view]');
+      await p.locator('#meme-rows button[data-meme-view]').first().click();
+      await p.waitForFunction(() => document.querySelector('#detail-meta').textContent.includes('圖片載入失敗'));
+      assert.equal(await p.locator('#detail-image').isVisible(), false, '載入失敗不顯示空圖');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
+  await test('Discord 控制台：訂單與日誌可放大看完整內容', async () => {
+    const order = {
+      id: 1,
+      account_id: 'user:637590163068813363',
+      accountName: '阿華',
+      symbol: '2330 台積電',
+      side: 'buy',
+      qty: 100,
+      status: 'filled',
+      fill_price_cents: 223818,
+      fee_cents: 20,
+      tax_cents: 0,
+      reject_reason: '',
+      reason: '測試備註',
+      created_at: '2026-11-10T03:51:00.000Z',
+    };
+    const order2 = {
+      id: 2,
+      account_id: 'bot:bot',
+      symbol: '2454 聯發科',
+      side: 'sell',
+      qty: 10,
+      status: 'pending',
+      fill_price_cents: null,
+      fee_cents: null,
+      tax_cents: null,
+      reject_reason: '',
+      reason: '',
+      created_at: '2026-11-09T01:02:00.000Z',
+    };
+    let overviewOrders = [order];
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        notes: () => ({ notes: [] }),
+        memes: () => ({ memes: [] }),
+        devFeedback: () => ({ items: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        trade: async () => ({
+          enabled: true,
+          market: { label: '已收盤' },
+          accounts: [{
+            accountId: 'user:637590163068813363',
+            accountName: '阿華',
+            kind: 'user',
+            cashCents: 95083003,
+            reservedCents: 0,
+            navCents: 0,
+            returnPct: 0,
+            positions: [{
+              symbol: '2330 台積電', name: '台積電', qty: 100, avgCostCents: 223818,
+              priceCents: null, marketValueCents: 0, unrealizedCents: 0,
+            }],
+          }],
+          orders: overviewOrders,
+          quotes: [],
+          botRuns: [],
+        }),
+        logs: () => [{ text: '2026-11-10 23:00:00 [discord] 測試日誌' }],
+      },
+    });
+    const dcBase = `http://127.0.0.1:${dc.server.address().port}`;
+    const dcContext = await browser.newContext({ viewport: { width: 1000, height: 900 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      const pageErrors = [];
+      p.on('pageerror', (error) => pageErrors.push(error.message));
+      await p.goto(`${dcBase}/?token=t#trade`);
+      await p.waitForSelector('#trade-orders tr[data-order]');
+      assert.match(await p.locator('#trade-accounts').textContent(), /阿華/, '帳戶表用顯示名稱');
+      assert.match(await p.locator('#trade-positions').textContent(), /阿華/, '持股表也用顯示名稱');
+      await p.locator('#trade-orders tr[data-order]').first().click();
+      assert.equal(await p.locator('#detail-title').textContent(), '訂單 2330 台積電 買 100 股');
+      const meta = await p.locator('#detail-meta').textContent();
+      assert.match(meta, /阿華/);
+      assert.match(meta, /637590163068813363/);
+      assert.match(await p.locator('#detail-body').textContent(), /測試備註/);
+      await p.locator('#detail-close').click();
+
+      // 換一批訂單後，列的 index 要對到新的資料，不能開到舊的那一筆。
+      overviewOrders = [order2, order];
+      await Promise.all([
+        p.waitForResponse((response) => new URL(response.url()).pathname === '/api/trade/overview'),
+        p.locator('#refresh').click(),
+      ]);
+      await p.waitForSelector('#trade-orders tr[data-order]');
+      assert.equal(await p.locator('#trade-orders tr[data-order]').count(), 2);
+      await p.locator('#trade-orders tr[data-order]').nth(0).click();
+      assert.equal(await p.locator('#detail-title').textContent(), '訂單 2454 聯發科 賣 10 股');
+      await p.locator('#detail-close').click();
+      await p.locator('#trade-orders tr[data-order]').nth(1).click();
+      assert.equal(await p.locator('#detail-title').textContent(), '訂單 2330 台積電 買 100 股');
+      await p.locator('#detail-close').click();
+
+      await p.locator('#tabbtn-logs').click();
+      await p.waitForFunction(() => document.querySelector('#logs').textContent.includes('測試日誌'));
+      await p.locator('#logs-expand').click();
+      assert.equal(await p.locator('#detail-title').textContent(), '日誌');
+      assert.match(await p.locator('#detail-body').textContent(), /測試日誌/);
+      assert.match(await p.locator('#detail-card').getAttribute('class'), /wide/);
+      assert.match(await p.locator('#detail-body').getAttribute('class'), /mono/);
       assert.deepEqual(pageErrors, [], '頁面沒有 JS 錯誤');
     } finally {
       await dcContext.close();
