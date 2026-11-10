@@ -38,6 +38,9 @@ node scripts/deploy-discord.mjs             # 真的部署
 參數：`--dry-run`、`--sha <sha>`、`--skip-tests`、`--host <user@host>`、`--dir <遠端路徑>`。
 `--skip-tests` 同時跳過本機與遠端測試。
 
+改了 persona／preset 不用 `/reload-system-prompt`：DSH 重啟後會把新的 system prompt 帶進已經開著的會話
+（2026-11-10 實測）。
+
 ### 回退
 
 ```bash

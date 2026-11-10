@@ -540,6 +540,11 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(/glm.*gpt.*qwen/.test(persona), 'persona 列出其他角色代號');
   ok(/self,claude/.test(persona), 'persona 教模型多個角色用逗號帶多張設定圖');
   ok(/長相、髮色、服裝、配件交給設定圖/.test(persona), 'persona 叫模型不要自己編角色的長相');
+  ok(/恐怖圖不畫/.test(persona) && /靈異照片感/.test(persona), 'persona 全面禁止恐怖圖，並給出判斷標準');
+  ok(/卡通、插畫、meme 風格都一樣/.test(persona), 'persona 說明卡通風格也不能畫恐怖');
+  ok(/抱怨不是誇獎/.test(persona), 'persona 把「不舒服／洗眼」當抱怨，叫模型停手');
+  ok(/每一階都重新判斷/.test(persona), 'persona 叫模型在對方加碼時重新判斷，不沿用上一張');
+  ok(/聊天聊到恐怖作品不算/.test(persona), '恐怖規則只擋畫圖，不擋聊天');
   // 「10 條最多 1 條」寫成上限後，實際 473 則訊息一個表情都沒帶；改成描述什麼時候用，不叫它邊講邊數。
   const emojiRule = persona.split('\n').find((line) => line.includes('表情是補語氣用的')) ?? '';
   ok(emojiRule && !/\d/.test(emojiRule) && !/emoji：10 條最多 1 條/.test(persona), '訊息表情寫成什麼時候用，不給數字上限');
