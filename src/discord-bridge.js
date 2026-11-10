@@ -1973,10 +1973,10 @@ async function main() {
 
   function formatMarket(market) {
     if (!market) return '市場狀態不明';
-    const next = market.open || !market.nextOpen ? '' : `；下一次開盤 ${market.nextOpen}`;
-    return market.open
-      ? `${market.label}；這不是即時報價，今天下單用今日收盤價結算`
-      : `${market.label}${next}；現在不能排隊下單`;
+    if (market.open) return `${market.label}；這不是即時報價，今天下單用今日收盤價結算`;
+    if (market.canOrder) return `${market.label}；預約時段，現在下單排到 ${market.orderDate} 收盤結算`;
+    const next = market.nextOpen ? `；下一次開盤 ${market.nextOpen}` : '';
+    return `${market.label}${next}；現在不能排隊下單，下一段下單時間 ${market.nextOrderAt || '未定'}`;
   }
 
   function formatQuoteResult(result) {
@@ -1996,7 +1996,7 @@ async function main() {
       lines.push(`漲跌：${change >= 0 ? '+' : ''}${formatTwd(change)}（${formatPct(changePct)}）`);
     }
     lines.push(`市場：${formatMarket(result.market)}`);
-    lines.push(`可下單：${result.tradable && result.market?.open ? '是' : '否'}`);
+    lines.push(`可下單：${result.tradable && result.market?.canOrder ? '是' : '否'}`);
     return lines.join('\n');
   }
 
@@ -2206,7 +2206,7 @@ async function main() {
         const lines = [
           `已排隊（pending）：${order.side === 'buy' ? '買入' : '賣出'} ${entry?.name ?? order.symbol}（${order.symbol}）${order.qty} 股，訂單 ${order.id}。`,
           order.side === 'buy' ? `保留現金 ${formatTwd(order.reserved_cents)}。` : `保留 ${order.reserved_qty} 股。`,
-          '今天收盤後才結算；成交價與費用會再通知，現在不是已成交。',
+          `${order.trade_date} 收盤後才結算；成交價與費用會再通知，現在不是已成交。`,
         ];
         if (portfolio.exists) lines.push(`目前可用現金 ${formatTwd(portfolio.availableCashCents)}。`);
         return { text: lines.join('\n') };

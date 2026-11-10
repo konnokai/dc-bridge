@@ -90,7 +90,7 @@ function formatLots(shares) {
 export function buildReviewPrompt({ portfolio, market, institutional = new Map(), material = new Map(), now = new Date() }) {
   const lines = [
     `【當日復盤】台股已收盤。今天：${market?.date ?? ''}，台北時間 ${now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}。`,
-    '這一輪不能下單，也不要呼叫 bot_place_order；今天已經不能排隊了。',
+    '這一輪不能下單，也不要呼叫 bot_place_order。',
   ];
   if (!portfolio?.exists) {
     lines.push('你的模擬帳戶還沒建立。');

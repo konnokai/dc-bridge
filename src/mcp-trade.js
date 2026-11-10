@@ -75,7 +75,7 @@ tool(
 
 tool(
   'place_order',
-  '幫目前這一輪的觸發者排隊買入或賣出模擬股票。只建立 pending 訂單，收盤後才成交；不要說「已成交」。message 必須填觸發這一輪的那則訊息 #編號（★ 的那則），quantity 是股數。同一輪只能成功一筆。',
+  '幫目前這一輪的觸發者排隊買入或賣出模擬股票。只建立 pending 訂單，當日或下一交易日收盤後才成交；不要說「已成交」。message 必須填觸發這一輪的那則訊息 #編號（★ 的那則），quantity 是股數。同一輪只能成功一筆。',
   {
     token: sessionToken,
     message: z.string().max(20).describe('觸發這一輪的訊息 #編號，例如 #k7f3ab；不是股票代號'),
