@@ -14,5 +14,6 @@ description: 部署到 Discord 測試伺服器的腳本行為、已知誤判風�
   已加 ed25519 指紋 `SHA256:Wf+35HkgELN7SBQs/SKRNzV8qJ9+JPshfJQPOevOfJU`，與伺服器 `/etc/ssh/ssh_host_ed25519_key.pub` 一致；
   不想要這筆就刪掉那一行。
 - 回退：備份 `~/dc-bridge-backups/deploy-<時間>.tgz` 含被刪檔案；失敗時腳本印備份路徑與對應 pm2 指令；DSH 路徑回退要重跑 `setup:discord`。
+- 改了 persona／preset 不用 `/reload-system-prompt`：DSH 重啟後會把新的 system prompt 帶進已經開著的會話（2026-11-10 實測）。部署時 DSH 重啟即生效。
 
 相關：[[discord-prts-mcp]]。

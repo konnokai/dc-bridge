@@ -81,4 +81,12 @@ description: 背景生圖工作追蹤、取消語意、GIF 拒絕、send_image �
 - `plugins/dc-agent-presets/dc-tool-restrict.mjs`：guard 擋模型填路徑／超過 4 個角色，訊息「一次最多 4 個角色」；外掛沒載入時 fail closed。
 - persona（`dsh/agent-presets/dc-chat/agent.cordis.yml` + patch）：多角色用逗號；畫指定角色時 prompt 只寫動作／表情／構圖／場景，長相交給設定圖。
 
+## 恐怖圖安全邊界（2026-11-10）
+
+- persona 安全邊界第 10 條：恐怖圖一律不畫——恐怖、獵奇、噁心、jump scare、靈異照片感、擬真或寫實的怪異人形（瘦到見骨、傷口、扭曲比例）都不畫，卡通／插畫／meme 風格也一樣；GIF、梗圖、拿群友的圖當參考也一樣。被要求就回「這個我不畫」，不加料、不換說法；對方完全改成別的題目再要，才照畫。聊天聊到恐怖作品不算。
+- 畫圖清單（`【畫圖】` 第 64 行）把「寫實恐怖」改成「恐怖」，並註明卡通風格也不行。
+- 有人說「不舒服」「不想看」「要洗眼」，或有人提到要關掉繪圖工具：這是抱怨不是誇獎，立刻停手、取消還在跑的生圖、不補畫、也不送已經畫好的那張。
+- 對方一路加碼（醜 → 恐怖 → 更恐怖）時，每一階都重新判斷合不合安全邊界，不沿用上一張的結論。
+- docs/guides/DISCORD.md「畫圖」段同步；測試 `scripts/test-discord-bridge.mjs` 有 5 個恐怖相關斷言。
+
 相關：[[codex-imagegen-internals]]、[[discord-codex-quota]]。

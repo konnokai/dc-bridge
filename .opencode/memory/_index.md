@@ -30,7 +30,7 @@
 - [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying 與 REST member 補抓；互動次數接在記憶那一行（你回過他 N 回合，最後一次 X 前）
 - [[discord-group-consensus-memory]] — 提議中的「群共識」記憶類型缺口：管理員新增一句、可過期、每輪注入、擋貶低評價；feedback df_mw6f6fbe08b055；未實作（2026-11-07）
 - [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂；摘要 301 字上限、19 條別名回填、測試保護力
-- [[discord-chatty-channels]] — chattyChannels 頻道主動參與模式：config 驗證、【參與度】提示、persona 優先規則、followup 2/天、spoofing 防護
+- [[discord-chatty-channels]] — chattyChannels 頻道主動參與模式：config 驗證、【參與度】提示、persona 優先規則、followup 6/天（2026-11-10 起與一般頻道同）、spoofing 防護
 - [[discord-codex-quota]] — Codex 額度查詢（app-server JSON-RPC）、生圖守門 15%/5%、快照、5 小時窗口重置 ping（gpt-6-luna test）
 - [[discord-commandcode-provider]] — Command Code provider switch：預設 provider/model、價目表別名、額度 API 與每月 $70 shortcut（2026-11-07）
 - [[discord-jev-decision-gate]] — Jev 決策閘門分析：模型細節、成本資料（10,958 回合）、結論不值得做、影子模式計畫、provider 切換驗證點（2026-11-07）
@@ -40,8 +40,8 @@
 - [[discord-web-search]] — 聯網搜尋 provider（DeepSeek/Bing/SearXNG）、SearXNG 實例設定與引擎踩坑
 - [[discord-dev-feedback-console]] — 控制台回饋「複製 prompt」按鈕與欄寬
 - [[discord-console-table-layout]] — 黑話／頻道表固定版面、84px 列高、colgroup 欄寬
-- [[discord-console-memory-pagination]] — 記憶分頁：群友記憶／頻道筆記／梗圖 20 筆分頁與名稱、ID 搜尋
-- [[discord-session-reload]] — /reload-system-prompt 交接摘要系統：產生摘要、新會話帶入一次、/reset 清除、敏感閘門、排隊訊息保留
+- [[discord-console-detail-modal]] — 控制台通用放大彈窗（detail-modal）：CSS [hidden] 陷阱、梗圖 token 守衛、訂單整列點擊、帳號名稱快取
+- [[discord-console-memory-pagination]] — 記憶分頁：群友記憶／頻道筆記／梗圖 20 筆分頁與名稱、ID 搜尋- [[discord-session-reload]] — /reload-system-prompt 交接摘要系統：產生摘要、新會話帶入一次、/reset 清除、敏感閘門、排隊訊息保留
 - [[discord-skip-marker]] — `\//` 整則忽略訊息、bot 訊息例外與缺口
 - [[discord-ttft-timeout]] — TTFT 超時取消、串流 first-token、5 秒保底放行
 - [[discord-slang-mcp]] — 黑話／頻道標籤 MCP 與候選確認
@@ -52,6 +52,7 @@
 - [[discord-persona]] — 鯨魚娘 persona 重構與長距摘要限制
 - [[discord-usage-pricing]] — 花費看板改用美元價目、evict cur 換算、2027 假日、部署備份
 - [[discord-image-jobs]] — 背景生圖工作追蹤、取消語意、GIF 拒絕、send_image 送圖、畫圖外掛路徑鎖、scoped 守衛、Codex permission profile（/mnt）、AttachFiles 權限
+- [[discord-knowledge]] — 群知識功能：候選/確認流程、三種觸發（always/keywords/tools）、注入位置、清洗、上限、控制台端點、生圖附加；設計原則（資料驅動、注入非查詢、候選人審、原文橋接抓）與評估過但沒採用的方案（2026-11-10）
 - [[discord-prts-mcp]] — PRTS MCP 改為 Docker HTTP（container 3.2.4，DSH 連 127.0.0.1:3011）、GITHUB_TOKEN、8MB 原圖不縮圖與 DNS 不穩
 - [[discord-prts-artwork]] — PRTS 立繪改走 Cloudflare Worker + R2 快取：MediaWiki 路徑、large 404 fallback 原圖、bridge /prtsImage
 - [[discord-trade]] — 模擬股票交易 MVP（台股）：資料來源（含三大法人）、漲跌停、市場狀態、19:00 後結算、Bot 交易員與 19:10 復盤、權限與控制台

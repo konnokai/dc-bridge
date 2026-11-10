@@ -5,7 +5,7 @@ description: Discord 代理額外工具與行為：收回 reaction、常用表�
 
 - `remove_reaction`：只收回 bot 自己按的 reaction，額度獨立（一輪 3 次）；persona 統一「通常 1 個，最多 3 個」。
 - 常用表情（K）：`search_emojis` 的 `query` 留空按使用次數排序；只記目錄裡的表情；同一則訊息同一表情算一次；每伺服器上限 500 個 id；計數 gated on `cfg.discord.emoji.enabled`（關閉時不記）；持久化 `state/discord-emoji-usage.json`（version 1，存檔時丟掉目錄已沒有的表情）。
-- 回訪（I）：`schedule_followup` 5–180 分鐘，同時最多 2 個、每天 6 個；`/reset` 取消；安靜期間延後；DSH 暫時不可用就放棄。到點只送【回訪】提示，模型自己決定要不要說話。伺服器 `followup.enabled: true`。`note` 經 `defang`；`runFollowups` await 後 race check（`isBusy` 或 `remove` 失敗就跳過）；`resolveChannel` 失敗丟掉並 log 一次；安靜時 `deliverPrompt` restore 並重試。
+- 回訪（I）：`schedule_followup` 2–43200 分鐘（2 分鐘～1 個月，1 個月以 30 天算），每個 key 每天最多 6 個；已拿掉「同一個 key 同時最多 2 個」與 chatty 頻道每天 2 次的特殊上限；另外加 `FOLLOWUP_MAX_ENTRIES = 500` 的總筆數保險（避免排程檔長到 1MB 讀檔上限、重啟時整份備份重建）。`/reset` 取消，但 `/reload-system-prompt` 不取消（回訪跟著 key 留著）；安靜期間延後；DSH 暫時不可用就放棄。到點只送【回訪】提示，模型自己決定要不要說話。伺服器 `followup.enabled: true`。`note` 經 `defang`；`runFollowups` await 後 race check（`isBusy` 或 `remove` 失敗就跳過）；`resolveChannel` 失敗丟掉並 log 一次；安靜時 `deliverPrompt` restore 並重試。回訪 prompt 尾端加一行 `formatTimeContext()`（【現在】），隔幾天的回訪才判斷得出今天日期。時間顯示統一走 `formatFollowupDelay`（分鐘／小時／天）；控制台 `fmtWait` 同步。MCP schema 2~43200。已部署 commit b70a545（2026-11-10）。
   - 持久化：`state/discord-followups.json`（version 1），啟動時 `loadFollowupFile` 載入；每次 add/remove/restore/forget 觸發 `onChange` → `saveFollowupFile`。壞檔／版本不符／`null` 會先 rename 成 `.corrupt-*` 再從空的重建；讀檔失敗（非 ENOENT，如 EACCES）回 warning、從空的開始，不讓橋接啟動時當掉。檔案上限 1MB。停機超過 30 分鐘的回訪重啟後丟掉（含安靜期間延後的）。
   - `nextId` 會從存檔的 `nextId` 接續（`Math.max`），避免全部送完再重啟時 id 從 f1 重跑、讓控制台舊分頁按取消誤刪新回訪。
   - 提示文字：`formatFollowupPrompt({ minutes, note, at }, { openTopic, now })`；停機後補送時用 `at` 重算實際經過分鐘數（`Math.max(1)` 擋時鐘倒退）。chatty 頻道回訪 `openTopic=true`，可直接開新話題。
