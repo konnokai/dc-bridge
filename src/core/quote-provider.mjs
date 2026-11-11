@@ -147,6 +147,25 @@ export function createQuoteProvider({ fetchImpl = fetchJson, timeoutMs = 12_000,
     return pick(entry, date);
   }
 
+  /**
+   * 用官方行情反查商品：商品主檔漏收時，要分得出「這支存在」與「代號打錯」。
+   * 只認完整代號或完整名稱；來源抓不到就回 null，不猜。
+   */
+  async function lookup(query) {
+    const text = String(query ?? '').trim();
+    if (!text) return null;
+    const code = text.toUpperCase();
+    // 兩個來源同時抓：一次 miss 最多等一個 timeout，不要串成兩倍。
+    await Promise.allSettled(Object.keys(sources).map((exchange) => refresh(exchange)));
+    for (const exchange of Object.keys(sources)) {
+      const byCode = sources[exchange].cache?.byCode;
+      if (!byCode) continue;
+      const row = byCode.get(code) ?? [...byCode.values()].find((item) => item.name === text);
+      if (row) return { symbol: row.symbol, name: row.name, exchange };
+    }
+    return null;
+  }
+
   /** 整份來源的資料日期（不是單一股票）：用來判斷「這檔股票當天根本沒資料」。 */
   async function dataDate(exchange) {
     const source = sources[exchange];
@@ -208,5 +227,5 @@ export function createQuoteProvider({ fetchImpl = fetchJson, timeoutMs = 12_000,
     }]);
   }
 
-  return { getLatest, getForDate, getHolidays, refreshAll, status, dataDate };
+  return { getLatest, getForDate, getHolidays, refreshAll, status, dataDate, lookup };
 }

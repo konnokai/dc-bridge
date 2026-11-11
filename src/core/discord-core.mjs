@@ -298,6 +298,7 @@ function normalizeTradeConfig(raw) {
     fees: {
       twFeeRate: strict(fees.twFeeRate, 0.001425, 'discord.trade.fees.twFeeRate', { min: 0, max: 0.1 }),
       twTaxRate: strict(fees.twTaxRate, 0.003, 'discord.trade.fees.twTaxRate', { min: 0, max: 0.1 }),
+      twEtfTaxRate: strict(fees.twEtfTaxRate, 0.001, 'discord.trade.fees.twEtfTaxRate', { min: 0, max: 0.1 }),
       minFee: strict(fees.minFee, 0, 'discord.trade.fees.minFee', { min: 0, max: 10_000 }),
     },
     slippageRate: strict(src.slippageRate, 0, 'discord.trade.slippageRate', { min: 0, max: 0.1 }),

@@ -54,7 +54,7 @@ Discord 不 import `src/bridge.js`。
 | `core/quote-provider.mjs` | 台股盤後報價：TWSE／TPEx OpenAPI 與行事曆 |
 | `core/institutional-provider.mjs` | 三大法人買賣超日報：TWSE T86、TPEx OpenAPI |
 | `core/material-provider.mjs` | 每日重大訊息：TWSE t187ap04_L、TPEx mopsfin_t187ap04_O |
-| `core/trade-symbols.mjs` | 模擬股票商品主檔（台股白名單） |
+| `core/trade-symbols.mjs` | 模擬股票商品主檔（台股白名單，含國內成分 ETF） |
 | `core/bot-trader.mjs` | Bot 交易員的排程判斷、prompt 與公告文字 |
 
 ### QQ 專用

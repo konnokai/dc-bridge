@@ -1,8 +1,8 @@
 // 模擬股票的商品主檔（第一版只有台股）。
 //
 // 為什麼是白名單：報價來源只抓得到上市／上櫃的日資料，但 ETF、處置股、全額交割股
-// 的費率與交易規則不同。第一版先把範圍鎖在一般普通股，遇到不認識的代號就回候選清單，
-// 不讓模型自己猜。
+// 的費率與交易規則不同。第一版先把範圍鎖在一般普通股與國內成分 ETF，遇到不認識的代號就回候選清單，
+// 不讓模型自己猜。ETF 的 tick、證交稅與漲跌幅都和股票不同，漲跌幅還要逐檔標（槓桿型 20%）。
 //
 // 上市與上櫃分開記：兩邊的 OpenAPI、收盤更新時間與行事曆都不一樣。
 
@@ -38,6 +38,8 @@ export const TRADE_SYMBOLS = Object.freeze([
   ...twse('3711', '日月光投控', ['日月光', 'ASE']),
   ...twse('1101', '台泥', ['台灣水泥']),
   ...twse('2105', '正新', []),
+  ...twse('6196', '帆宣', ['帆宣系統', 'Marketech']),
+  ...twse('3042', '晶技', ['TXC']),
 
   // 上櫃（TPEx）
   ...tpex('6488', '環球晶', ['GlobalWafers']),
@@ -62,6 +64,19 @@ export const TRADE_SYMBOLS = Object.freeze([
   ...tpex('4743', '合一', []),
   ...tpex('4128', '中天', []),
   ...tpex('8446', '華研', []),
+  ...tpex('6510', '精測', ['中華精測', 'CHPT']),
+
+  // ETF（只收國內成分；漲跌幅逐檔對過證交所 TWT84U，不能從代號推）
+  ...etf('0050', '元大台灣50', ['台灣50']),
+  ...etf('0056', '元大高股息', ['高股息']),
+  ...etf('006208', '富邦台50', []),
+  ...etf('00692', '富邦公司治理', []),
+  ...etf('00713', '元大台灣高息低波', []),
+  ...etf('00878', '國泰永續高股息', []),
+  ...etf('00919', '群益台灣精選高息', []),
+  ...etf('00929', '復華台灣科技優息', []),
+  ...etf('00632R', '元大台灣50反1', ['反1']),
+  ...etf('00631L', '元大台灣50正2', ['正2'], 20),
 ]);
 
 function twse(symbol, name, aliases) {
@@ -81,8 +96,14 @@ function entry(symbol, name, aliases, exchange) {
     exchange,
     currency: 'TWD',
     type: 'stock',
+    limitPct: 10,
     tradable: true,
   });
+}
+
+/** ETF 走白名單：漲跌幅逐檔不同（一般 10%、槓桿 20%），不能用代號推。目前 10 檔都在上市。 */
+function etf(symbol, name, aliases, limitPct = 10) {
+  return [Object.freeze({ ...entry(symbol, name, aliases, 'TWSE'), type: 'etf', limitPct })];
 }
 
 const bySymbol = new Map(TRADE_SYMBOLS.map((item) => [item.symbol, item]));

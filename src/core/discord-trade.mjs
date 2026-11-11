@@ -18,8 +18,9 @@ export function botAccountId(clientId) {
   return `bot:${String(clientId)}`;
 }
 
-/** 台股一般股票升降單位（分）。 */
-export function tickCents(priceCents) {
+/** 台股升降單位（分）。ETF 只有兩級：未滿 50 元 0.01、50 元以上 0.05。 */
+export function tickCents(priceCents, type = 'stock') {
+  if (type === 'etf') return priceCents < 5_000 ? 1 : 5;
   if (priceCents < 1_000) return 1;      // 未滿 10 元：0.01
   if (priceCents < 5_000) return 5;      // 10–未滿 50：0.05
   if (priceCents < 10_000) return 10;    // 50–未滿 100：0.1
@@ -29,15 +30,18 @@ export function tickCents(priceCents) {
 }
 
 /**
- * 漲跌停價。台股是參考價 ×1.1／×0.9 後對齊升降單位：
+ * 漲跌停價。台股是參考價 ×(1±limitPct) 後對齊升降單位：
  * 漲停向下取、跌停向上取，不能讓玩家拿到比規則更好的價格。
+ * limitPct 逐檔不同（一般股票 10%、槓桿 ETF 20%），沒有 entry 時當一般股票。
  */
-export function limitPrices(referenceCents) {
-  const rawUp = Math.floor((referenceCents * 11) / 10);
-  const rawDown = Math.ceil((referenceCents * 9) / 10);
-  const up = Math.floor(rawUp / tickCents(rawUp)) * tickCents(rawUp);
-  const down = Math.ceil(rawDown / tickCents(rawDown)) * tickCents(rawDown);
-  return { tick: tickCents(referenceCents), up, down };
+export function limitPrices(referenceCents, entry = null) {
+  const type = entry?.type ?? 'stock';
+  const limitPct = Number(entry?.limitPct) > 0 ? Number(entry.limitPct) : 10;
+  const rawUp = Math.floor((referenceCents * (100 + limitPct)) / 100);
+  const rawDown = Math.ceil((referenceCents * (100 - limitPct)) / 100);
+  const up = Math.floor(rawUp / tickCents(rawUp, type)) * tickCents(rawUp, type);
+  const down = Math.ceil(rawDown / tickCents(rawDown, type)) * tickCents(rawDown, type);
+  return { tick: tickCents(referenceCents, type), up, down };
 }
 
 /**
@@ -235,6 +239,7 @@ export function createTradeService({
   const startingCashCents = Math.round(Number(config.startingCash) * 100);
   const feePpm = Math.round(Number(config.fees.twFeeRate) * 1_000_000);
   const taxPpm = Math.round(Number(config.fees.twTaxRate) * 1_000_000);
+  const etfTaxPpm = Math.round(Number(config.fees.twEtfTaxRate) * 1_000_000);
   const minFeeCents = Math.round(Number(config.fees.minFee) * 100);
   const maxOrderPct = Number(config.maxOrderPct);
   const botAccount = botId ? botAccountId(botId) : '';
@@ -332,6 +337,26 @@ export function createTradeService({
     };
   }
 
+  /** 主檔沒收錄時，用官方行情確認這支股票是不是真的存在（漏收，而不是代號打錯）。 */
+  async function lookupListed(query) {
+    if (typeof quotes.lookup !== 'function') return null;
+    try {
+      return await quotes.lookup(query);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 官方行情有、商品主檔沒有時的說明。行情清單也含 ETF、特別股、TDR，
+   * 這裡分不出是漏收還是不開放，所以只斷言「不是代號打錯」。
+   */
+  function unlistedNote(listed) {
+    const market = listed.exchange === 'TWSE' ? '上市' : '上櫃';
+    return `${listed.name}（${listed.symbol}，${market}）在官方行情查得到，但不在可交易商品主檔：`
+      + '可能漏收，也可能是目前不開放的商品（白名單外的 ETF、特別股等），不是代號打錯；現在不能交易，照實講。';
+  }
+
   async function quote(query) {
     const resolved = resolveSymbol(query);
     const [market, latest] = await Promise.all([
@@ -339,8 +364,10 @@ export function createTradeService({
       resolved.match ? quotes.getLatest(resolved.match) : Promise.resolve(null),
     ]);
     if (!resolved.match) {
+      const listed = resolved.candidates.length ? null : await lookupListed(query);
       return {
         candidates: resolved.candidates.map((item) => ({ symbol: item.symbol, name: item.name, exchange: item.exchange })),
+        unlisted: listed ? { ...listed, note: unlistedNote(listed) } : null,
         market,
       };
     }
@@ -378,10 +405,12 @@ export function createTradeService({
     const resolved = resolveSymbol(symbol, { strict: true });
     const entry = resolved.match;
     if (!entry || entry.tradable !== true) {
-      const hint = resolved.candidates.length > 1
-        ? `「${symbol}」對到多個標的，先用 get_quote 查清楚代號`
-        : `「${symbol}」不在可交易清單：先用 get_quote 查代號`;
-      throw tradeError(hint, 'BAD_SYMBOL');
+      if (resolved.candidates.length > 1) {
+        throw tradeError(`「${symbol}」對到多個標的，先用 get_quote 查清楚代號`, 'BAD_SYMBOL');
+      }
+      const listed = entry ? null : await lookupListed(symbol);
+      if (listed) throw tradeError(unlistedNote(listed), 'SYMBOL_NOT_COLLECTED');
+      throw tradeError(`「${symbol}」不在可交易清單：先用 get_quote 查代號`, 'BAD_SYMBOL');
     }
     const isBot = actorKind === ACCOUNT_KIND.BOT;
     const accountId = isBot ? botAccount : playerAccountId(actorId);
@@ -408,7 +437,8 @@ export function createTradeService({
       throw tradeError(`最近收盤資料太舊（${latest.asOf}），暫時不能下單`, 'STALE_QUOTE');
     }
     const reference = referenceForTradeDate(latest, tradeDate);
-    const limit = limitPrices(reference);
+    const limit = limitPrices(reference, entry);
+    const orderTaxPpm = entry.type === 'etf' ? etfTaxPpm : taxPpm;
     const existingAccount = db.getAccount(accountId);
     // 帳戶要到真的排隊成功才建立；先用起始資金做 30% 與現金檢查的假帳戶。
     const accountForCheck = existingAccount ?? {
@@ -454,7 +484,7 @@ export function createTradeService({
           const account = db.getAccount(accountId);
           if (orderSide === 'buy') {
             if (reservedCents > account.cash_cents - account.reserved_cents) {
-              throw tradeError(`可用現金不足：需要保留 ${formatTwd(reservedCents)}，可用 ${formatTwd(account.cash_cents - account.reserved_cents)}`, 'INSUFFICIENT_CASH');
+              throw tradeError(`可用現金不足：需要保留 ${formatTwd(reservedCents)}（買單先按漲停價保留，結算退回差額），可用 ${formatTwd(account.cash_cents - account.reserved_cents)}`, 'INSUFFICIENT_CASH');
             }
           } else {
             const position = db.getPosition(accountId, entry.symbol);
@@ -479,7 +509,7 @@ export function createTradeService({
             reservedCents,
             reservedQty,
             feeRatePpm: feePpm,
-            taxRatePpm: taxPpm,
+            taxRatePpm: orderTaxPpm,
             minFeeCents,
             createdAt: nowIso,
             reason: reason ? String(reason).slice(0, 300) : null,
@@ -596,7 +626,7 @@ export function createTradeService({
       }
       if (quoteRow.closeCents <= 0) continue;
       const reference = quoteRow.referenceCents > 0 ? quoteRow.referenceCents : quoteRow.closeCents;
-      const limit = limitPrices(reference);
+      const limit = limitPrices(reference, entry);
       if (order.side === 'buy' && quoteRow.closeCents >= limit.up) {
         reject(order, '收盤漲停，買單不成交');
         continue;

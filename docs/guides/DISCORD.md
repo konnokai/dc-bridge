@@ -172,7 +172,7 @@ pm2 logs dc-bridge
 | `trade.extraHolidays` | 額外休市日（`YYYY-MM-DD` 陣列），給颱風或臨時停市用；平日休市不會排隊下單或結算 |
 | `trade.startingCash` | 新帳戶的起始資金（NT$），預設 1000000；只在第一次建立帳戶時使用 |
 | `trade.maxOrderPct` | 單筆買入不得超過帳戶淨值的百分比，預設 30 |
-| `trade.fees.twFeeRate` / `twTaxRate` / `minFee` | 台股手續費率、證交稅率與最低手續費（元），預設 0.001425／0.003／0 |
+| `trade.fees.twFeeRate` / `twTaxRate` / `twEtfTaxRate` / `minFee` | 台股手續費率、一般股票證交稅率、ETF 證交稅率與最低手續費（元），預設 0.001425／0.003／0.001／0 |
 | `trade.settlement.twCheckMinutes` | 19:00 後每幾分鐘檢查一次收盤資料，預設 10 |
 | `trade.settlement.twSettleAfter` | 幾點後才開始結算，預設 `19:00`（等收盤價、法人與晚報齊） |
 | `trade.bot.enabled` | Bot 交易員開關，預設 `false` |
@@ -384,8 +384,11 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - **A 模式**：交易日 09:00–13:30 下單只建立 `pending` 訂單，19:00 後才用當日官方收盤價結算。
   14:50 至次一交易日 09:00 收預約單，排到下一個交易日結算；13:30–14:50 不收單。
   查價顯示的是最近一次收盤價，不是盤中即時價；回覆會標 `asOf`，不要把它當成即時報價。
-- **只有台股**：上市與上櫃的一般普通股白名單（`src/core/trade-symbols.mjs`），ETF、處置股、
-  全額交割、暫停交易都不開放。美股、匯率、金額下單、每日 snapshots、滑價是第二階段。
+- **只有台股**：上市與上櫃的一般普通股白名單（`src/core/trade-symbols.mjs`）加國內成分 ETF
+  （0050、00631L 這類；每檔在主檔寫自己的漲跌幅）。不開放特別股、TDR、債券 ETF、ETN、
+  國外成分與期貨 ETF、權證、興櫃。美股、匯率、金額下單、每日 snapshots、滑價是第二階段。
+  白名單漏收時，查價與下單會回「官方行情查得到，但不在可交易商品主檔」；這代表不是代號打錯，
+  但行情清單也含白名單外的 ETF、特別股，所以只說「可能漏收」。補股票就是主檔加一行。
 - **交易資料**：`state/discord-trade.sqlite`（Node 內建 `node:sqlite`），現金、持倉、訂單、
   現金流水與 Bot 回合都在這裡；控制台「股盤」分頁唯讀，不能改餘額或持倉。
 - **下單身分**：只有這一輪明確觸發 bot 的玩家能下單；`place_order` 的 `message` 要填 ★ 那則訊息的

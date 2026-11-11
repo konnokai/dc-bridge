@@ -134,6 +134,7 @@
       "fees": {
         "twFeeRate": 0.001425,
         "twTaxRate": 0.003,
+        "twEtfTaxRate": 0.001,
         "minFee": 0
       },
       "slippageRate": 0,

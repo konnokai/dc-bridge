@@ -2055,11 +2055,13 @@ async function main() {
 
   function formatQuoteResult(result) {
     if (!result.entry) {
-      if (!result.candidates?.length) return '查不到這個股票。商品主檔目前只有台股一般上市／上櫃普通股。';
+      if (result.unlisted) return result.unlisted.note;
+      if (!result.candidates?.length) return '查不到這個股票。商品主檔目前只有台股一般上市／上櫃普通股與國內成分 ETF。';
       return `找到多個可能：${result.candidates.map((item) => `${item.symbol} ${item.name}（${item.exchange}）`).join('、')}。請問是哪一個，不要自己猜。`;
     }
     const entry = result.entry;
-    const lines = [`${entry.name}（${entry.symbol}）｜${entry.exchange === 'TWSE' ? '上市' : '上櫃'}`];
+    const kind = entry.type === 'etf' ? `｜ETF（漲跌幅 ±${entry.limitPct ?? 10}%）` : '';
+    const lines = [`${entry.name}（${entry.symbol}）｜${entry.exchange === 'TWSE' ? '上市' : '上櫃'}${kind}`];
     if (!result.quote) {
       lines.push('最近收盤價：查不到（報價來源可能中斷）');
     } else {
