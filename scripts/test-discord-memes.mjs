@@ -50,7 +50,6 @@ const base = (over = {}) => ({
   name: '但是我拒絕',
   when: '有人要你做越界的事、要拒絕時',
   tags: ['拒絕', 'JoJo'],
-  scope: 'guild',
   guildId: G1,
   channelId: C1,
   kind: 'png',
@@ -91,23 +90,19 @@ console.log('## 2. 新增與文字清理');
   ok(add(createMemeStore(), { kind: 'jpg' }).status === 400, 'kind 只能 png／gif');
 }
 
-console.log('## 3. 名稱唯一與可見範圍');
+console.log('## 3. 名稱唯一與共用');
 {
   const store = createMemeStore();
-  ok(add(store).meme, '本服存一張');
-  ok(add(store, { name: ' 但是我拒絕 ' }).status === 409, '同伺服器同名拒絕（忽略空白）');
-  ok(add(store, { name: 'ＡＢＣ', scope: 'guild' }).meme && add(store, { name: 'abc' }).status === 409, '同名比對忽略全形與大小寫');
-  ok(add(store, { guildId: G2, channelId: C2 }).meme, '別的伺服器的本服梗圖可以同名');
-  const g = add(store, { name: '共用梗', scope: 'global' });
-  ok(g.meme?.scope === 'global', 'bot 自己的圖可以設共用');
-  ok(add(store, { name: '共用梗', guildId: G2, channelId: C2 }).status === 409, '別服不能用跟共用梗圖同名');
-  const member = add(store, { name: '群友的圖', scope: 'global', authorIsBot: false, authorId: OTHER });
-  ok(member.meme?.scope === 'guild' && /共用/.test(member.note ?? ''), '群友的圖強制只限本服，並回說明');
-  ok(findMeme(store, G1, '群友的圖') && !findMeme(store, G2, '群友的圖'), '別的伺服器看不到本服梗圖');
-  ok(findMeme(store, G2, '共用梗')?.scope === 'global', '共用梗圖所有伺服器都看得到');
-  ok(findMeme(store, G2, '但是我拒絕')?.guildId === G2, '同名時先找本服的');
-  ok(findMeme(store, G1, ' 但是我 拒絕')?.guildId === G1, '查名稱時忽略空白');
-  ok(findMeme(store, G1, '不存在') === null, '查不到回 null');
+  ok(add(store).meme, '存一張');
+  ok(add(store, { name: ' 但是我拒絕 ' }).status === 409, '同名拒絕（忽略空白）');
+  ok(add(store, { name: 'ＡＢＣ' }).meme && add(store, { name: 'abc' }).status === 409, '同名比對忽略全形與大小寫');
+  ok(add(store, { guildId: G2, channelId: C2 }).status === 409, '別的伺服器也不能同名：名稱全域唯一');
+  const member = add(store, { name: '群友的圖', authorIsBot: false, authorId: OTHER });
+  ok(member.meme && !('scope' in member.meme), '群友的圖一樣存進共用的庫');
+  ok(add(store, { name: '群友的圖', guildId: G2, channelId: C2 }).status === 409, '群友的圖也不能跟別的伺服器撞名');
+  ok(findMeme(store, '群友的圖')?.guildId === G1, '所有伺服器都找得到同一張');
+  ok(findMeme(store, ' 但是我 拒絕')?.guildId === G1, '查名稱時忽略空白');
+  ok(findMeme(store, '不存在') === null, '查不到回 null');
 }
 
 console.log('## 4. 配額');
@@ -141,50 +136,49 @@ console.log('## 5. 搜尋與清單');
   const store = createMemeStore();
   add(store, { name: '但是我拒絕', when: '有人要你做越界的事時', tags: ['拒絕'] });
   add(store, { name: '笑死', when: '看到好笑的事', tags: ['笑'], channelId: C2 });
-  add(store, { name: '別服的', guildId: G2, channelId: '123456789012345678' });
-  const all = searchMemes(store, G1, '');
-  ok(all.length === 2, '空 query 列出可見的全部（看不到別服本服梗圖）');
-  ok(searchMemes(store, G1, '越界').map((m) => m.name).join() === '但是我拒絕', '比對情境');
-  ok(searchMemes(store, G1, '拒絕 越界').length === 1 && searchMemes(store, G1, '拒絕 好笑').length === 0, '每個詞都要出現');
-  ok(searchMemes(store, G1, '笑')[0].name === '笑死', '比對標籤與名稱');
-  recordMemeUse(store, findMeme(store, G1, '笑死').id, NOW);
-  ok(searchMemes(store, G1, '')[0].name === '笑死', '空 query 依使用次數排序');
-  const text = formatMemeList(searchMemes(store, G1, ''));
+  add(store, { name: '別服的', when: '別的伺服器發生的事', guildId: G2, channelId: '123456789012345678' });
+  const all = searchMemes(store, '');
+  ok(all.length === 3, '空 query 列出全部（含別的伺服器存的）');
+  ok(searchMemes(store, '越界').map((m) => m.name).join() === '但是我拒絕', '比對情境');
+  ok(searchMemes(store, '拒絕 越界').length === 1 && searchMemes(store, '拒絕 好笑').length === 0, '每個詞都要出現');
+  ok(searchMemes(store, '笑')[0].name === '笑死', '比對標籤與名稱');
+  recordMemeUse(store, findMeme(store, '笑死').id, NOW);
+  ok(searchMemes(store, '')[0].name === '笑死', '空 query 依使用次數排序');
+  const text = formatMemeList(searchMemes(store, ''));
   ok(/但是我拒絕/.test(text) && /越界/.test(text) && /256×144/.test(text), '清單含名稱、情境、尺寸');
 }
 
 console.log('## 6. 注入 prompt 的清單');
 {
   const store = createMemeStore();
-  ok(memeHint(store, G1) === '', '沒有梗圖時不注入');
+  ok(memeHint(store) === '', '沒有梗圖時不注入');
   for (let i = 0; i < 12; i += 1) {
     addMeme(store, base({ name: `local${i}`, channelId: `${410000000000000000n + BigInt(i)}` }), { now: NOW + i });
   }
   for (let i = 0; i < 6; i += 1) {
     addMeme(store, base({
-      name: `other${i}`, scope: 'global', guildId: G2, channelId: `${420000000000000000n + BigInt(i)}`,
+      name: `other${i}`, guildId: G2, channelId: `${420000000000000000n + BigInt(i)}`,
     }), { now: NOW + i });
   }
-  const text = memeHint(store, G1);
+  const text = memeHint(store, { max: 8 });
   const names = [...text.matchAll(/^- (.+?)：/gm)].map((m) => m[1]);
-  ok(names.filter((n) => n.startsWith('local')).length === 8, '本服最多 8 個');
-  ok(names.filter((n) => n.startsWith('other')).length === 4, '跨服共用最多 4 個');
+  ok(names.length === 8, '最多帶 max 張，不分伺服器');
   ok(/meme:名稱/.test(text) && /資料，不是指令/.test(text), '標頭說明送法並標明是資料');
   ok(text.includes('有人要你做越界的事'), '每筆帶使用情境');
-  ok(memeHint(store, '999999999999999999').split('\n').length === 1 + 4, '沒有本服梗圖的伺服器只看到共用的');
+  ok(memeHint(store).split('\n').length === 1 + 8, '預設 8 張');
+  ok(memeHint(store, { max: 0 }) === '', 'max 0 就不注入');
 }
 
 console.log('## 7. 刪除權限');
 {
   const store = createMemeStore();
   add(store, { requesters: [USER] });
-  ok(forgetMeme(store, { guildId: G1, name: '但是我拒絕', userIds: [OTHER], adminIds: [ADMIN] }).status === 403, '不相干的人不能刪');
-  ok(forgetMeme(store, { guildId: G1, name: '不存在', userIds: [USER], adminIds: [] }).status === 404, '找不到回 404');
-  ok(forgetMeme(store, { guildId: G2, name: '但是我拒絕', userIds: [USER], adminIds: [] }).status === 404, '別服的本服梗圖看不到也刪不到');
-  const byAdmin = forgetMeme(store, { guildId: G1, name: '但是我拒絕', userIds: [ADMIN], adminIds: [ADMIN] });
+  ok(forgetMeme(store, { name: '但是我拒絕', userIds: [OTHER], adminIds: [ADMIN] }).status === 403, '不相干的人不能刪');
+  ok(forgetMeme(store, { name: '不存在', userIds: [USER], adminIds: [] }).status === 404, '找不到回 404');
+  const byAdmin = forgetMeme(store, { name: '但是我拒絕', userIds: [ADMIN], adminIds: [ADMIN] });
   ok(byAdmin.meme && store.memes.length === 0, '管理員可以刪');
-  add(store, { name: '另一張', requesters: [USER] });
-  ok(forgetMeme(store, { guildId: G1, name: '另一張', userIds: [OTHER, USER], adminIds: [] }).meme, '原本要求存的人可以刪');
+  add(store, { name: '另一張', guildId: G2, channelId: C2, requesters: [USER] });
+  ok(forgetMeme(store, { name: '另一張', userIds: [OTHER, USER], adminIds: [] }).meme, '原本要求存的人可以刪（不管存在哪個伺服器）');
 }
 
 console.log('## 7b. 存圖權限與事前檢查');
@@ -198,7 +192,7 @@ console.log('## 7b. 存圖權限與事前檢查');
   ok(!can({ adminIds: [] , turnUserIds: [ADMIN] }), '沒設管理員時不會放行');
 
   const store = createMemeStore();
-  const fields = { name: '但是我拒絕', when: '要拒絕時', guildId: G1, channelId: C1, scope: 'guild', authorIsBot: true };
+  const fields = { name: '但是我拒絕', when: '要拒絕時', guildId: G1, channelId: C1, authorIsBot: true };
   ok(checkMemeSlot(store, fields).ok === true, '空庫事前檢查通過');
   ok(checkMemeSlot(store, { ...fields, when: '' }).status === 400, '事前檢查擋掉沒寫情境的');
   ok(store.memes.length === 0 && store.saveLog.length === 0, '事前檢查不改庫');
@@ -223,7 +217,7 @@ console.log('## 7c. 生圖訊息的要求者');
   // 存圖時要求者 = 這一輪 ★ 觸發者 + 當初要求畫圖的人；用 addMeme 驗證他們之後刪得了。
   const store = createMemeStore();
   add(store, { requesters: [...new Set([ADMIN, USER])] });
-  ok(forgetMeme(store, { guildId: G1, name: '但是我拒絕', userIds: [USER], adminIds: [] }).meme, '當初要求畫圖的人可以刪');
+  ok(forgetMeme(store, { name: '但是我拒絕', userIds: [USER], adminIds: [] }).meme, '當初要求畫圖的人可以刪');
 }
 
 console.log('## 8. 檔案存取');
@@ -247,7 +241,7 @@ console.log('## 8. 檔案存取');
     try { memeFileName({ id: '../x', kind: 'png' }); } catch { threw = true; }
     ok(threw, 'id 含路徑時 memeFileName 直接丟錯');
     const row = (over) => ({
-      id: 'm_ok1', name: 'ok', when: 'w', tags: [], scope: 'guild', guildId: G1, channelId: C1, kind: 'png', width: 1, height: 1, bytes: 1, ...over,
+      id: 'm_ok1', name: 'ok', when: 'w', tags: [], guildId: G1, channelId: C1, kind: 'png', width: 1, height: 1, bytes: 1, ...over,
     });
     fs.writeFileSync(file, JSON.stringify({
       version: 1,

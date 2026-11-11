@@ -1534,11 +1534,11 @@ async function main() {
     if (!channel.guildId) throw toolError('私聊沒有梗圖庫', 403);
   }
 
-  /** `meme:<名稱>` → 這個伺服器看得到的梗圖與已讀進記憶體的檔案；私聊、查不到、檔案不見都回明確錯誤。 */
+  /** `meme:<名稱>` → 梗圖與已讀進記憶體的檔案；私聊、查不到、檔案不見都回明確錯誤。 */
   function resolveMemeImage(channel, file) {
     memesGuard(channel);
     const name = memeNameFromRef(file);
-    const meme = findMeme(memeStore, channel.guildId, name);
+    const meme = findMeme(memeStore, name);
     if (!meme) throw toolError(`找不到梗圖「${name}」：先用 search_memes 看名稱，不要自己編`, 404);
     let buffer;
     try {
@@ -3161,12 +3161,11 @@ async function main() {
         name: body.name,
         when: body.when,
         tags: body.tags,
-        scope: body.shared === true ? 'global' : 'guild',
         guildId: channel.guildId,
         channelId: channel.id,
       };
       // 先過名稱、重名、額度與容量，再下載與縮圖。
-      const slot = checkMemeSlot(memeStore, { ...fields, authorIsBot: true });
+      const slot = checkMemeSlot(memeStore, fields);
       if (slot.error) throw toolError(slot.error, slot.status);
       const messageId = messageRefs.lookup(key, ref.ref);
       if (!messageId) throw toolError(`找不到訊息 #${ref.ref}：只能用這個頻道出現過的 #編號`, 404);
@@ -3213,23 +3212,22 @@ async function main() {
         throw toolError('梗圖寫檔失敗，沒有存', 500);
       }
       persistMemesNow();
-      log(`MCP 存梗圖 ${key}（${flat(added.meme.name, 30)}，${added.meme.scope}，${out.note}）`);
+      log(`MCP 存梗圖 ${key}（${flat(added.meme.name, 30)}，${out.note}）`);
       return {
-        text: `已存成梗圖「${added.meme.name}」（${out.note}；${added.meme.scope === 'global' ? '所有伺服器共用' : '只有這個伺服器'}）。要送用 send_image，file 填 meme:${added.meme.name}。${added.note ? `\n${added.note}` : ''}`,
+        text: `已存成梗圖「${added.meme.name}」（${out.note}；所有伺服器共用）。要送用 send_image，file 填 meme:${added.meme.name}。`,
       };
     },
     async 'meme-search'(body) {
       const { channel } = await agentSender.resolve(body.token);
       memesGuard(channel);
-      const list = searchMemes(memeStore, channel.guildId, body.query);
-      if (list.length === 0) return { text: textArg(body.query, 40) ? '沒有符合的梗圖。' : '這個伺服器還沒有梗圖。' };
+      const list = searchMemes(memeStore, body.query);
+      if (list.length === 0) return { text: textArg(body.query, 40) ? '沒有符合的梗圖。' : '梗圖庫還沒有圖。' };
       return { text: `梗圖（送出：send_image 的 file 填 "meme:名稱"）：\n${formatMemeList(list)}` };
     },
     async 'meme-forget'(body) {
       const { key, channel } = await agentSender.resolve(body.token);
       memesGuard(channel);
       const result = forgetMeme(memeStore, {
-        guildId: channel.guildId,
         name: textArg(body.name, 60),
         userIds: directTriggerIds(key),
         adminIds: [...ownerIds],
@@ -4416,15 +4414,13 @@ async function main() {
       ].filter(Boolean).join('\n');
     }
 
-    // 梗圖：本服前幾張＋跨伺服器共用的前幾張，只帶名稱與使用情境（模型不會自己想到去搜）。
+    // 梗圖：依使用次數取前幾張（所有伺服器共用），只帶名稱與使用情境（模型不會自己想到去搜）。
     // 同一會話沒變就不重帶；清單變了（存了新的、用次數改了排序）才會再帶一次。
     let memeHintText = '';
     if (cfg.discord.memes.enabled && guild) {
       if (!emojiShown.has(key)) emojiShown.set(key, new Map());
-      memeHintText = onceInSession(emojiShown.get(key), 'meme', memeHint(memeStore, job.guildId, {
-        localMax: cfg.discord.memes.localMax,
-        otherMax: cfg.discord.memes.otherMax,
-      }), Date.now(), MEMORY_REFRESH_MS);
+      memeHintText = onceInSession(emojiShown.get(key), 'meme',
+        memeHint(memeStore, { max: cfg.discord.memes.max }), Date.now(), MEMORY_REFRESH_MS);
     }
 
     // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
@@ -6511,7 +6507,6 @@ async function main() {
               name: meme.name,
               when: meme.when,
               tags: meme.tags,
-              scope: meme.scope,
               kind: meme.kind,
               width: meme.width,
               height: meme.height,
