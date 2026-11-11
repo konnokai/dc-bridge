@@ -1053,7 +1053,7 @@ try {
           text: `筆記${i}`, by: 'model', at: new Date(old).toISOString(), expiresAt: old,
         })) }),
         memes: () => ({ enabled: true, memes: Array.from({ length: 25 }, (_, i) => ({
-          id: `m_${pad(i)}`, name: `梗圖${pad(i)}`, when: '', tags: [], scope: 'guild', guildName: '伺服器',
+          id: `m_${pad(i)}`, name: `梗圖${pad(i)}`, when: '', tags: [], guildName: '伺服器',
           createdBy: 'user', channelName: '頻道', uses: 0, width: 256, height: 256, bytes: 1024,
         })) }),
         memeImage: () => ({
@@ -1110,11 +1110,13 @@ try {
       await p.locator('#meme-search').fill('m_03');
       await p.waitForFunction(() => document.querySelectorAll('#meme-rows tr').length === 1);
       assert.match(await p.locator('#meme-rows tr').textContent(), /梗圖03/, '可用梗圖 id 找到圖');
+      assert.match(await p.locator('#meme-rows tr').textContent(), /伺服器 · #頻道/, '來源顯示伺服器名');
 
       await p.locator('#meme-rows button[data-meme-view]').first().click();
       assert.equal(await p.locator('#detail-modal').isVisible(), true);
       assert.equal(await p.locator('#detail-title').textContent(), '梗圖03');
       assert.match(await p.locator('#detail-meta').textContent(), /使用：0 次/);
+      assert.match(await p.locator('#detail-meta').textContent(), /伺服器 · #頻道/, '放大彈窗顯示伺服器名');
       assert.match(await p.locator('#detail-body').textContent(), /沒有寫使用情境/);
       await p.waitForFunction(() => document.querySelector('#detail-image').naturalWidth > 0);
       assert.equal(await p.locator('#detail-image').isVisible(), true, '放大後看得到圖');
@@ -1169,7 +1171,7 @@ try {
         memes: () => ({
           enabled: true,
           memes: [{
-            id: 'm_bad', name: '壞圖', when: '', tags: [], scope: 'guild', guildName: '伺服器',
+            id: 'm_bad', name: '壞圖', when: '', tags: [], guildName: '伺服器',
             createdBy: 'user', channelName: '頻道', uses: 0, width: 100, height: 100, bytes: 100,
           }],
         }),

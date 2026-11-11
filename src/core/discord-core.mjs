@@ -180,10 +180,9 @@ export function normalizeDiscordConfig(raw) {
     },
     memes: {
       // 梗圖庫：模型把頻道裡的圖存成 128～256px 的小圖，再用 send_image 的 meme:<名稱> 送出。
-      // 預設開：圖只存在 state/discord-memes，沒有外部成本；要關就設 enabled:false。
+      // 所有伺服器共用同一個庫；預設開，沒有外部成本，要關就設 enabled:false。
       enabled: src.memes?.enabled !== false,
-      localMax: clamp(src.memes?.localMax, 8, 0, 20),
-      otherMax: clamp(src.memes?.otherMax, 4, 0, 10),
+      max: clamp(src.memes?.max, 8, 0, 20),
     },
     reactions: {
       // 沒被 @ 的頻道訊息，偶爾加一個 reaction（不廢話）。

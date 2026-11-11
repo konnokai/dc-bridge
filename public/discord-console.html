@@ -538,14 +538,14 @@
 
   <section class="card">
     <h2>梗圖 <span id="memes-count" class="muted"></span></h2>
-    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 save_meme 存下的小圖，用 send_image 的 meme:名稱 送出。刪掉後模型就送不出那張；共用的梗圖所有伺服器都看得到。</p>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 save_meme 存下的小圖，用 send_image 的 meme:名稱 送出。刪掉後模型就送不出那張；梗圖庫所有伺服器共用。</p>
     <div class="row" style="margin-bottom:10px">
       <input id="meme-search" type="search" aria-label="搜尋梗圖" placeholder="搜尋名稱或梗圖 id" style="max-width:260px">
     </div>
     <div class="table-wrap">
       <table style="min-width:760px">
-        <colgroup><col style="width:11%"><col style="width:34%"><col style="width:15%"><col style="width:15%"><col style="width:12%"><col style="width:13%"></colgroup>
-        <thead><tr><th>預覽</th><th>名稱與情境</th><th>範圍</th><th>來源</th><th>使用／尺寸</th><th></th></tr></thead>
+        <colgroup><col style="width:12%"><col style="width:42%"><col style="width:18%"><col style="width:15%"><col style="width:13%"></colgroup>
+        <thead><tr><th>預覽</th><th>名稱與情境</th><th>來源</th><th>使用／尺寸</th><th></th></tr></thead>
         <tbody id="meme-rows"></tbody>
       </table>
     </div>
@@ -1685,8 +1685,7 @@
 
   function openMemeDetail(meme) {
     const meta = [
-      ['範圍', meme.scope === 'global' ? '所有伺服器共用' : (meme.guildName || '—')],
-      ['來源', (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName],
+      ['來源', (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · ' + (meme.guildName || '—') + ' · #' + meme.channelName],
       ['使用', `${meme.uses} 次`],
       ['尺寸', `${meme.width}×${meme.height} · ${Math.round(meme.bytes / 1024)}KB`],
     ];
@@ -1727,7 +1726,7 @@
     }
     renderPagedList('meme', rows, {
       fields: (meme) => [meme.name, meme.id],
-      colSpan: 6,
+      colSpan: 5,
       empty: '還沒有梗圖。',
       unit: '張',
       cells: (meme) => {
@@ -1744,8 +1743,8 @@
             el('div', { className: 'muted' }, meme.when),
             meme.tags?.length ? el('div', { className: 'muted meme-tags' }, meme.tags.join('、')) : null,
           ),
-          el('td', {}, meme.scope === 'global' ? '所有伺服器共用' : meme.guildName),
-          el('td', { className: 'muted' }, (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖') + ' · #' + meme.channelName),
+          el('td', { className: 'muted' }, (meme.createdBy === 'bot' ? '大肥魚自己的圖' : '群友的圖')
+            + ' · ' + (meme.guildName || '—') + ' · #' + meme.channelName),
           el('td', { className: 'muted' }, meme.uses + ' 次 · ' + meme.width + '×' + meme.height + ' · ' + Math.round(meme.bytes / 1024) + 'KB'),
           el('td', {}, el('div', { className: 'entry-actions' },
             el('button', { dataset: { memeView: meme.id }, textContent: '放大' }),

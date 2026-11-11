@@ -34,7 +34,7 @@ Discord 不 import `src/bridge.js`。
 | `core/discord-dev-feedback.mjs` | 模型送給開發者的功能申請與意見（控制台「回饋」分頁） |
 | `core/discord-followup.mjs` | 回訪排程（存 `state/discord-followups.json`，重啟後還在） |
 | `core/discord-notes.mjs` | 頻道筆記與每日摘要 |
-| `core/discord-memes.mjs` | 梗圖庫：索引與額度、可見範圍、ffmpeg 縮成長邊 ≤256px、【常用梗圖】注入文字 |
+| `core/discord-memes.mjs` | 梗圖庫（所有伺服器共用）：索引與額度、ffmpeg 縮成長邊 ≤256px、【常用梗圖】注入文字 |
 | `core/discord-reload.mjs` | `/reload-system-prompt` 的交接摘要（暫存與 prompt 區塊） |
 | `core/discord-memory.mjs` | 群友記憶 |
 | `core/discord-slang.mjs` | 黑話收集與注入 |
