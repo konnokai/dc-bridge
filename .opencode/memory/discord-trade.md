@@ -25,11 +25,13 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - 三大法人日報：`src/core/institutional-provider.mjs`，TWSE `T86`（`/rwd/zh/fund/T86`）與 TPEx OpenAPI `tpex_3insti_daily_trading`；欄位用「先精確比對再 contains」避免 `自營商買賣超股數` 被 `自營商買賣超股數(避險)` 誤抓。
 - 重大訊息：`src/core/material-provider.mjs`，TWSE `t187ap04_L`、TPEx `mopsfin_t187ap04_O`。MOPS 公告日通常比復盤日早一天，parser 收 `[prevTradingDate, date]` 範圍並標每筆實際日期；空結果不快取，下一輪重抓。`getForSymbols` 以 `time + subject` 去重、依日期+時間由新到舊排序、每檔取前 3。
 - 休市日 provider：`src/core/quote-provider.mjs` 的 `getHolidays()`，失敗只快取 5 分鐘（不再 12 小時），空回應算失敗；同時合併重複請求（inflight）；`extraHolidays`（`config.discord.trade.extraHolidays`，YYYY-MM-DD）與 API 結果聯集，供颱風／臨時停市。
+- 商品主檔是人工白名單（`src/core/trade-symbols.mjs`），一定漏收。主檔 miss 時 `quote()`／`placeOrder()` 用 provider 的 `lookup()` 反查官方行情（兩個來源並行抓，只認完整代號或完整名稱）：查得到就回「在官方行情查得到，但不在可交易商品主檔…不是代號打錯」（錯誤碼 `SYMBOL_NOT_COLLECTED`），兩邊都查不到才回「查不到這個股票」。行情清單也含 ETF／特別股／TDR，所以文案只說「可能漏收」，不斷言。6196 帆宣在 TWSE 上市，不是上櫃（回饋 df_mwbhnyoscc6e90，2026-11-11）。
 - 不用 Yahoo Finance／yfinance 做台股即時報價：TWSE／TPEx 在 Yahoo 是 20 分鐘延遲，且條款禁止轉散布給第三人（personal use only）。要往盤中即時走，必須找有轉散布授權的行情源；沒有就維持 A 模式收盤結算。
 
 ## 漲跌停與參考價
 
-- `limitPrices(referenceCents)`：參考價 ×1.1／×0.9 後對齊升降單位（漲停向下取、跌停向上取），級距用漲跌停價本身而非參考價。
+- `limitPrices(referenceCents, entry)`：參考價 ×(1±`limitPct`) 後對齊升降單位（漲停向下取、跌停向上取），級距用漲跌停價本身而非參考價。`limitPct` 逐檔不同（一般 10、槓桿 ETF 20），沒給 entry 當 10%。
+- ETF：`tickCents(price, 'etf')` 未滿 50 元 0.01、50 元以上 0.05；賣出證交稅 `fees.twEtfTaxRate`（預設 0.1%），建單時寫進 `orders.tax_rate_ppm`。ETF 走白名單（10 檔國內成分），債券／國外成分／ETN 不收（無漲跌幅限制或外幣計價）。
 - 參考價用 `referenceForTradeDate(latest, tradeDate)`：`latest.date < trade_date` 時用 `latest.closeCents`（前一日收盤），不是 `close − change`；同日資料才用 `referenceCents`（`close − change`）回推。
 - 來源未更新時參考價可能落後 1–2 個交易日，保留額低估只會讓結算時現金不足而拒單，不會讓餘額變負。
 
@@ -107,6 +109,6 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - Console UI 測試缺 Playwright，只做 HTML 語法與標籤平衡檢查。
 - `nextOrderAt` 找不到下一交易日時顯示「未定」（31 天內都沒有交易日的極端情況）。
 - `node scripts/test-setup-dsh-idempotent.mjs` 需 `DSH_INSTALL_MODULES`，本機無法跑。
-- 測試套件：`npm run test:discord` 為 22 支腳本（含 `test-discord-trade`、`test-discord-trade-db`、`test-discord-bot-trader`、`test-discord-institutional`）；`test-mcp-servers-stdio` 驗證 mcp-trade 6 工具。
+- 測試套件：`npm run test:discord` 為 29 支腳本（含 `test-discord-trade`、`test-discord-trade-db`、`test-discord-bot-trader`、`test-discord-institutional`）；`test-mcp-servers-stdio` 驗證 mcp-trade 6 工具。
 
 相關：[[discord-usage-pricing]]、[[discord-console-table-layout]]。
