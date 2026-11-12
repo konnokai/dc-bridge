@@ -33,6 +33,9 @@ import {
   sessionTitleFor,
   sessionLabelFor,
   shouldAutoCompact,
+  parseSlashCommand,
+  runSlashCommand,
+  slashInputAction,
   withSelfMutedUser,
   loadSessions,
   normalizeDiscordConfig,
@@ -439,6 +442,63 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(!isSkippedMessage('a \\// b', BOT), '標記不在開頭 → 不跳過');
   ok(!isSkippedMessage('加 http://', BOT), '結尾的 // → 不跳過');
   ok(!isSkippedMessage('/reset', BOT), '/reset 不跳過');
+}
+
+console.log('## 3b. 斜線指令');
+{
+  assert.deepEqual(parseSlashCommand('/compact'), { name: 'compact', line: '/compact' });
+  assert.deepEqual(parseSlashCommand('/goal 看盤'), { name: 'goal', line: '/goal 看盤' });
+  assert.deepEqual(parseSlashCommand('/Compact'), { name: 'compact', line: '/compact' }, '大寫指令名正規化成小寫');
+  assert.deepEqual(parseSlashCommand('/COMPACT'), { name: 'compact', line: '/compact' }, '全大寫也能認');
+  assert.deepEqual(parseSlashCommand('／ｃｏｍｐａｃｔ'), { name: 'compact', line: '/compact' }, '全形斜線與全形字母也能認');
+  ok(parseSlashCommand('/clear')?.name === 'clear', '未註冊的英文指令也認得語法，交給後面判斷');
+  ok(parseSlashCommand('/你好') === null, '非 ASCII 指令語法不當指令');
+  ok(parseSlashCommand(' /compact') === null, '前面有空白不是指令（DSH 只認 byte 0）');
+  ok(parseSlashCommand('/compact\n第二行')?.name === 'compact', '換行也算分隔');
+
+  assert.equal(slashInputAction({ text: '/s', direct: false, isOwner: false }), 'ignore',
+    '沒叫 bot 的閒聊 / 開頭直接丟掉，不公開回覆');
+  assert.equal(slashInputAction({ text: '/compact', direct: false, isOwner: true, executable: true }), 'handle',
+    '沒叫 bot 但管理員打 /compact 仍然執行');
+  assert.equal(slashInputAction({ text: '/compact', direct: false, isOwner: true }), 'ignore',
+    '沒叫 bot 又不在橋接支援清單的指令直接丟掉');
+  assert.equal(slashInputAction({ text: '/compact', direct: true, isOwner: false }), 'deny',
+    '有叫 bot 但不是管理員才回拒絕');
+  assert.equal(slashInputAction({ text: '/compact', direct: true, isOwner: true }), 'handle');
+  assert.equal(slashInputAction({ text: '／compact', direct: true, isOwner: true }), 'handle',
+    '全形斜線也走同一條攔截');
+  assert.equal(slashInputAction({ text: '／hello', direct: false, isOwner: true }), 'ignore',
+    '全形斜線的閒聊也不能漏進模型');
+  assert.equal(slashInputAction({ text: '一般聊天', direct: false, isOwner: false }), 'chat');
+
+  const calls = [];
+  const run = async (sessionId, line) => {
+    calls.push(`run:${sessionId}:${line}`);
+    return { result: { kind: 'success', text: 'Compacted 3' } };
+  };
+  const executed = await runSlashCommand({ text: '/compact', sessionId: 's1', executeCommand: run });
+  assert.deepEqual(executed, { kind: 'executed', name: 'compact', outcome: { kind: 'success', text: 'Compacted 3' } });
+  assert.deepEqual(calls, ['run:s1:/compact']);
+
+  calls.length = 0;
+  const unsupported = await runSlashCommand({ text: '/export', sessionId: 's1', executeCommand: run });
+  assert.deepEqual(unsupported, { kind: 'ui-only', name: 'export' });
+  assert.deepEqual(calls, [], '不支援的指令不執行');
+
+  calls.length = 0;
+  const noSession = await runSlashCommand({ text: '/compact', sessionId: '', executeCommand: run });
+  assert.deepEqual(noSession, { kind: 'no-session', name: 'compact' });
+  assert.deepEqual(calls, []);
+
+  const missing = await runSlashCommand({ text: '/compact', sessionId: 's1', executeCommand: async () => undefined });
+  assert.deepEqual(missing, { kind: 'unknown', name: 'compact' });
+
+  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
+  const slashGate = bridgeSource.indexOf('slashInputAction({');
+  const batchAdd = bridgeSource.indexOf('batcher.add(key, {');
+  ok(slashGate > 0 && slashGate < batchAdd, '斜線訊息在進批次前就被攔下');
+  ok(bridgeSource.includes('api.commands.execute') && !bridgeSource.includes("content: [{ type: 'text', text: '/compact' }]"),
+    '自動壓縮走 commands/execute，不再把 /compact 當使用者訊息');
 }
 
 console.log('## 4. 審批與提問');

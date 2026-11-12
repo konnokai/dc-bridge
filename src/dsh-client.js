@@ -8,6 +8,8 @@
 // 复核记录（DSH 0.1.5-rc.1，逐项实测）：session/{list,create,prompt,selectModel,rename},
 // workspace/{create,rename,archiveSession}, settings/describe, agentPresets/list 的参数形状与
 // 返回结构均与本文件一致；session/prompt 在新版强制要求 requestId（wrapArgs 已自动补）。
+// commands/execute 在 DSH 0.2.1-rc.2 实测：agentId 传 session id，execute 直接执行、
+// 不产生使用者訊息（2026-11-12）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -693,6 +695,14 @@ export class NodeApiClient extends AbstractApiClient {
   /** 新版 DSH 的 agentPresets 命名空间是复数；旧版基类仍映射到 agentPreset.list。 */
   agentPresets = {
     list: (payload, signal) => this.callUnary('agentPresets.list', payload, signal),
+  };
+
+  /**
+   * 互動 UI 的斜線指令。舊版 apiproxy 沒有這個域，直接走 slash RPC：
+   * execute 直接執行，不會變成使用者訊息；回 undefined 代表沒有這個指令。
+   */
+  commands = {
+    execute: (payload, signal) => this.callUnary('commands/execute', payload, signal),
   };
 
   /**

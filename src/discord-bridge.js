@@ -38,6 +38,9 @@ import {
   searchTerms,
   normalizeDiscordConfig,
   parseApprovalAnswer,
+  parseSlashCommand,
+  runSlashCommand,
+  slashInputAction,
   questionAnswersFor,
   saveSessions,
   sessionTitleFor,
@@ -266,6 +269,7 @@ const MEMES_INDEX_FILE = path.join(MEMES_DIR, 'index.json');
 const MEMES_FILES_DIR = path.join(MEMES_DIR, 'files');
 const LOCK_FILE = path.join(STATE_DIR, 'discord-bridge.lock');
 const DSH_TIMEOUT_MS = 60_000;
+const DSH_COMMAND_TIMEOUT_MS = 180_000; // 手動／自動壓縮可能吃掉整個大 context，60 秒會把 DSH 那邊也取消
 const TYPING_REFRESH_MS = 8_000; // Discord 的「正在輸入」一次只維持 10 秒
 const ASK_TIMEOUT_MS = 120_000; // /ask 等模型回答的上限：一般回合 12~35 秒，兩分鐘足夠
 const PRIVATE_TURN_READY_TIMEOUT_MS = 60_000; // 指令排到最前面時，等 DSH 自己的回合／事件流同步的上限
@@ -3706,10 +3710,21 @@ async function main() {
     compactedAt.set(sessionId, Date.now());
     log(`自動壓縮 ${key}（context ${contextTokens.get(sessionId)} token，門檻 ${cfg.discord.autoCompactTokens}）`);
     try {
-      const accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content: [{ type: 'text', text: '/compact' }] });
-      const result = accepted.result;
-      log(`自動壓縮結果 ${key}：${result?.ok ? (result.value?.command?.text ?? '（沒有回覆）') : (result?.error?.message ?? '失敗')}`);
+      // 走 commands/execute 才會真的執行 /compact；直接 prompt 只會變成一則使用者訊息。
+      const accepted = await api.commands.execute({
+        agentId: sessionId,
+        line: '/compact',
+        submittedAttachments: [],
+      }, AbortSignal.timeout(DSH_COMMAND_TIMEOUT_MS));
+      const result = unwrap(accepted, 'commands.execute');
+      const outcome = result?.result;
+      // 失敗多半是會話還有排隊工作；不寫冷卻，下一個 turn/end 再試。
+      if (outcome?.kind !== 'success') compactedAt.delete(sessionId);
+      log(`自動壓縮結果 ${key}：${outcome?.kind === 'success'
+        ? (outcome.text ?? '完成')
+        : (outcome?.text ?? 'DSH 沒有 /compact 指令')}`);
     } catch (error) {
+      compactedAt.delete(sessionId);
       log(`自動壓縮失敗 ${key}：${error?.message ?? error}`);
     } finally {
       contextTokens.delete(sessionId);
@@ -3719,7 +3734,7 @@ async function main() {
 
   /**
    * 等第一個 token 的計時器。只從 turn/start 開始算，而且是橋接自己排進去的批次；
-   * 自動壓縮的 `/compact` 不算。收到 assistant/first-token（DSH 串流第一個 chunk）、
+   * 壓縮指令不會開回合，不會走到這裡。收到 assistant/first-token（DSH 串流第一個 chunk）、
    * assistant/message 或 tool/call 就停錶：模型已經開始輸出或跑工具，後面多久都不歸這個機制管。
    */
   function clearTtftTimer(sessionId) {
@@ -3939,7 +3954,7 @@ async function main() {
       const queuedLast = pendingLastMessages.get(key);
       turnLastMessage.set(key, queuedLast?.length ? (queuedLast.shift()?.id ?? '') : '');
       turnTriggerRecorded.delete(key);
-      // 只有橋接自己排進去的批次才等第一個 token；自動壓縮的 /compact 不算。
+      // 只有橋接自己排進去的批次才等第一個 token；壓縮指令不會開回合。
       if (event.type === 'turn/start' && hadQueued) armTtftTimer(key, frame.sessionId, turn);
     }
     const ended = collector ? collector.push(event) : null;
@@ -4612,15 +4627,7 @@ async function main() {
     // 還有「只當背景」的訊息沒被上下文涵蓋時不要標記，下一批會再重帶一次。
     // 純系統訊息（例如重啟後的【生圖完成】）沒有批次，也不能算這個會話已經帶過上下文。
     if (!silentPending.has(key) && (job.entries?.length ?? 0) > 0) primedKeys.add(key);
-    // DSH 的斜線命令會直接回結果，不經過模型、也不會產生回合。
-    const command = accepted.result.value?.command;
-    if (command) {
-      unqueue();
-      stopTyping(key);
-      if (command.text) await sendLong(key, command.text);
-      return false;
-    }
-    // 第一批 prompt 真的進模型了才算用掉；送失敗或斜線命令都不算。
+    // 第一批 prompt 真的進模型了才算用掉；送失敗不算。
     // 第一批沒 ★（沒帶開場）也一樣用掉：開場只給新會話的第一批，不留到後面的 ★ 批次。
     needsOpening.delete(key);
     // prompt 真的進 DSH 了才用掉交接摘要；送失敗時下一則還會再帶一次。
@@ -5277,6 +5284,50 @@ async function main() {
     }
   }
 
+  /**
+   * `/` 開頭的訊息：橋接支援的 DSH 指令直接執行，其餘只回提示。
+   * 一律不進批次：批次會包成【新訊息】，模型只會把它當一般文字回答。
+   */
+  async function handleSlashText(key, text) {
+    let result;
+    try {
+      result = await runSlashCommand({
+        text,
+        sessionId: sessions[key] ?? null,
+        executeCommand: async (sessionId, line) => unwrap(
+          await api.commands.execute({
+            agentId: sessionId,
+            line,
+            submittedAttachments: [],
+          }, AbortSignal.timeout(DSH_COMMAND_TIMEOUT_MS)),
+          'commands.execute',
+        ),
+      });
+    } catch (error) {
+      log(`斜線指令失敗 ${key}：${error?.stack ?? error}`);
+      await sendLong(key, '指令執行失敗，詳情看橋接日誌。');
+      return;
+    }
+    const gui = '請到 DSH Web GUI 操作';
+    if (result.kind === 'executed') {
+      const outcome = result.outcome;
+      await sendLong(key, outcome?.kind === 'success'
+        ? (outcome.text || `/${result.name} 完成。`)
+        : (outcome?.text || `/${result.name} 失敗。`));
+      return;
+    }
+    if (result.kind === 'no-session') {
+      await sendLong(key, `這個頻道還沒有會話，沒有東西可以執行 /${result.name}；先傳一則訊息。`);
+      return;
+    }
+    if (result.kind === 'unknown') {
+      await sendLong(key, `這個 DSH 沒有 /${result.name} 指令；${gui}。`);
+      return;
+    }
+    const name = result.name ? `/${result.name}` : '這則訊息';
+    await sendLong(key, `「${name}」不能在 Discord 訊息裡直接執行；${gui}。如果是這個 bot 的指令，請用 Discord 的斜線指令選單，打字送出的 / 不會執行。`);
+  }
+
   async function handleMessage(message) {
     if (!message || message.author?.bot || message.webhookId) return;
     // 模型自己的不理名單：@ 也不處理，沒有例外。管理員永遠不受這份名單影響。
@@ -5359,17 +5410,31 @@ async function main() {
     const author = authorName(message);
     log(`收到 ${key}${guildId ? ` guild=${guildId}` : ''} user=${message.author.id}${direct ? '' : '（沒叫 bot）'}`);
 
+    // `/` 開頭不進批次：批次會包成【新訊息】，模型只會把它當一般文字回答。
+    // 沒叫 bot 的 `/` 開頭直接丟掉、不公開回覆；只有管理員打的 /compact 例外。
+    const slashName = parseSlashCommand(text)?.name ?? null;
     if (direct) {
       const hanging = pending.get(key);
-      // 提問只收這一輪被問的人；審批只收管理員。其他人的訊息照常進一般對話，不會被吃掉。
-      // 只有 @／回覆、沒有文字的空訊息不算答案，留給一般對話。
-      if (hanging && text && await answerPending(hanging, text, key, isOwner, message.author.id)) return;
-
-      // 非管理員的斜線指令一律擋掉，不送進模型（模型會把它當一般文字回答）。
-      if (text.startsWith('/') && !isOwner) {
-        await sendLong(key, '管理指令僅管理員可用。');
-        return;
-      }
+      // 提問回答優先；只有管理員明確打 /compact 時先執行壓縮。
+      const compactFirst = slashName === 'compact' && isOwner;
+      if (!compactFirst && hanging && text && await answerPending(hanging, text, key, isOwner, message.author.id)) return;
+    }
+    const slashAction = slashInputAction({
+      text,
+      direct,
+      isOwner,
+      executable: slashName === 'compact',
+    });
+    if (slashAction === 'ignore') return;
+    if (slashAction === 'deny') {
+      await sendLong(key, slashName === 'compact'
+        ? '壓縮是管理指令，只有管理員能執行；管理員可以在 DSH Web GUI 的壓縮控制項操作。'
+        : '管理指令僅管理員可用。');
+      return;
+    }
+    if (slashAction === 'handle') {
+      await handleSlashText(key, text);
+      return;
     }
 
     batcher.add(key, {

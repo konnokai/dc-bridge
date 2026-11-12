@@ -460,11 +460,61 @@ export function isConversationAllowed(cfg, { guildId, channelId, parentId = null
 }
 
 /**
- * 一輪結束時要不要替會話送 /compact。這是 DSH 自動壓縮沒觸發時的備援。
+ * 一輪結束時要不要替會話執行 /compact。這是 DSH 自動壓縮沒觸發時的備援。
  * 冷卻時間防止壓完還是很大（例如保留的原文本來就長）時每輪都壓。
  */
 export function shouldAutoCompact({ tokens, threshold, lastAt, now, cooldownMs }) {
   return threshold > 0 && Number.isFinite(tokens) && tokens > threshold && now - lastAt >= cooldownMs;
+}
+
+const SLASH_COMMAND_RE = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/iu;
+
+/**
+ * 橋接能直接執行的 DSH 指令。其他指令（`/plan`、`/goal`、`/permission`、`/export`…）
+ * 會改到 UI 才看得到的狀態或需要下載控制項，一律只提示回 Web GUI。
+ */
+const BRIDGE_SLASH_COMMANDS = new Set(['compact']);
+
+/**
+ * `/compact`、`／Compact` → `{ name: 'compact', line: '/compact' }`。
+ * 全形斜線與大小寫先正規化；不是 DSH 指令語法就回 null。
+ */
+export function parseSlashCommand(text) {
+  const line = String(text ?? '').normalize('NFKC');
+  const match = SLASH_COMMAND_RE.exec(line);
+  if (!match) return null;
+  const name = match[1].toLowerCase();
+  return { name, line: `/${name}${line.slice(match[0].length)}` };
+}
+
+/**
+ * `/` 開頭訊息在進批次前的去向：
+ * - `ignore`：沒叫 bot，直接丟掉，不回、不送模型；只有管理員打的 `executable` 指令例外。
+ * - `deny`：有叫 bot 但不是管理員。
+ * - `handle`：交給 handleSlashText。
+ * - `chat`：不是 `/` 開頭，照一般聊天。
+ * `executable` 是呼叫端判斷的「橋接能直接執行」（目前只有 `/compact`），
+ * 讓沒 @bot 的 `/compact` 也有效，但 `/s`、`/home/...` 這種閒聊不會被公開回覆。
+ */
+export function slashInputAction({ text, direct, isOwner, executable = false }) {
+  if (!String(text ?? '').normalize('NFKC').startsWith('/')) return 'chat';
+  if (!direct) return executable && isOwner ? 'handle' : 'ignore';
+  return isOwner ? 'handle' : 'deny';
+}
+
+/**
+ * `/` 開頭訊息的處理順序：確認會話 → 只放行橋接支援的指令 → 執行。
+ * 回傳的每一種 kind 都不該再送進模型；呼叫端只負責把結果翻成給人看的字。
+ * `executeCommand` 回 undefined 代表 DSH 沒有註冊這個指令。
+ */
+export async function runSlashCommand({ text, sessionId, executeCommand }) {
+  const parsed = parseSlashCommand(text);
+  if (!parsed) return { kind: 'invalid' };
+  if (!sessionId) return { kind: 'no-session', name: parsed.name };
+  if (!BRIDGE_SLASH_COMMANDS.has(parsed.name)) return { kind: 'ui-only', name: parsed.name };
+  const value = await executeCommand(sessionId, parsed.line);
+  if (value === undefined) return { kind: 'unknown', name: parsed.name };
+  return { kind: 'executed', name: parsed.name, outcome: value?.result ?? null };
 }
 
 const ADMINISTRATOR = 1n << 3n;

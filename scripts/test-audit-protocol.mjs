@@ -30,6 +30,30 @@ test('session/cancel uses the DSH request wrapper and unwraps the envelope', asy
   assert.equal(response.result.value.accepted, true);
 });
 
+test('commands/execute sends the bare args wrapper with agentId', async () => {
+  const api = client();
+  api.cookie = 'fixture=ok';
+  globalThis.fetch = async (input, init) => {
+    assert.equal(new URL(input).pathname, '/api/commands/execute');
+    const envelope = JSON.parse(init.body);
+    assert.equal(envelope.method, 'commands/execute');
+    assert.deepEqual(envelope.payload, {
+      args: { agentId: 'session-a', line: '/compact', submittedAttachments: [] },
+    });
+    return Response.json({
+      type: 'server-response',
+      rpcId: envelope.rpcId,
+      result: { ok: true, value: { commandId: 'cmd-1', result: { kind: 'success', text: 'ok' } } },
+    });
+  };
+  const response = await api.commands.execute({
+    agentId: 'session-a',
+    line: '/compact',
+    submittedAttachments: [],
+  });
+  assert.equal(response.result.value.result.kind, 'success');
+});
+
 test('a handled auth exchange failure has no orphan rejection', async () => {
   globalThis.fetch = async () => new Response('', { status: 401 });
   const api = client();
