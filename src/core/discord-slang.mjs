@@ -1,7 +1,7 @@
 // Discord 黑話詞庫：收集候選、人工確認、注入聊天 prompt。
 //
 // 這裡只做資料處理（不 import discord.js），方便離線測試：
-//   - `state/discord-slang.json` 的讀寫（原子寫、壞檔備份、容量上限）
+//   - `state/discord-slang.json` 的讀寫（原子寫、壞檔備份、候選上限）
 //   - 學習會話的 prompt 與輸出解析
 //   - 已確認詞條的注入格式
 //
@@ -22,14 +22,15 @@ export const SLANG_STATUS = Object.freeze({
   REJECTED: 'rejected',
 });
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const DAY_MS = 24 * 60 * 60 * 1000;
+// 超過這個大小只警告；合法詞庫不該因為變大被清空。以前 2MB 時真的會整份重建。
+const LARGE_FILE_BYTES = 32 * 1024 * 1024;
 const FIELD = { term: 24, meaning: 120, usage: 120, example: 80 };
 const SOURCES_MAX = 5;
 const EXAMPLES_MAX = 3;
 const STYLE_PER_RUN = 2;
 const STYLE_INJECT_MAX = 5;
 const STYLE_INJECT_CHARS = 300;
+const STYLE_LABELS_MAX = 20;
 
 function clean(value, max) {
   const s = String(value ?? '')
@@ -107,14 +108,15 @@ export function createSlangStore() {
 }
 
 function backupCorrupt(file) {
-  try {
-    fs.renameSync(file, `${file}.corrupt-${Date.now()}`);
-  } catch { /* 備份失敗不影響從空的重建 */ }
+  const stamp = Date.now();
+  try { fs.renameSync(file, `${file}.corrupt-${stamp}`); } catch { /* 備份失敗不影響從空的重建 */ }
+  // 重建後下一次存檔會產生新的小 .bak；先把上一份好的留下，不然會被蓋掉。
+  try { fs.renameSync(`${file}.bak`, `${file}.bak-${stamp}`); } catch { /* 沒有舊備份 */ }
 }
 
 /**
- * 讀詞庫。壞檔／過大／版本不認得時先改名備份再從空的重建，
- * 避免下一次存檔把使用者確認過的詞覆蓋掉。
+ * 讀詞庫。壞檔／版本不認得時先改名備份再從空的重建，
+ * 避免下一次存檔把使用者確認過的詞覆蓋掉。過大只警告，照常載入。
  * @returns {{store: object, warning: string|null}}
  */
 export function loadSlangFile(file) {
@@ -126,10 +128,6 @@ export function loadSlangFile(file) {
     throw error;
   }
   const size = Buffer.byteLength(raw, 'utf8');
-  if (size > MAX_FILE_BYTES) {
-    backupCorrupt(file);
-    return { store: createSlangStore(), warning: `黑話詞庫過大（${(size / 1048576).toFixed(1)} MB），已備份並重建` };
-  }
   let doc;
   try {
     doc = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
@@ -147,25 +145,35 @@ export function loadSlangFile(file) {
   }
   const store = createSlangStore();
   store.entries = doc.entries.map(normalizeSlangEntry).filter((entry) => entry.term && entry.meaning);
-  return { store, warning: null };
+  writeBackup(file);
+  const warning = size > LARGE_FILE_BYTES
+    ? `黑話詞庫很大（${(size / 1048576).toFixed(1)} MB），已照常載入`
+    : null;
+  return { store, warning };
+}
+
+/** 載入成功後留一份原始檔；壞檔重建時還有上一份好的可以還原。 */
+function writeBackup(file) {
+  try {
+    fs.copyFileSync(file, `${file}.bak`);
+  } catch { /* 備份失敗不影響載入 */ }
 }
 
 /**
- * 按上限裁剪：已確認優先、其次出現次數、最後更新時間。
- * rejected 只留最近 30 天，避免詞庫變成拒絕紀錄的垃圾桶。
+ * 只裁剪候選。已確認是人工審過的資料，不因容量刪除；
+ * 已拒絕也不過期，不然同一個詞過一陣子又會回到候選重審。
  */
-export function pruneSlang(store, { maxCandidates = 200, maxConfirmed = 500, now = Date.now(), rejectTtlDays = 30 } = {}) {
+export function pruneSlang(store, { maxCandidates = 200 } = {}) {
   const list = Array.isArray(store?.entries) ? store.entries : [];
-  const sorted = [...list].sort((a, b) => statusRank(b) - statusRank(a)
-    || (Number(b?.seen) || 0) - (Number(a?.seen) || 0)
-    || String(b?.updatedAt ?? '').localeCompare(String(a?.updatedAt ?? '')));
-
-  const confirmed = sorted.filter((entry) => entry.status === SLANG_STATUS.CONFIRMED).slice(0, Math.max(1, maxConfirmed));
-  const candidates = sorted.filter((entry) => entry.status === SLANG_STATUS.CANDIDATE).slice(0, Math.max(1, maxCandidates));
-  const cutoff = Number(now) - rejectTtlDays * DAY_MS;
-  const rejected = sorted
-    .filter((entry) => entry.status === SLANG_STATUS.REJECTED && Date.parse(entry.updatedAt) >= cutoff)
-    .slice(0, 100);
+  // 狀態只會是三種；載入時 normalizeSlangEntry 已經收斂過。
+  const confirmed = list.filter((entry) => entry.status === SLANG_STATUS.CONFIRMED);
+  const rejected = list.filter((entry) => entry.status === SLANG_STATUS.REJECTED);
+  const limit = Math.max(1, Number(maxCandidates) || 200);
+  const candidates = list
+    .filter((entry) => entry.status === SLANG_STATUS.CANDIDATE)
+    .sort((a, b) => (Number(b?.seen) || 0) - (Number(a?.seen) || 0)
+      || String(b?.updatedAt ?? '').localeCompare(String(a?.updatedAt ?? '')))
+    .slice(0, limit);
 
   const kept = [...confirmed, ...candidates, ...rejected];
   store.entries = kept;
@@ -482,10 +490,14 @@ export function buildStyleHint(store, { channelId = '', shown = null, now = Date
   return onceInSession(shown, 'style', text, now, refreshMs);
 }
 
-/** 這個頻道已有的風格標籤（含候選與已拒絕），給學習 prompt 避免重複提。 */
+/** 這個頻道已有的風格標籤（含候選與已拒絕）；只給最近的 20 個，避免學習 prompt 一直變長。 */
 export function styleLabels(store, channelId) {
   const cid = clean(channelId, 24);
-  return (store?.entries ?? []).filter((entry) => entry.kind === 'style' && entry.channelId === cid).map((entry) => entry.term);
+  return (store?.entries ?? [])
+    .filter((entry) => entry.kind === 'style' && entry.channelId === cid)
+    .sort((a, b) => String(b?.updatedAt ?? '').localeCompare(String(a?.updatedAt ?? '')))
+    .slice(0, STYLE_LABELS_MAX)
+    .map((entry) => entry.term);
 }
 
 function confirmedOf(store, match) {

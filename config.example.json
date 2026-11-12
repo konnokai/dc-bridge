@@ -119,7 +119,6 @@
       "injectMax": 8,
       "maxChars": 1500,
       "maxCandidates": 200,
-      "maxConfirmed": 500,
       "learnerPreset": "dc-learner",
       "timeoutMs": 90000
     },

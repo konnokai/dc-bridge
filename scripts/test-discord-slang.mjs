@@ -193,6 +193,15 @@ console.log('## 2. 確認、編輯、注入');
   ok(deleteSlang(store, store.entries.find((entry) => entry.term === '水水').id) === true, '刪除成功');
   ok(!deleteSlang(store, 'nope'), '刪除不存在的詞回 false');
   ok(store.entries.length === 2, '刪除後少一筆');
+
+  // 控制台「復原」：confirmSlang 對 rejected 也要能改回 confirmed。
+  const revive = createSlangStore();
+  upsertCandidates(revive, { guildId: GUILD, samples: [], items: [{ term: '復活', meaning: '本來被拒絕' }], now: NOW });
+  rejectSlang(revive, revive.entries[0].id, NOW + 1);
+  ok(buildSlangHint(revive) === '', '已拒絕的詞不注入');
+  confirmSlang(revive, revive.entries[0].id, {}, NOW + 2);
+  ok(revive.entries[0].status === SLANG_STATUS.CONFIRMED && buildSlangHint(revive).includes('復活'),
+    '已拒絕的詞可以在控制台復原');
 }
 
 console.log('## 3. 學習 prompt 與輸出解析');
@@ -237,11 +246,13 @@ console.log('## 4. 檔案讀寫、壞檔與上限');
       now: NOW,
       items: [{ term: '難繃', meaning: '受不了' }],
     });
-    saveSlangFile(file, store, { maxCandidates: 200, maxConfirmed: 500 });
+    saveSlangFile(file, store, { maxCandidates: 200 });
     const loaded = loadSlangFile(file);
     ok(loaded.warning === null && loaded.store.entries.length === 1, '存檔後讀得回來');
     ok(loaded.store.entries[0].term === '難繃' && loaded.store.entries[0].sources.length === 2, '來源與內容都保留');
     ok(loaded.store.entries[0].updatedAt === new Date(NOW).toISOString(), '載入不會把時間重設成現在');
+    const backup = `${file}.bak`;
+    ok(fs.existsSync(backup) && fs.readFileSync(backup, 'utf8') === fs.readFileSync(file, 'utf8'), '載入成功後留一份 .bak');
 
     fs.writeFileSync(file, '{壞掉的 JSON', 'utf8');
     const broken = loadSlangFile(file);
@@ -249,16 +260,57 @@ console.log('## 4. 檔案讀寫、壞檔與上限');
     const backups = fs.readdirSync(dir).filter((name) => name.includes('.corrupt-'));
     ok(backups.length === 1, '壞檔有備份，不會直接被蓋掉');
     ok(fs.readFileSync(path.join(dir, backups[0]), 'utf8').includes('壞掉的 JSON'), '備份保留原始內容');
+    const goodBackups = fs.readdirSync(dir).filter((name) => name.includes(`${path.basename(file)}.bak-`));
+    ok(goodBackups.length === 1 && fs.readFileSync(path.join(dir, goodBackups[0]), 'utf8').includes('難繃'),
+      '壞檔重建時上一份好的 .bak 會留下');
+    ok(!fs.existsSync(backup), '舊 .bak 已改名，不會被重建後的小檔蓋掉');
+
+    saveSlangFile(file, createSlangStore());
+    loadSlangFile(file);
+    ok(fs.existsSync(backup), '重建後再存檔、重啟會產生新的 .bak');
+    ok(fs.readFileSync(path.join(dir, goodBackups[0]), 'utf8').includes('難繃'), '重建後舊的好備份還在');
+
+    // 舊版 2MB 上限會把合法詞庫當壞檔清掉；現在只防異常大小。
+    const huge = path.join(dir, 'huge.json');
+    fs.writeFileSync(huge, JSON.stringify({
+      version: 1,
+      entries: [{ id: 'huge', kind: 'slang', guildId: GUILD, term: '大檔', meaning: 'x'.repeat(3 * 1024 * 1024) }],
+    }), 'utf8');
+    const hugeLoaded = loadSlangFile(huge);
+    ok(hugeLoaded.warning === null && hugeLoaded.store.entries.length === 1, '超過舊 2MB 的合法詞庫照常載入');
 
     const big = createSlangStore();
     for (let i = 0; i < 12; i += 1) {
       upsertCandidates(big, { guildId: GUILD, samples: [], items: [{ term: `候選${i}`, meaning: `意思${i}` }], now: NOW + i });
     }
     confirmSlang(big, big.entries[0].id, {}, NOW + 100);
-    const pruned = pruneSlang(big, { maxCandidates: 3, maxConfirmed: 1, now: NOW + 200 });
-    ok(pruned.dropped === 8, '超過上限會裁剪');
+    const pruned = pruneSlang(big, { maxCandidates: 3 });
+    ok(pruned.dropped === 8, '只裁剪超過上限的候選');
     ok(big.entries.filter((entry) => entry.status === SLANG_STATUS.CANDIDATE).length === 3, '候選名額受 maxCandidates 限制');
-    ok(big.entries.some((entry) => entry.status === SLANG_STATUS.CONFIRMED), '已確認的優先保留');
+    ok(big.entries.some((entry) => entry.status === SLANG_STATUS.CONFIRMED), '已確認的不裁剪');
+
+    const keep = createSlangStore();
+    for (let i = 0; i < 600; i += 1) {
+      keep.entries.push({
+        id: `keep${i}`, kind: 'slang', guildId: GUILD, channelId: '', term: `已確認${i}`, meaning: '意思',
+        status: SLANG_STATUS.CONFIRMED, seen: 1, sources: [],
+        createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(),
+      });
+    }
+    pruneSlang(keep, { maxCandidates: 3 });
+    ok(keep.entries.length === 600, '已確認的詞不因容量被丟');
+
+    const old = createSlangStore();
+    old.entries.push({
+      id: 'old-reject', kind: 'slang', guildId: GUILD, channelId: '', term: '舊拒絕', meaning: '不要',
+      status: SLANG_STATUS.REJECTED, seen: 1, sources: [],
+      createdAt: new Date(NOW - 100 * 24 * 60 * 60 * 1000).toISOString(),
+      updatedAt: new Date(NOW - 100 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    pruneSlang(old, { maxCandidates: 3 });
+    ok(old.entries.length === 1, '已拒絕的詞不會過期');
+    upsertCandidates(old, { guildId: GUILD, samples: [], items: [{ term: '舊拒絕', meaning: '想復活' }], now: NOW });
+    ok(old.entries[0].status === SLANG_STATUS.REJECTED && old.entries.length === 1, '已拒絕的詞不會回到候選');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -331,6 +383,18 @@ console.log('## 5. 頻道風格');
 
   const labels = styleLabels(store, CHANNEL);
   ok(labels.includes('回覆長度') && labels.includes('語氣') && !labels.includes('難繃'), '列出這個頻道已有的風格標籤（含已拒絕）');
+  const manyLabels = createSlangStore();
+  for (let i = 0; i < 25; i += 1) {
+    manyLabels.entries.push({
+      id: `l${i}`, kind: 'style', guildId: GUILD, channelId: CHANNEL, term: `標籤${i}`, meaning: '說明',
+      status: SLANG_STATUS.REJECTED, seen: 1, sources: [],
+      createdAt: new Date(NOW - i * 1000).toISOString(),
+      updatedAt: new Date(NOW - i * 1000).toISOString(),
+    });
+  }
+  const cappedLabels = styleLabels(manyLabels, CHANNEL);
+  ok(cappedLabels.length === 20 && cappedLabels.includes('標籤0') && !cappedLabels.includes('標籤24'),
+    '學習 prompt 只列最近 20 個風格標籤');
   const prompt = buildExtractionPrompt(SAMPLES, { styleLabels: labels });
   ok(prompt.includes('"kind":"style"') && prompt.includes('回覆長度'), 'prompt 要求風格並列出已有標籤');
   ok(!prompt.includes('常聊的話題') && prompt.includes('頻道筆記'), 'prompt 只收風格，事件交給頻道筆記');

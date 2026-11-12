@@ -231,7 +231,6 @@ export function normalizeDiscordConfig(raw) {
       injectMax: clamp(src.slang?.injectMax, 8, 1, 30),
       maxChars: clamp(src.slang?.maxChars, 1500, 200, 4000),
       maxCandidates: clamp(src.slang?.maxCandidates, 200, 10, 2000),
-      maxConfirmed: clamp(src.slang?.maxConfirmed, 500, 10, 5000),
       learnerPreset: text(src.slang?.learnerPreset, 'dc-learner'),
       timeoutMs: clamp(src.slang?.timeoutMs, 90_000, 15_000, 300_000),
     },

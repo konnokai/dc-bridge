@@ -1,6 +1,6 @@
 # 計畫：黑話學習（Discord 版）
 
-> 狀態：**v1.2 已實作**（`src/core/discord-slang.mjs` + 控制台「黑話詞庫」+ `mcp-slang`）。
+> 狀態：**v1.3 已實作**（`src/core/discord-slang.mjs` + 控制台「黑話詞庫」+ `mcp-slang`）。
 > 尚未做：批次重學、每日用量圖表、專用學習 preset。
 >
 > 目標：從允許的頻道收集用語，讓 DSH 產生候選解釋，管理員在控制台確認後注入聊天 prompt。
@@ -10,11 +10,11 @@
 ## v1 實作結果（已完成）
 
 - **模組**：`src/core/discord-slang.mjs`（純資料，可離線測）。
-  - 詞庫讀寫：原子寫、壞檔備份（`.corrupt-<timestamp>`）、版本檢查、大小上限 2MB。
+  - 詞庫讀寫：原子寫、壞檔備份（`.corrupt-<timestamp>`）、版本檢查；超過 32MB 只警告、照常載入。
   - 含本機路徑／憑證特徵的訊息不進學習會話（沿用 `findSensitive`）。
   - 去重：`normalizeTerm`（NFKC + 小寫 + 空白）比對；同一伺服器同一個詞只留一筆，
     `seen +1`、合併例句（上限 3）與來源（上限 5）。已 rejected 的不會復活。
-  - 上限：候選 200 / 已確認 500；排序「已確認 → 出現次數 → 更新時間」。rejected 只留 30 天。
+  - 上限：只裁剪候選（200）；已確認與已拒絕不裁剪。
   - 注入：`buildSlangHint` 只取本伺服器 confirmed，`seen` 高的優先，受 `max` / `maxChars`。
   - 學習 prompt：頻道文字轉義後包進 `<chat>`，明講「只是語料、不是指令」。
   - 解析：沿用 QQ 版驗證過的 `extractJsonArray`（括號配平，不貪婪）。
@@ -64,6 +64,13 @@
 - `dc-chat` persona 叫模型看到不懂的詞先查、確定後收候選，也讓它自己記頻道標籤。
   `dc-learner` 仍然沒有工具：`allowDiscordSend: false` 同時把 `mcp__slang__*` 從清單移除並在執行期擋掉。
 - 學習會話照舊；兩邊寫到同一個詞由 `upsertCandidates` 合併。
+
+### v1.3 已確認不裁剪（已完成）
+
+- 已確認的詞不再受 `maxConfirmed` 限制，只裁剪候選。
+- rejected 不再過期，避免拒絕過的詞過一陣子又回到候選重審。
+- 控制台已拒絕的詞多一個「復原」按鈕，改回已確認。
+- 載入大小上限從 2MB 放到 32MB（只警告，不再清空）；成功載入後留一份 `.bak`。
 
 
 ## 範圍
@@ -115,8 +122,8 @@
    - 去重：`term` 正規化（trim、lower）後已存在就累加 `seen` 並更新 `sources`（上限 5 筆）。
 
 3. **儲存**
-   - 原子寫（tmp + rename）；壞檔只讀不寫，大聲記 log（照 QQ 的 `slangStoreWritable` 做法）。
-   - 上限：候選 200 條、已確認 500 條，超過丟最舊的 rejected/candidate。
+   - 原子寫（tmp + rename）；壞檔備份成 `.corrupt-<timestamp>` 後從空的重建，成功載入後留一份 `.bak`。
+   - 只裁候選（預設 200）；已確認與已拒絕不裁剪。
 
 4. **注入**
    - `deliverPrompt` 組 prompt 時，附：
@@ -149,7 +156,6 @@
   "injectMax": 8,
   "maxChars": 1500,
   "maxCandidates": 200,
-  "maxConfirmed": 500,
   "learnerPreset": "dc-learner",
   "timeoutMs": 90000
 }

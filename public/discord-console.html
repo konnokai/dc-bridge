@@ -1182,8 +1182,12 @@
       textContent: text,
     });
     // 固定四格，沒有的動作留隱形佔位：按鈕位置才不會隨狀態跳動。
+    // 已拒絕的詞留「復原」：confirmSlang 可以直接把 rejected 改回 confirmed。
+    const first = entry.status === 'candidate'
+      ? button('confirm', '確認')
+      : entry.status === 'rejected' ? button('confirm', '復原') : el('span', { className: 'action-slot' });
     return el('div', { className: 'entry-actions' },
-      entry.status === 'candidate' ? button('confirm', '確認') : el('span', { className: 'action-slot' }),
+      first,
       entry.status !== 'rejected' ? button('reject', '拒絕', 'ghost') : el('span', { className: 'action-slot' }),
       button('edit', '編輯', 'ghost'),
       button('delete', '刪除', 'danger'),

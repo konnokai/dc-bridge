@@ -871,10 +871,9 @@ async function main() {
     try {
       const pruned = saveSlangFile(SLANG_FILE, slangStore, {
         maxCandidates: cfg.discord.slang.maxCandidates,
-        maxConfirmed: cfg.discord.slang.maxConfirmed,
       });
       slangDirty = false;
-      if (pruned.dropped > 0) log(`黑話詞庫已滿，丟棄 ${pruned.dropped} 條（已確認優先）`);
+      if (pruned.dropped > 0) log(`黑話詞庫：候選超過上限，丟棄 ${pruned.dropped} 條`);
     } catch (error) {
       log(`黑話詞庫存檔失敗：${error?.message ?? error}`);
     }

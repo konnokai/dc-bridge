@@ -11,8 +11,8 @@ description: 頻道筆記（discord-notes）與頻道標籤（style）兩套記�
 - 頻道標籤：學習會話抽候選 + 模型用 `mcp__slang__record_channel_tag` 收錄，管理員在控制台確認才注入；無 TTL，每頻道最多 5 條（候選與已確認合計，已拒絕不算）、300 字。滿了學習與 `record_channel_tag` 都不再收，回 409，要換先在控制台刪一條。
 - 線上觀察：`note_event` 從未被模型用過（全部 `by: 'summary'`）；已確認標籤 115 條、`seen` 全為 1，一次性事件被存成永久標籤。
 - 收斂方向：抽取 prompt 只收不隨話題變的穩定習慣（回覆長短、語氣、常用語尾、表情貼圖、互動節奏），一次性的話題或事件不算（由頻道筆記每日摘要記）；`recordChannelTag` 對已存在的標籤原樣回傳、不復活 rejected，滿額回 `{full:true,max}`。
-- 清理線上資料要用控制台刪除，不能用「拒絕」（拒絕的標籤會在 `styleLabels` 留 30 天當範例）；`slangStore` 在記憶體，直接改檔下次存檔會覆蓋，需先 `pm2 stop dc-bridge` 或走控制台。
-- `pruneSlang` 在每次存檔跑。
+- 清理線上資料要用控制台刪除，不能用「拒絕」（拒絕的標籤會一直留在 `styleLabels`，學習 prompt 只列最近 20 個）；`slangStore` 在記憶體，直接改檔下次存檔會覆蓋，需先 `pm2 stop dc-bridge` 或走控制台。
+- `pruneSlang` 在每次存檔跑，只裁候選；已確認與已拒絕不裁剪。
 - 搜尋是字面比對（`matchesTerms`，NFKC 正規化 + `includes`，每個詞都要出現），所以 `note_event` 與每日摘要 prompt 都要求「遊戲、作品、人物寫原名，後面用括號補群裡的叫法（例如 NIKKE（妮姬））」；preset 也加「群裡講到你沒跟上的舊事件：先 search_notes 查群裡的叫法，一次只查一個詞（作品名或人名）；查不到就換英文名、原名再查一次，還是沒有就用 search_history 翻頻道訊息，不要憑印象猜」。舊筆記不回填別名（30 天過期自然換掉；真的查不到的群內私有綽號落到 search_history）。線上別名回填分兩輪：第一輪 3 條（瓦羅蘭→打瓦、星鐵→崩鐵、Valorant→打瓦），備份 `state/discord-notes.json.bak-20261108-135145`；第二輪 19 條（見本檔下方），備份 `state/discord-notes.json.bak-20261108-140042`。`search_notes` 不自動展開黑話別名，新筆記仍靠 `note_event`／摘要 prompt 寫別名，沒寫的照樣查不到。
 - `notes-search` handler 記一行 log：`MCP 查頻道筆記 <key>（query=…，days=…，命中 N 條）`（query 截 40 字），放在過濾之後、空結果 return 之前，所以「查了沒命中」也會記。注意 handler 解構必須是 `const { key, channel } = await agentSender.resolve(body.token)`，只解 `channel` 會在 log 那行丟 `ReferenceError: key is not defined`（B' 的核心會整個廢掉）。
 - `buildSummaryPrompt` 也要加同一條別名規則（自動寫筆記的另一來源，search_notes 也查得到摘要）。

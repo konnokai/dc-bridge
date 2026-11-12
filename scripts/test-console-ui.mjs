@@ -904,6 +904,53 @@ try {
     }
   });
 
+  if (!original) await test('Discord 控制台：已拒絕的黑話可以復原', async () => {
+    let entries = [
+      { id: 'r1', kind: 'slang', term: '拒絕', meaning: '拒絕的', usage: '', status: 'rejected', seen: 3 },
+    ];
+    let confirmedId = null;
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries, learning: { enabled: true } }),
+        slangConfirm: (id) => {
+          confirmedId = id;
+          entries = entries.map((entry) => (entry.id === id ? { ...entry, status: 'confirmed' } : entry));
+          return entries.find((entry) => entry.id === id);
+        },
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#slang`);
+      await p.waitForFunction(() => document.querySelectorAll('#slang-rows tr').length === 1);
+      const restore = p.locator('#slang-rows tr button[data-action="confirm"]');
+      assert.equal(await restore.textContent(), '復原');
+      const request = p.waitForRequest((r) => new URL(r.url()).pathname === '/api/slang/confirm' && r.method() === 'POST');
+      const refreshed = p.waitForResponse((r) => new URL(r.url()).pathname === '/api/slang' && r.request().method() === 'GET');
+      await restore.click();
+      assert.deepEqual((await request).postDataJSON(), { id: 'r1' });
+      await refreshed;
+      assert.equal(confirmedId, 'r1');
+      await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(4)')?.textContent === '已確認');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('Discord 控制台：對話表欄寬固定，換頁與內容變動不跳動', async () => {
     let users = Array.from({ length: 22 }, (_, i) => ({
       userId: String(1000 + i),

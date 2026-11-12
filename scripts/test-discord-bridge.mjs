@@ -262,13 +262,13 @@ console.log('## 1. 設定收斂');
   const slang = normalizeDiscordConfig({
     slang: {
       enabled: true, extractMinMessages: 1, extractCooldownMs: 1, maxPerDay: 9999,
-      injectMax: 99, maxChars: 1, maxCandidates: 1, maxConfirmed: 1, learnerPreset: '  ', timeoutMs: 1,
+      injectMax: 99, maxChars: 1, maxCandidates: 1, learnerPreset: '  ', timeoutMs: 1,
     },
   }).slang;
   ok(slang.enabled === true, 'slang.enabled 可開');
   ok(slang.extractMinMessages === 5 && slang.extractCooldownMs === 60_000 && slang.maxPerDay === 500
     && slang.injectMax === 30 && slang.maxChars === 200 && slang.maxCandidates === 10
-    && slang.maxConfirmed === 10 && slang.timeoutMs === 15_000, '黑話數字欄位收斂');
+    && !('maxConfirmed' in slang) && slang.timeoutMs === 15_000, '黑話數字欄位收斂');
   ok(slang.learnerPreset === 'dc-learner', '空的 learnerPreset 回預設');
 
   ok(cfg.sandbox.enabled === false && cfg.sandbox.channels.length === 0, '沙箱預設關閉');
