@@ -2,7 +2,7 @@
 name: dream
 schedule: 0 3 * * *
 enabled: true
-model: opencode-go/beam-free
+model: openai/gpt-6-luna
 timezone: Asia/Taipei
 ---
 
