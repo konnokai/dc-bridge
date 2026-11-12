@@ -114,8 +114,8 @@ function main() {
   console.log(`部署到 ${host}:${remoteDir}${dryRun ? '（dry run）' : ''}\n`);
 
   // 記憶與 dream 排程只給開發端的 agent 用，伺服器不跑它們；dream 常在背景改檔，
-  // 算進去會讓部署莫名被擋。
-  const dirty = git(['status', '--porcelain', '--', '.', ':(exclude).opencode/memory', ':(exclude).agents']);
+  // 算進去會讓部署莫名被擋。docs 是文件，不影響伺服器執行，未 commit 也不擋部署。
+  const dirty = git(['status', '--porcelain', '--', '.', ':(exclude).opencode/memory', ':(exclude).agents', ':(exclude)docs']);
   if (dirty && !dryRun) fail(`工作目錄不是乾淨的，先 commit：\n${dirty}`);
   if (dirty) console.warn('  ! 工作目錄不乾淨，只部署 commit 過的內容');
 
