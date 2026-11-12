@@ -148,7 +148,7 @@ export function createQuoteProvider({ fetchImpl = fetchJson, timeoutMs = 12_000,
   }
 
   /**
-   * 用官方行情反查商品：商品主檔漏收時，要分得出「這支存在」與「代號打錯」。
+   * 用官方行情反查商品：主檔沒有的代號，要分得出「這支存在」與「代號打錯」。
    * 只認完整代號或完整名稱；來源抓不到就回 null，不猜。
    */
   async function lookup(query) {
@@ -164,6 +164,35 @@ export function createQuoteProvider({ fetchImpl = fetchJson, timeoutMs = 12_000,
       if (row) return { symbol: row.symbol, name: row.name, exchange };
     }
     return null;
+  }
+
+  /**
+   * 用官方行情搜尋代號或名稱（子字串），只給商品清單查詢用。
+   * 精確命中排前面；來源抓不到就回空清單，不猜。
+   */
+  async function search(query, { limit = 50 } = {}) {
+    const text = String(query ?? '').trim();
+    if (!text) return [];
+    const code = text.toUpperCase();
+    const name = text.toLowerCase();
+    await Promise.allSettled(Object.keys(sources).map((exchange) => refresh(exchange)));
+    const exact = [];
+    const partial = [];
+    const seen = new Set();
+    for (const exchange of Object.keys(sources)) {
+      const byCode = sources[exchange].cache?.byCode;
+      if (!byCode) continue;
+      for (const row of byCode.values()) {
+        const rowName = row.name.toLowerCase();
+        const target = row.symbol === code || rowName === name
+          ? exact
+          : (row.symbol.includes(code) || rowName.includes(name) ? partial : null);
+        if (!target || seen.has(row.symbol)) continue;
+        seen.add(row.symbol);
+        target.push({ symbol: row.symbol, name: row.name, exchange });
+      }
+    }
+    return [...exact, ...partial].slice(0, limit);
   }
 
   /** 整份來源的資料日期（不是單一股票）：用來判斷「這檔股票當天根本沒資料」。 */
@@ -227,5 +256,5 @@ export function createQuoteProvider({ fetchImpl = fetchJson, timeoutMs = 12_000,
     }]);
   }
 
-  return { getLatest, getForDate, getHolidays, refreshAll, status, dataDate, lookup };
+  return { getLatest, getForDate, getHolidays, refreshAll, status, dataDate, lookup, search };
 }

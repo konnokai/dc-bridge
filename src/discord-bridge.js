@@ -2056,7 +2056,11 @@ async function main() {
   function formatQuoteResult(result) {
     if (!result.entry) {
       if (result.unlisted) return result.unlisted.note;
-      if (!result.candidates?.length) return '查不到這個股票。商品主檔目前只有台股一般上市／上櫃普通股與國內成分 ETF。';
+      if (!result.candidates?.length) {
+        return result.sourceDown
+          ? '官方行情目前抓不到，無法確認這個代號；稍後再查，不要自己猜。'
+          : '查不到這個股票或最近沒有行情。台股一般上市／上櫃普通股與主檔內的 ETF 才能交易。';
+      }
       return `找到多個可能：${result.candidates.map((item) => `${item.symbol} ${item.name}（${item.exchange}）`).join('、')}。請問是哪一個，不要自己猜。`;
     }
     const entry = result.entry;
@@ -2073,6 +2077,42 @@ async function main() {
     }
     lines.push(`市場：${formatMarket(result.market)}`);
     lines.push(`可下單：${result.tradable && result.market?.canOrder ? '是' : '否'}`);
+    return lines.join('\n');
+  }
+
+  /**
+   * 可交易商品清單。沒帶 query 只列 ETF 與範圍說明，避免把兩千檔普通股倒給模型；
+   * 帶 query 時列主檔別名與官方行情的一般普通股，另有 unlisted 說明不能交易的原因。
+   */
+  function formatSymbolList(result) {
+    if (!result.query) {
+      return [
+        '可交易範圍：台股一般上市／上櫃普通股（官方行情查得到就能下單）＋ 以下 ETF。',
+        `ETF（${result.etfs.length} 檔）：`,
+        ...result.etfs.map((item) => `${item.symbol} ${item.name}（${item.exchange === 'TWSE' ? '上市' : '上櫃'}・ETF）`),
+        '要查某支代號或名稱，帶 query 再查。',
+      ].join('\n');
+    }
+    const suffix = result.truncated ? '（只列前 50 筆）' : '';
+    const header = `可交易商品符合「${result.query}」：${result.items.length} 檔${suffix}`;
+    if (!result.items.length && !result.unlistedTotal) {
+      return `${header}\n${result.sourceDown
+        ? '官方行情目前抓不到，清單可能不完整；稍後再查。'
+        : '查不到這個股票或最近沒有行情：確認代號或名稱，或換一個關鍵字。'}`;
+    }
+    const lines = [header];
+    for (const item of result.items) {
+      const market = item.exchange === 'TWSE' ? '上市' : '上櫃';
+      const kind = item.type === 'etf' ? '・ETF' : '';
+      lines.push(`${item.symbol} ${item.name}（${market}${kind}）`);
+    }
+    if (result.unlistedTotal) {
+      const names = result.unlisted.map((listed) => `${listed.symbol} ${listed.name}`).join('、');
+      const more = result.unlistedTotal > result.unlisted.length ? ' 等' : '';
+      lines.push(`另有 ${result.unlistedTotal} 檔不開放（ETF 只收主檔；TDR、特別股、ETN 不開放）：${names}${more}`);
+    }
+    if (result.truncated) lines.push('符合的標的太多，請縮小關鍵字。');
+    if (result.sourceDown) lines.push('注意：官方行情目前抓不到，清單可能不完整。');
     return lines.join('\n');
   }
 
@@ -2254,6 +2294,14 @@ async function main() {
       const service = requireTrade();
       try {
         return { text: formatQuoteResult(await service.quote(String(body.query ?? ''))) };
+      } catch (error) {
+        throw tradeFailure(error);
+      }
+    },
+    async 'trade-symbols'(body) {
+      const service = requireTrade();
+      try {
+        return { text: formatSymbolList(await service.symbols(String(body.query ?? ''))) };
       } catch (error) {
         throw tradeFailure(error);
       }
@@ -5940,7 +5988,9 @@ async function main() {
       await runTradeSettlement();
       const portfolio = await tradeService.portfolio(tradeService.botAccountId);
       const entries = portfolio.exists
-        ? portfolio.positions.map((position) => findSymbol(position.symbol)).filter(Boolean)
+        ? portfolio.positions
+          .filter((position) => position.exchange)
+          .map((position) => ({ symbol: position.symbol, name: position.name, exchange: position.exchange }))
         : [];
       const institutional = entries.length
         ? await tradeInstitutional.getForSymbols(entries, market.date)

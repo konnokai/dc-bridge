@@ -13,7 +13,7 @@ import {
   taxCents,
   tickCents,
 } from '../src/core/discord-trade.mjs';
-import { resolveSymbol } from '../src/core/trade-symbols.mjs';
+import { isOrdinaryStockCode, listSymbols, resolveSymbol } from '../src/core/trade-symbols.mjs';
 import { apply as applyToolRestrict } from '../plugins/dc-agent-presets/dc-tool-restrict.mjs';
 import { createQuoteProvider } from '../src/core/quote-provider.mjs';
 
@@ -74,6 +74,12 @@ function harness({ holidays = new Set(), config = TRADE, listed = {} } = {}) {
       lookupCalls += 1;
       return listed[String(query ?? '').trim()] ?? null;
     },
+    async search(query) {
+      const needle = String(query ?? '').trim().toLowerCase();
+      if (!needle) return [];
+      return Object.values(listed).filter((row) => row.symbol.toLowerCase().includes(needle)
+        || row.name.toLowerCase().includes(needle));
+    },
     status() { return []; },
   };
   const service = createTradeService({ db, config, quotes, now: () => clock, holidays, botId: '999' });
@@ -111,24 +117,61 @@ console.log('## 1. 商品主檔與報價');
   ok(resolveSymbol('6510').match?.exchange === 'TPEx', '6510 精測在商品主檔（上櫃）');
 }
 
-console.log('## 1b. 主檔漏收 vs 代號打錯');
+console.log('## 1b. 可交易商品清單');
+{
+  ok(listSymbols().length > 50, '主檔清單不是空的');
+  ok(listSymbols('台積').some((item) => item.symbol === '2330'), '主檔清單可用名稱／別名篩選');
+  ok(listSymbols('1519').length === 1 && listSymbols('1519')[0].name === '華城', '1519 華城在主檔清單裡');
+  ok(listSymbols('1503').length === 1 && listSymbols('1503')[0].name === '士電', '1503 士電在主檔清單裡');
+  ok(listSymbols('8888').length === 0, '主檔沒有的代號回空清單');
+  ok(isOrdinaryStockCode('2330') && isOrdinaryStockCode('6770'), '4 位數代號是一般股票');
+  ok(!isOrdinaryStockCode('0050') && !isOrdinaryStockCode('00940'), '00 開頭 ETF 不是一般股票');
+  ok(!isOrdinaryStockCode('9105') && !isOrdinaryStockCode('910322') && !isOrdinaryStockCode('2881A'), 'TDR 與特別股不是一般股票');
+
+  const filtered = await harness().service.symbols('0050');
+  ok(filtered.items.length === 1 && filtered.items[0].type === 'etf', 'service 查 ETF');
+  const all = await harness().service.symbols();
+  ok(all.query === '' && all.etfs.length > 0, '不帶查詢回可交易範圍與 ETF 清單');
+  const official = await harness({ listed: { 6770: { symbol: '6770', name: '力積電', exchange: 'TWSE' } } }).service.symbols('6770');
+  ok(official.items.some((item) => item.symbol === '6770'), '官方行情的一般股票也列得出來');
+  const outside = await harness({ listed: { '00940': { symbol: '00940', name: '元大臺灣價值高息', exchange: 'TWSE' } } }).service.symbols('00940');
+  ok(outside.items.length === 0 && outside.unlisted.length === 1 && outside.unlistedTotal === 1, '主檔外的 ETF 列在 unlisted');
+}
+
+console.log('## 1c. 官方行情的一般股票可以直接下單');
 {
   const miss = harness({ listed: { 6770: { symbol: '6770', name: '力積電', exchange: 'TWSE' } } });
   const result = await miss.service.quote('6770');
-  ok(result.unlisted?.name === '力積電' && result.unlisted.exchange === 'TWSE', '主檔沒收錄但官方行情有：回報這支存在');
-  ok(/不是代號打錯/.test(result.unlisted?.note) && /ETF/.test(result.unlisted?.note), '文案說不是打錯，也不斷言一定是漏收');
-  ok(!result.entry, '漏收的標的不會被當成可查價的標的');
-  ok((await miss.service.quote('8888')).unlisted === null, '官方行情也沒有就回查不到');
+  ok(result.entry?.symbol === '6770' && result.tradable === true, '主檔沒收的一般股票，查價直接視為可交易');
+  const partialName = await miss.service.quote('力積');
+  ok(partialName.entry?.symbol === '6770', '官方行情的一般股票可用部分名稱查價');
+  const order = await miss.service.placeOrder({ ...BUY, symbol: '6770', requestId: 'msg:m9', messageId: 'm9' });
+  ok(order.order.symbol === '6770', '主檔沒收的一般股票可以排隊下單');
+  miss.setClock('2026-11-05T06:05:00.000Z');
+  const settled = await miss.service.settleDue();
+  ok(settled[0]?.type === 'filled', '主檔沒收的一般股票收盤照樣成交');
+
+  const dup = harness({ listed: { 6770: { symbol: '6770', name: '力積電', exchange: 'TWSE' } } });
+  await dup.service.placeOrder({ ...BUY, symbol: '6770', requestId: 'msg:dup', messageId: 'dup' });
+  dup.quotes.lookup = () => { throw new Error('boom'); };
+  const again = await dup.service.placeOrder({ ...BUY, symbol: '6770', requestId: 'msg:dup', messageId: 'dup' });
+  ok(again.duplicate === true, '行情斷線時重送的單仍回原本那筆');
+
+  const etf = harness({ listed: { '00940': { symbol: '00940', name: '元大臺灣價值高息', exchange: 'TWSE' } } });
+  const etfQuote = await etf.service.quote('00940');
+  ok(!etfQuote.entry && etfQuote.unlisted?.symbol === '00940', '主檔外的 ETF 不當成一般股票');
+  ok(/不在可交易範圍/.test(etfQuote.unlisted?.note), '說明 ETF 要走主檔');
   await assert.rejects(
-    miss.service.placeOrder({ ...BUY, symbol: '6770', requestId: 'msg:m9', messageId: 'm9' }),
-    (error) => error.code === 'SYMBOL_NOT_COLLECTED' && /不是代號打錯/.test(error.message),
+    etf.service.placeOrder({ ...BUY, symbol: '00940', requestId: 'msg:m9b', messageId: 'm9b' }),
+    (error) => error.code === 'SYMBOL_NOT_COLLECTED' && /不在可交易範圍/.test(error.message),
   );
-  ok(true, '下單遇到主檔外的標的回 SYMBOL_NOT_COLLECTED');
+  ok(true, '主檔外的 ETF 下單回 SYMBOL_NOT_COLLECTED');
+
   await assert.rejects(
     miss.service.placeOrder({ ...BUY, symbol: '8888', requestId: 'msg:m10', messageId: 'm10' }),
     (error) => error.code === 'BAD_SYMBOL',
   );
-  ok(true, '真的打錯代號仍是 BAD_SYMBOL');
+  ok(true, '查不到的代號仍是 BAD_SYMBOL');
 
   const hit = harness({ listed: { 2330: { symbol: '2330', name: '台積電', exchange: 'TWSE' } } });
   await hit.service.quote('2330');
@@ -145,8 +188,8 @@ console.log('## 1b. 主檔漏收 vs 代號打錯');
   ok(true, '反查失敗時照樣回 BAD_SYMBOL，不會擋住流程');
 
   const fan = harness();
-  const order = await fan.service.placeOrder({ ...BUY, symbol: '6196', requestId: 'msg:m6196', messageId: 'm6196' });
-  ok(order.order.symbol === '6196', '6196 指定代號可以排隊下單');
+  const fanOrder = await fan.service.placeOrder({ ...BUY, symbol: '6196', requestId: 'msg:m6196', messageId: 'm6196' });
+  ok(fanOrder.order.symbol === '6196', '6196 指定代號可以排隊下單');
 }
 
 console.log('## 2. 費用、tick 與漲跌停');
@@ -385,9 +428,9 @@ console.log('## 8. 限制');
 
   await assert.rejects(
     h.service.placeOrder({ ...BUY, symbol: '9999', requestId: 'msg:m6', messageId: 'm6' }),
-    /可交易清單/,
+    /查不到這個股票/,
   );
-  ok(true, '白名單外的代號被拒絕');
+  ok(true, '查不到的代號被拒絕');
 }
 
 console.log('## 9. 反向 pending 與休市');
@@ -448,7 +491,7 @@ console.log('## 9b3. 名稱比對與 rollback');
   const partial = harness();
   await assert.rejects(
     partial.service.placeOrder({ ...BUY, symbol: '環球', requestId: 'msg:partial', messageId: 'partial' }),
-    /可交易清單/,
+    /查不到這個股票/,
   );
   ok(true, '下單只接受代號、完整名稱或唯一別名');
 
@@ -490,6 +533,13 @@ console.log('## 10. 漲停與逾期');
   const events = await h2.service.settleDue();
   ok(events[0]?.type === 'rejected' && /漲停/.test(events[0].order.reject_reason), '收盤漲停買單不成交');
   ok(h2.db.getAccount(playerAccountId('42')).reserved_cents === 0, '漲停拒絕後釋放保留');
+
+  const hNoLimit = harness();
+  await hNoLimit.service.placeOrder(BUY);
+  hNoLimit.setQuote({ closeCents: 130_000, changeCents: 30_000, referenceCents: 100_000 });
+  hNoLimit.setClock('2026-11-05T06:05:00.000Z');
+  const noLimit = await hNoLimit.service.settleDue();
+  ok(noLimit[0]?.type === 'filled', '收盤超過 10% 不當成漲停（新上市無漲跌幅限制）');
 
   const h3 = harness();
   await h3.service.placeOrder(BUY);
@@ -593,6 +643,8 @@ console.log('## 15. 工具權限');
   }
   const player = restrictHarness({ trade: 'player', allowDiscordSend: false });
   ok(!player.denied.includes('mcp__trade__get_quote'), '玩家放行查價');
+  ok(!player.denied.includes('mcp__trade__list_symbols'), '玩家放行商品清單');
+  ok(player.guard({ name: 'mcp__trade__list_symbols' }) === undefined, '玩家 guard 放行商品清單');
   ok(player.denied.includes('mcp__trade__bot_place_order'), '玩家看不到 Bot 下單');
   ok(player.guard({ name: 'mcp__trade__bot_place_order' }) !== undefined, '玩家 guard 擋 Bot 下單');
   ok(player.guard({ name: 'mcp__trade__get_quote' }) === undefined, '玩家 guard 放行查價');
@@ -605,6 +657,7 @@ console.log('## 15. 工具權限');
 
   const none = restrictHarness({ trade: 'none' });
   ok(none.denied.includes('mcp__trade__get_quote'), '沒有開交易時全部藏起來');
+  ok(none.denied.includes('mcp__trade__list_symbols'), '沒有開交易時也藏商品清單');
   ok(none.guard({ name: 'mcp__trade__get_quote' }) !== undefined, '沒有開交易時 guard 也擋');
 }
 
@@ -631,6 +684,8 @@ console.log('## 16. 報價來源快取與重試');
   ok((await provider.lookup('2330'))?.exchange === 'TWSE', '官方行情反查代號');
   ok((await provider.lookup('台積電'))?.symbol === '2330', '官方行情反查名稱');
   ok((await provider.lookup('8888')) === null, '官方行情沒有就回 null');
+  ok((await provider.search('台積'))[0]?.symbol === '2330', '官方行情可搜尋名稱');
+  ok((await provider.search('8888')).length === 0, '官方行情搜尋沒有就回空清單');
 
   const broken = createQuoteProvider({ log: () => {}, fetchImpl: () => { throw new Error('boom'); } });
   ok((await broken.lookup('2330')) === null, '兩個來源都抓不到時反查回 null，不編造');

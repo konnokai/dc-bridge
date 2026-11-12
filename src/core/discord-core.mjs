@@ -594,6 +594,7 @@ const PROGRESS_LABELS = {
   'mcp__discord__search_memes': ['🖼️ 找梗圖', (args) => args.query],
   'mcp__discord__forget_meme': ['🗑️ 刪梗圖', (args) => args.name],
   'mcp__discord__run_script': ['🧮 跑程式', (args) => (args.language === 'node' ? 'Node' : 'Python')],
+  'mcp__trade__list_symbols': ['📋 查可交易商品', (args) => args.query],
   'mcp__trade__get_quote': ['📈 查股價', (args) => args.query],
   'mcp__trade__place_order': ['📝 模擬下單', (args) => `${args.side === 'sell' ? '賣' : '買'} ${args.symbol} ${args.quantity} 股`],
   'mcp__trade__get_portfolio': ['💼 查模擬持股'],

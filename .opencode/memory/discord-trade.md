@@ -12,7 +12,7 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - 橋接接入：`src/discord-bridge.js` 的 trade MCP 端點、玩家／Bot 身分、收盤結算排程、Bot 排程、`/portfolio`、`/forget`、控制台 API、交易設定即時重建。
 - 權限：`dc-tool-restrict` 的 `trade: player|bot|none`、`dc-session-token` 的 `trade`、`setup-dsh` 的 `mcp-trade`。
 - 控制台：「股盤」唯讀分頁與「設定」分頁的交易表單；`/api/trade/*`。帳號顯示用橋接端 `tradeNameCache`（TTL 10 分鐘）補 Discord 顯示名稱，查不到退回 `玩家 …末六碼`；完整 uid 在儲存格 `title` 與訂單放大彈窗看得到（詳見 [[discord-console-detail-modal]]）。- Node ≥26（`node:sqlite`）；伺服器 26.12.1、本機 26.13。
-- `mcp-trade` 暴露 6 個工具：`get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`、`bot_place_order`。
+- `mcp-trade` 暴露 7 個工具：`list_symbols`、`get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`、`bot_place_order`。
 - `dc-tool-restrict` 的 `trade: player|bot|none`；Bot 額外有 web search/fetch 上限（橋接寫 `state/discord-trade-limits.json`，preset 讀取並取 min）。
 - Bot 一次性會話只活在記憶體，不寫入 sessions 檔；`resolve(token, { allowBot: true })` 只給 Bot 交易端點使用。
 
@@ -25,7 +25,7 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - 三大法人日報：`src/core/institutional-provider.mjs`，TWSE `T86`（`/rwd/zh/fund/T86`）與 TPEx OpenAPI `tpex_3insti_daily_trading`；欄位用「先精確比對再 contains」避免 `自營商買賣超股數` 被 `自營商買賣超股數(避險)` 誤抓。
 - 重大訊息：`src/core/material-provider.mjs`，TWSE `t187ap04_L`、TPEx `mopsfin_t187ap04_O`。MOPS 公告日通常比復盤日早一天，parser 收 `[prevTradingDate, date]` 範圍並標每筆實際日期；空結果不快取，下一輪重抓。`getForSymbols` 以 `time + subject` 去重、依日期+時間由新到舊排序、每檔取前 3。
 - 休市日 provider：`src/core/quote-provider.mjs` 的 `getHolidays()`，失敗只快取 5 分鐘（不再 12 小時），空回應算失敗；同時合併重複請求（inflight）；`extraHolidays`（`config.discord.trade.extraHolidays`，YYYY-MM-DD）與 API 結果聯集，供颱風／臨時停市。
-- 商品主檔是人工白名單（`src/core/trade-symbols.mjs`），一定漏收。主檔 miss 時 `quote()`／`placeOrder()` 用 provider 的 `lookup()` 反查官方行情（兩個來源並行抓，只認完整代號或完整名稱）：查得到就回「在官方行情查得到，但不在可交易商品主檔…不是代號打錯」（錯誤碼 `SYMBOL_NOT_COLLECTED`），兩邊都查不到才回「查不到這個股票」。行情清單也含 ETF／特別股／TDR，所以文案只說「可能漏收」，不斷言。6196 帆宣在 TWSE 上市，不是上櫃（回饋 df_mwbhnyoscc6e90，2026-11-11）。
+- 商品主檔（`src/core/trade-symbols.mjs`）只留 ETF 規則與常用股票別名，不再是一般股票的白名單。`quote()`／`placeOrder()` 主檔 miss 時用 provider `lookup()` 反查官方行情：4 位數代號（00 開頭 ETF、91 開頭 TDR 除外）就直接當一般股票；官方行情有、但不是一般股票也不在 ETF 主檔，回「不在可交易範圍」（`SYMBOL_NOT_COLLECTED`）；兩邊都查不到才回「查不到這個股票」。`list_symbols` 不帶 query 回可交易範圍與 ETF 清單，帶 query 用 `search()` 查主檔別名與官方行情的一般股票（回饋 df_mwd1b39gb47870，2026-11-12）。
 - 不用 Yahoo Finance／yfinance 做台股即時報價：TWSE／TPEx 在 Yahoo 是 20 分鐘延遲，且條款禁止轉散布給第三人（personal use only）。要往盤中即時走，必須找有轉散布授權的行情源；沒有就維持 A 模式收盤結算。
 
 ## 漲跌停與參考價
@@ -54,7 +54,8 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 
 ## 結算
 
-- `settleDue`：收盤後成交；`market.minutes >= twSettleAfter`（預設 19:00）才開始；資料日期等於 trade_date 才成交；逾期拒絕並釋放保留。
+- `settleDue`：收盤後成交；`market.minutes >= twSettleAfter`（預設 19:00）才開始；資料日期等於 trade_date 才成交；逾期拒絕並釋放保留。用 `resolveEntry` 補官方行情，主檔外的一般股票也能結算。
+- 漲跌停判斷用等號（收盤正好等於漲停／跌停才拒單）；新上市無漲跌幅限制時收盤可能超過 ±10%，不當成漲停跌停。
 - 預約單的 `trade_date` 是下一個交易日，當天晚上不結算；到該交易日 19:00 後才成交。
 - `orderRefFloor` 空時 fail-closed（拒絕舊資料過關）；預約單用 `orderDate` 往前推兩個交易日，春節後第一個交易日仍可算出。
 - 漲停買單、跌停賣單不成交。
@@ -109,6 +110,6 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - Console UI 測試缺 Playwright，只做 HTML 語法與標籤平衡檢查。
 - `nextOrderAt` 找不到下一交易日時顯示「未定」（31 天內都沒有交易日的極端情況）。
 - `node scripts/test-setup-dsh-idempotent.mjs` 需 `DSH_INSTALL_MODULES`，本機無法跑。
-- 測試套件：`npm run test:discord` 為 29 支腳本（含 `test-discord-trade`、`test-discord-trade-db`、`test-discord-bot-trader`、`test-discord-institutional`）；`test-mcp-servers-stdio` 驗證 mcp-trade 6 工具。
+- 測試套件：`npm run test:discord` 為 29 支腳本（含 `test-discord-trade`、`test-discord-trade-db`、`test-discord-bot-trader`、`test-discord-institutional`）；`test-mcp-servers-stdio` 驗證 mcp-trade 7 工具。
 
 相關：[[discord-usage-pricing]]、[[discord-console-table-layout]]。

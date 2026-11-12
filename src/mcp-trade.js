@@ -65,12 +65,22 @@ const sessionToken = z.string().optional().describe('不用填：DSH 外掛會�
 
 tool(
   'get_quote',
-  '查台股最近一次官方收盤價、報價時間與市場狀態。這不是盤中即時報價；回答時要說清楚「最近收盤」與 asOf。查不到或名稱對到多個標的時，照工具回傳的候選清單問人，不要自己猜代號。回「不在可交易商品主檔」時代表官方行情有這支、代號沒打錯，照實講，不要自己加碼成可以下單。',
+  '查台股最近一次官方收盤價、報價時間與市場狀態。這不是盤中即時報價；回答時要說清楚「最近收盤」與 asOf。查不到或名稱對到多個標的時，照工具回傳的候選清單問人，不要自己猜代號；名稱不確定或想看有哪些商品時先用 list_symbols。回「不在可交易範圍」時代表官方行情有這支，但不是一般上市／上櫃普通股，或不在 ETF 主檔；照實講不能下單，不要自己加碼。',
   {
     token: sessionToken,
     query: z.string().max(40).describe('股票或 ETF 代號、名稱，例如 2330、台積電、0050'),
   },
   '/trade-quote',
+);
+
+tool(
+  'list_symbols',
+  '列出可交易商品（代號＋名稱）。不帶 query 回可交易範圍與 ETF 清單；帶代號、名稱或別名則查主檔與官方行情的一般普通股。下單前先用這裡確認代號可交易；查不到就代表目前不開放，不要一支一支試，也不要猜。群友問「有哪些商品」時直接照清單回答。',
+  {
+    token: sessionToken,
+    query: z.string().max(40).optional().describe('可省略；代號、名稱或別名，例如 2330、台積、0050'),
+  },
+  '/trade-symbols',
 );
 
 tool(
@@ -80,7 +90,7 @@ tool(
     token: sessionToken,
     message: z.string().max(20).describe('觸發這一輪的訊息 #編號，例如 #k7f3ab；不是股票代號'),
     side: z.enum(['buy', 'sell']).describe('buy 或 sell'),
-    symbol: z.string().max(12).describe('商品主檔裡的代號，例如 2330'),
+    symbol: z.string().max(12).describe('台股代號，例如 2330；一般上市／上櫃普通股或 ETF 主檔'),
     quantity: z.number().int().positive().max(10_000_000).describe('股數（整數，第一版不支援金額下單）'),
   },
   '/trade-order',
@@ -116,7 +126,7 @@ tool(
   {
     token: sessionToken,
     side: z.enum(['buy', 'sell']).describe('buy 或 sell'),
-    symbol: z.string().max(12).describe('商品主檔裡的代號，例如 2330'),
+    symbol: z.string().max(12).describe('台股代號，例如 2330；一般上市／上櫃普通股或 ETF 主檔'),
     quantity: z.number().int().positive().max(10_000_000).describe('股數'),
     reason: z.string().max(300).optional().describe('為什麼下這筆單，給控制台稽核看'),
     note: z.string().max(200).optional().describe('一句話備註；目前不會公開'),

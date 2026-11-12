@@ -228,16 +228,24 @@ ETF 的 tick 不同：未滿 50 元 0.01、50 元以上 0.05。第一版開放�
 - `tradable`
 - `note`
 
-第一版用白名單，台股上市／上櫃各 20–30 檔，加上國內成分 ETF；美股 20–30 檔第二階段。名稱比對順序：精確 → 別名 → 子字串 → 候選清單。多個候選時回傳清單，由玩家選擇；模型不自行猜測。
+一般上市／上櫃普通股不預先寫進主檔；查價與下單時用官方行情補出上面這些欄位
+（`type` 固定 `stock`、`limitPct` 10）。
 
-白名單是人工維護的，一定會有漏收。`get_quote`／`place_order` 遇到不在主檔的查詢時，會再用官方行情
-（TWSE／TPEx OpenAPI 的完整清單）反查一次：查得到就回「官方行情查得到，但不在可交易商品主檔」，
-並說明不是代號打錯。行情清單也含 ETF、特別股、TDR，所以文案只說「可能漏收，也可能是目前不開放的商品」，
-不斷言一定是漏收；兩邊都查不到才回「查不到這個股票」。
+商品主檔（`src/core/trade-symbols.mjs`）用來記 ETF 規則與常用股票別名，不是一般股票的白名單。
+一般上市／上櫃普通股以官方行情為準：`get_quote`／`place_order` 遇到主檔沒有的代號或名稱時，
+會用官方行情（TWSE／TPEx OpenAPI 的完整清單）反查一次。查到 4 位數、不是 00 開頭 ETF 或
+91 開頭 TDR 的代號，就直接當一般股票（漲跌幅 10%、一般股票稅率），不用補主檔。
 
-補一檔股票就是 `src/core/trade-symbols.mjs` 加一行。交易所要以官方行情為準，不要照印象填：
+ETF 的漲跌幅與稅率逐檔不同，仍要留在主檔；沒設定的 ETF 不開放。官方行情查到 ETF、特別股、
+ETN 等非一般股票但不在主檔時，回「不在可交易範圍」並說明原因；兩邊都查不到才回「查不到這個股票」。
+
+要補的是 ETF 或常用股票的別名，不是一般股票本身。交易所要以官方行情為準，不要照印象填：
 例如 6196 帆宣在 TWSE 上市清單，不是上櫃。加 ETF 時還要對證交所 TWT84U 確認漲跌幅，
 寫進該檔的 `limitPct`（槓桿型 20%，一般 10%）。
+
+`list_symbols(query 可省略)` 不帶 query 回可交易範圍與 ETF 清單；帶 query 時查主檔別名與
+官方行情的一般普通股，回代號、名稱、交易所與類型。查不到就回空清單。模型下單前先查這份清單，
+不要用試錯確認。
 
 台股上市與上櫃要分別識別；同一代號不會同時是上市與上櫃，但報價來源與行事曆不同。
 
@@ -540,6 +548,12 @@ A 模式沒有「盤中舊價成交」問題，因為成交只用當日官方收
 
 如果名稱對應多個標的，回傳候選清單，不回價格。
 
+##### `list_symbols(query 可省略)`
+
+不帶 `query` 回可交易範圍與 ETF 清單；帶 `query` 時用代號、名稱或別名查主檔與官方行情的一般普通股。
+
+輸出：代號、名稱、交易所、類型（stock／etf）。官方行情有但不能交易的標的另外標原因；查不到就回空清單。
+
 ##### `place_order(message, side, symbol, quantity)`
 
 排隊買入或賣出。
@@ -548,7 +562,7 @@ A 模式沒有「盤中舊價成交」問題，因為成交只用當日官方收
 
 - `message`：本回合觸發訊息的 #編號（身分驗證用）
 - `side`：`buy`／`sell`
-- `symbol`：商品主檔裡的代號
+- `symbol`：台股代號（一般上市／上櫃普通股或 ETF 主檔）
 - `quantity`：股數（第一版只收股數；`amount` 第二階段）
 
 規則：
@@ -644,7 +658,7 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 
 - 模型只輸出文字 → 不交易。Bridge 記一筆「hold」日誌。
 - 模型呼叫 `bot_place_order` → Bridge 驗證 symbol、數量、現金、30% 上限、市場狀態、每日上限；通過才排隊。
-- 模型超時、回傳無效工具參數、選到白名單外的標的 → 跳過，不交易。
+- 模型超時、回傳無效工具參數、選到不能交易的標的 → 跳過，不交易。
 - 不因為新聞文字、模型心得或「我覺得會漲」直接下單；一定要有合法工具呼叫。
 
 **當日復盤**
@@ -756,8 +770,8 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 - `scripts/setup-dsh.mjs` 的 `DISCORD_MCP_IDS` 加 `mcp-trade`。
 - `dc-session-token.mjs`：`TOKEN_TOOLS` regex 加 `trade`；`mcp-trade.js` 每個工具都要宣告 `token`。
 - `dc-tool-restrict.mjs`：新增 `trade: 'player' | 'bot' | 'none'`。
-  - `dc-chat`：`trade: 'player'`，放行 `get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`。
-  - `dc-trader`：`trade: 'bot'`，放行 `get_quote`、`get_bot_portfolio`、`bot_place_order`，以及 web search／fetch；不放行 Discord 發送。
+  - `dc-chat`：`trade: 'player'`，放行 `list_symbols`、`get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`。
+  - `dc-trader`：`trade: 'bot'`，放行 `list_symbols`、`get_quote`、`get_bot_portfolio`、`bot_place_order`，以及 web search／fetch；不放行 Discord 發送。
   - `dc-learner`：`trade: 'none'`，全部不放行。
   - 註冊期用 `ctx.tools.restrict` 藏掉不該看到的工具；guard 再擋一次。
 - 新增 `dc-trader` preset（人格、工具面、`dc-session-token`、`dc-tool-restrict`）。
@@ -810,8 +824,8 @@ Bot 是第一版的正式參與者，不是第二階段功能。
 - 單筆買入金額不得超過帳戶淨值的 30%。
 - 交易數量必須為正整數，拒絕 0、負數、NaN、Infinity。
 - 只允許在市場開放時排隊。
-- 只允許商品主檔內、`tradable: true` 的標的。
-- 漲停不給買、跌停不給賣；特殊交易狀態先拒絕。
+- 只允許一般上市／上櫃普通股，或 ETF 主檔內、`tradable: true` 的標的；一般股票以官方行情為準。
+- 漲停不給買、跌停不給賣；新上市無漲跌幅期間照一般股票處理，收盤超過 ±10% 不當成漲跌停。
 - 單筆上限是硬性限制，不另外設計超限確認流程。
 
 ### 7.4 重複下單與併發
@@ -1132,7 +1146,7 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
 3. `pm2 restart dsh`
 4. `sleep 5`
 5. `pm2 start dc-bridge`
-6. 用暫時 stdio client 確認 `get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`、`bot_place_order` 都註冊。
+6. 用暫時 stdio client 確認 `list_symbols`、`get_quote`、`place_order`、`get_portfolio`、`get_leaderboard`、`get_bot_portfolio`、`bot_place_order` 都註冊。
 7. 確認 `dc-chat` 看得到玩家工具、看不到 `bot_place_order`；`dc-trader` 看得到 Bot 工具與 web search。
 
 ---
@@ -1270,10 +1284,10 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
 
 ### D. 商品範圍
 
-- 台股上市／上櫃各哪些標的（白名單，會漏收；漏收時查價與下單會說明）。
+- 台股一般上市／上櫃普通股以官方行情為準，不再維護股票白名單。
 - （第二階段）美股哪些標的。
 - 國內成分 ETF 白名單要收哪幾檔；債券 ETF、ETN、國外成分 ETF 已決定排除。
-- 新上市無漲跌幅期間的處理。
+- 新上市無漲跌幅期間：結算只看收盤價是否正好等於漲停／跌停，超過 ±10% 不當成漲跌停。
 
 ### E. 公司行動
 

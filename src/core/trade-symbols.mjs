@@ -1,8 +1,8 @@
-// 模擬股票的商品主檔（第一版只有台股）。
+// 模擬股票的商品主檔：ETF 規則、常用股票別名與顯示名稱。
 //
-// 為什麼是白名單：報價來源只抓得到上市／上櫃的日資料，但 ETF、處置股、全額交割股
-// 的費率與交易規則不同。第一版先把範圍鎖在一般普通股與國內成分 ETF，遇到不認識的代號就回候選清單，
-// 不讓模型自己猜。ETF 的 tick、證交稅與漲跌幅都和股票不同，漲跌幅還要逐檔標（槓桿型 20%）。
+// 一般上市／上櫃普通股不再靠這份清單把關：查價與下單會用官方行情確認代號，
+// 4 位數代號（00 開頭 ETF、91 開頭 TDR 除外）就當一般股票。ETF 的 tick、證交稅與漲跌幅
+// 逐檔不同，所以 ETF 仍留在這裡；沒設定的 ETF 不開放。
 //
 // 上市與上櫃分開記：兩邊的 OpenAPI、收盤更新時間與行事曆都不一樣。
 
@@ -26,6 +26,8 @@ export const TRADE_SYMBOLS = Object.freeze([
   ...twse('1301', '台塑', []),
   ...twse('1303', '南亞', []),
   ...twse('2002', '中鋼', ['中國鋼鐵']),
+  ...twse('1503', '士電', ['士林電機']),
+  ...twse('1519', '華城', ['華城電機']),
   ...twse('2603', '長榮', ['長榮海運']),
   ...twse('2609', '陽明', ['陽明海運']),
   ...twse('2615', '萬海', []),
@@ -110,6 +112,28 @@ const bySymbol = new Map(TRADE_SYMBOLS.map((item) => [item.symbol, item]));
 
 export function findSymbol(symbol) {
   return bySymbol.get(String(symbol ?? '').trim().toUpperCase()) ?? null;
+}
+
+/**
+ * 一般上市／上櫃普通股：4 位數代號，排除 00 開頭的 ETF 與 91 開頭的 TDR。
+ * 官方行情清單也含特別股與 ETN，這裡只放行一般股票。
+ */
+export function isOrdinaryStockCode(symbol) {
+  const code = String(symbol ?? '').trim();
+  return /^[1-9]\d{3}$/.test(code) && !code.startsWith('91');
+}
+
+/**
+ * 列出可交易主檔；query 用代號、名稱或別名做子字串比對。
+ * 這裡只是查清單、不動錢，所以不用 resolveSymbol 的嚴格規則。
+ */
+export function listSymbols(query = '') {
+  const text = String(query ?? '').trim();
+  if (!text) return TRADE_SYMBOLS;
+  const needle = text.toLowerCase();
+  return TRADE_SYMBOLS.filter((item) => item.symbol.toLowerCase().includes(needle)
+    || item.name.toLowerCase().includes(needle)
+    || item.aliases.some((alias) => alias.toLowerCase().includes(needle)));
 }
 
 /**

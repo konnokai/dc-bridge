@@ -6,7 +6,7 @@
 // 金額全部用整數「分」；費率用 ppm（0.001425 → 1425）算，避免浮點數累積誤差。
 
 import { randomBytes } from 'node:crypto';
-import { findSymbol, resolveSymbol } from './trade-symbols.mjs';
+import { TRADE_SYMBOLS, findSymbol, isOrdinaryStockCode, listSymbols, resolveSymbol } from './trade-symbols.mjs';
 
 export const ACCOUNT_KIND = Object.freeze({ PLAYER: 'player', BOT: 'bot' });
 
@@ -301,7 +301,7 @@ export function createTradeService({
   /** 持倉現值：報價抓不到時用成本基礎代替，寧可低估淨值，也不編一個價格。 */
   async function snapshot(account) {
     const positions = await Promise.all(db.listPositions(account.id).map(async (position) => {
-      const entry = findSymbol(position.symbol);
+      const { entry } = await resolveEntry(position.symbol);
       const quote = entry ? await quotes.getLatest(entry) : null;
       const priceCents = quote?.closeCents ?? null;
       const marketValueCents = priceCents === null ? position.cost_basis_cents : priceCents * position.qty;
@@ -337,7 +337,32 @@ export function createTradeService({
     };
   }
 
-  /** 主檔沒收錄時，用官方行情確認這支股票是不是真的存在（漏收，而不是代號打錯）。 */
+  /** 官方行情來源目前有沒有錯誤；用來分辨「查不到」與「來源抓不到」。 */
+  function officialDown() {
+    if (typeof quotes.status !== 'function') return false;
+    try {
+      return quotes.status().some((item) => item.exchange !== 'calendar' && item.error);
+    } catch {
+      return false;
+    }
+  }
+
+  /** 官方行情查到的一般普通股，補成交易用的 entry；ETF 不走這條。 */
+  function listedStockEntry(listed) {
+    return {
+      symbol: listed.symbol,
+      name: listed.name,
+      aliases: [],
+      market: 'TW',
+      exchange: listed.exchange,
+      currency: 'TWD',
+      type: 'stock',
+      limitPct: 10,
+      tradable: true,
+    };
+  }
+
+  /** 用官方行情確認代號存在；一般股票不再要求先進主檔。 */
   async function lookupListed(query) {
     if (typeof quotes.lookup !== 'function') return null;
     try {
@@ -348,35 +373,106 @@ export function createTradeService({
   }
 
   /**
-   * 官方行情有、商品主檔沒有時的說明。行情清單也含 ETF、特別股、TDR，
-   * 這裡分不出是漏收還是不開放，所以只斷言「不是代號打錯」。
+   * 主檔或官方行情的一般股票；ETF 只認主檔。
+   * listed 是官方行情查到的原始資料，讓呼叫端分辨「不在可交易範圍」與「查不到」。
    */
+  async function resolveEntry(symbol) {
+    const master = findSymbol(symbol);
+    if (master) return { entry: master.tradable === true ? master : null, listed: null };
+    const listed = await lookupListed(symbol);
+    if (listed && isOrdinaryStockCode(listed.symbol)) return { entry: listedStockEntry(listed), listed };
+    return { entry: null, listed };
+  }
+
+  /** 官方行情搜尋；來源不支援或出錯都回空清單，不讓查清單壞掉。 */
+  async function searchListed(query, options) {
+    if (typeof quotes.search !== 'function') return [];
+    try {
+      return await quotes.search(query, options);
+    } catch {
+      return [];
+    }
+  }
+
+  /** 官方行情有、但不是一般普通股也不在 ETF 主檔時的說明。 */
   function unlistedNote(listed) {
     const market = listed.exchange === 'TWSE' ? '上市' : '上櫃';
-    return `${listed.name}（${listed.symbol}，${market}）在官方行情查得到，但不在可交易商品主檔：`
-      + '可能漏收，也可能是目前不開放的商品（白名單外的 ETF、特別股等），不是代號打錯；現在不能交易，照實講。';
+    return `${listed.name}（${listed.symbol}，${market}）在官方行情查得到，但不在可交易範圍：`
+      + '一般上市／上櫃普通股都可以交易；ETF 只收主檔白名單（漲跌幅與稅率要逐檔設定），'
+      + 'TDR、特別股與 ETN 不開放。不是代號打錯；現在不能交易，照實講。';
   }
 
   async function quote(query) {
     const resolved = resolveSymbol(query);
+    let entry = resolved.match;
+    let listed = null;
+    let candidates = resolved.candidates.map((item) => ({ symbol: item.symbol, name: item.name, exchange: item.exchange }));
+    if (!entry && !resolved.candidates.length) {
+      listed = await lookupListed(query);
+      if (listed && isOrdinaryStockCode(listed.symbol)) {
+        entry = listedStockEntry(listed);
+      } else if (!listed && !officialDown()) {
+        // 主檔只有常用股票；其他普通股用官方行情做部分名稱搜尋，唯一命中才直接查價。
+        const hits = (await searchListed(query)).filter((row) => isOrdinaryStockCode(row.symbol));
+        if (hits.length === 1) entry = listedStockEntry(hits[0]);
+        else if (hits.length > 1) candidates = hits;
+      }
+    }
     const [market, latest] = await Promise.all([
       state(),
-      resolved.match ? quotes.getLatest(resolved.match) : Promise.resolve(null),
+      entry ? quotes.getLatest(entry) : Promise.resolve(null),
     ]);
-    if (!resolved.match) {
-      const listed = resolved.candidates.length ? null : await lookupListed(query);
+    if (!entry) {
       return {
-        candidates: resolved.candidates.map((item) => ({ symbol: item.symbol, name: item.name, exchange: item.exchange })),
+        candidates,
         unlisted: listed ? { ...listed, note: unlistedNote(listed) } : null,
+        sourceDown: !listed && !candidates.length && officialDown(),
         market,
       };
     }
-    const entry = resolved.match;
     return {
       entry,
       quote: latest,
       market,
       tradable: entry.tradable === true,
+    };
+  }
+
+  /**
+   * 可交易商品清單。沒帶 query 回可交易範圍與 ETF 主檔；帶 query 時查主檔別名
+   * 與官方行情的一般普通股。官方行情有、但不能交易的商品放在 unlisted。
+   */
+  async function symbols(query = '') {
+    const text = String(query ?? '').trim();
+    if (!text) {
+      return {
+        query: '',
+        etfs: TRADE_SYMBOLS.filter((item) => item.type === 'etf'),
+      };
+    }
+    const official = await searchListed(text, { limit: 2000 });
+    const items = [];
+    const unlisted = [];
+    const seen = new Set();
+    for (const item of listSymbols(text)) {
+      seen.add(item.symbol);
+      items.push(item);
+    }
+    for (const listed of official) {
+      if (seen.has(listed.symbol)) continue;
+      seen.add(listed.symbol);
+      if (isOrdinaryStockCode(listed.symbol)) items.push(listedStockEntry(listed));
+      else unlisted.push(listed);
+    }
+    const truncated = items.length > 50;
+    if (truncated) items.length = 50;
+    return {
+      query: text,
+      items,
+      unlisted: unlisted.slice(0, 20),
+      unlistedTotal: unlisted.length,
+      truncated,
+      sourceDown: officialDown(),
     };
   }
 
@@ -402,27 +498,37 @@ export function createTradeService({
     const orderSide = String(side ?? '').toLowerCase();
     if (orderSide !== 'buy' && orderSide !== 'sell') throw tradeError('side 只能是 buy 或 sell', 'BAD_SIDE');
     const qty = positiveInt(quantity, '股數');
-    const resolved = resolveSymbol(symbol, { strict: true });
-    const entry = resolved.match;
-    if (!entry || entry.tradable !== true) {
-      if (resolved.candidates.length > 1) {
-        throw tradeError(`「${symbol}」對到多個標的，先用 get_quote 查清楚代號`, 'BAD_SYMBOL');
-      }
-      const listed = entry ? null : await lookupListed(symbol);
-      if (listed) throw tradeError(unlistedNote(listed), 'SYMBOL_NOT_COLLECTED');
-      throw tradeError(`「${symbol}」不在可交易清單：先用 get_quote 查代號`, 'BAD_SYMBOL');
-    }
     const isBot = actorKind === ACCOUNT_KIND.BOT;
     const accountId = isBot ? botAccount : playerAccountId(actorId);
     if (isBot && !accountId) throw tradeError('Bot 帳戶還沒建立', 'NO_BOT');
     const request = String(requestId ?? '').trim();
     if (!request) throw tradeError('缺少 request_id（橋接沒有帶到觸發訊息）', 'BAD_REQUEST');
     // 先回重送的單：市場狀態幾分鐘就換一段，不能因為時間窗變了就把已存在的單說成不能下單。
+    // 這段也要排在解析代號前面，才不會因為剛好遇到行情斷線而把重送回成查不到。
     const existing = db.findOrderByRequest(request)
       ?? (messageId ? db.findOrderByMessage(accountId, String(messageId)) : null);
     if (existing) {
       if (existing.account_id !== accountId) throw tradeError('這筆請求不屬於你的帳戶', 'BAD_REQUEST');
       return { duplicate: true, order: existing };
+    }
+    const resolved = resolveSymbol(symbol, { strict: true });
+    let entry = resolved.match;
+    if (!entry || entry.tradable !== true) {
+      if (resolved.candidates.length > 1) {
+        throw tradeError(`「${symbol}」對到多個標的，先用 get_quote 查清楚代號`, 'BAD_SYMBOL');
+      }
+      const { entry: fallback, listed } = await resolveEntry(symbol);
+      if (fallback) {
+        entry = fallback;
+      } else if (listed) {
+        throw tradeError(unlistedNote(listed), 'SYMBOL_NOT_COLLECTED');
+      } else if (officialDown()) {
+        throw tradeError('官方行情目前抓不到，暫時不能確認代號；稍後再試', 'NO_QUOTE');
+      } else if (isOrdinaryStockCode(symbol) && db.getPosition(accountId, String(symbol).trim().toUpperCase())) {
+        throw tradeError('查不到最近收盤價，暫時不能下單', 'NO_QUOTE');
+      } else {
+        throw tradeError(`「${symbol}」查不到這個股票或最近沒有行情：先用 get_quote 確認代號`, 'BAD_SYMBOL');
+      }
     }
     const market = await state();
     if (!market.canOrder) {
@@ -588,16 +694,26 @@ export function createTradeService({
       if (rejected) events.push({ type: 'rejected', order: rejected, reason });
     };
     const jobs = new Map();
+    const resolvedBySymbol = new Map();
+    const entryFor = async (symbol) => {
+      if (!resolvedBySymbol.has(symbol)) resolvedBySymbol.set(symbol, await resolveEntry(symbol));
+      return resolvedBySymbol.get(symbol);
+    };
     for (const order of pending) {
-      const entry = findSymbol(order.symbol);
-      if (!entry) {
-        reject(order, '標的已不在商品主檔');
-        continue;
-      }
       if (order.trade_date > market.date) continue; // 預約單要等它的交易日
       // 預約單排好之後才宣布的休市（颱風、行事曆補上）：那天不會有收盤資料，直接失效。
       if (!isTradingDate(order.trade_date, closed)) {
         reject(order, `${order.trade_date} 休市，訂單失效`);
+        continue;
+      }
+      const { entry } = await entryFor(order.symbol);
+      if (!entry) {
+        // 官方行情查不到這檔（停牌、無成交或代號消失）：用兩邊來源的資料日期判斷是不是逾期。
+        const dates = await Promise.all(['TWSE', 'TPEx'].map((exchange) => (
+          typeof quotes.dataDate === 'function' ? quotes.dataDate(exchange) : null
+        )));
+        const sourceDate = dates.filter(Boolean).sort().at(-1);
+        if (sourceDate && sourceDate > order.trade_date) reject(order, '逾期未結算：找不到當日收盤資料');
         continue;
       }
       jobs.set(`${order.symbol}|${order.trade_date}`, { entry, date: order.trade_date });
@@ -612,26 +728,29 @@ export function createTradeService({
       if (!isTradingDate(order.trade_date, closed)) continue;
       // 當天還沒收盤就不結算，就算報價來源先偷跑也不行。
       if (order.trade_date === market.date && (market.phase === MARKET_PHASES.OPEN || market.phase === MARKET_PHASES.PREOPEN)) continue;
-      const entry = findSymbol(order.symbol);
+      const { entry } = await entryFor(order.symbol);
+      if (!entry) continue; // 第一圈已經處理逾期
       const key = `${order.symbol}|${order.trade_date}`;
-      const quoteRow = quoteByKey.get(key) ?? (entry ? await quotes.getForDate(entry, order.trade_date) : null);
+      const quoteRow = quoteByKey.get(key) ?? await quotes.getForDate(entry, order.trade_date);
       if (!quoteRow) {
         // 整份資料的日期已經超過這張單的 trade_date，代表這檔股票當天沒有收盤資料
         // （停牌、無成交、或來源缺漏），再等也不會來。
-        const sourceDate = entry && typeof quotes.dataDate === 'function'
+        const sourceDate = typeof quotes.dataDate === 'function'
           ? await quotes.dataDate(entry.exchange)
-          : (entry ? (await quotes.getLatest(entry))?.date : null);
+          : (await quotes.getLatest(entry))?.date;
         if (sourceDate && sourceDate > order.trade_date) reject(order, '逾期未結算：找不到當日收盤資料');
         continue;
       }
       if (quoteRow.closeCents <= 0) continue;
       const reference = quoteRow.referenceCents > 0 ? quoteRow.referenceCents : quoteRow.closeCents;
       const limit = limitPrices(reference, entry);
-      if (order.side === 'buy' && quoteRow.closeCents >= limit.up) {
+      // 用等號而不是 >=：新上市前幾日沒有漲跌幅限制，收盤可能超過 ±10%，
+      // 那種情況不該被當成漲跌停拒絕。
+      if (order.side === 'buy' && quoteRow.closeCents === limit.up) {
         reject(order, '收盤漲停，買單不成交');
         continue;
       }
-      if (order.side === 'sell' && quoteRow.closeCents <= limit.down) {
+      if (order.side === 'sell' && quoteRow.closeCents === limit.down) {
         reject(order, '收盤跌停，賣單不成交');
         continue;
       }
@@ -695,6 +814,7 @@ export function createTradeService({
     config,
     botAccountId: botAccount,
     quote,
+    symbols,
     placeOrder,
     portfolio,
     leaderboard,

@@ -139,6 +139,7 @@ const PRTS_TOOLS = [
 // 模擬股票：玩家端與 Bot 端看到的工具不一樣。Bot 只能替自己下單，玩家永遠看不到
 // bot_place_order；dc-learner 兩邊都不給。註冊期先藏，guard 再擋一次。
 const TRADE_ALL_TOOLS = [
+  'mcp__trade__list_symbols',
   'mcp__trade__get_quote',
   'mcp__trade__place_order',
   'mcp__trade__get_portfolio',
@@ -147,6 +148,7 @@ const TRADE_ALL_TOOLS = [
   'mcp__trade__bot_place_order',
 ]
 const TRADE_PLAYER_TOOLS = [
+  'mcp__trade__list_symbols',
   'mcp__trade__get_quote',
   'mcp__trade__place_order',
   'mcp__trade__get_portfolio',
@@ -154,6 +156,7 @@ const TRADE_PLAYER_TOOLS = [
   'mcp__trade__get_bot_portfolio',
 ]
 const TRADE_BOT_TOOLS = [
+  'mcp__trade__list_symbols',
   'mcp__trade__get_quote',
   'mcp__trade__get_bot_portfolio',
   'mcp__trade__bot_place_order',
