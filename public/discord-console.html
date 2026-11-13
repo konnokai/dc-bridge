@@ -310,6 +310,18 @@
   </section>
 
   <section class="card">
+    <h2>功能設定</h2>
+    <form id="feature-form" class="grid" novalidate>
+      <div id="feature-fields" class="grid" style="grid-column:1/-1"></div>
+      <div class="row" style="grid-column:1/-1">
+        <button type="submit">儲存</button>
+        <span id="feature-msg" class="msg"></span>
+      </div>
+    </form>
+    <p class="muted" style="margin:10px 0 0">數值超出範圍會由 config 驗證擋下並顯示原因。改完立即生效，不需要重啟。</p>
+  </section>
+
+  <section class="card">
     <h2>模擬股票</h2>
     <form id="trade-form" class="grid">
       <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
@@ -1801,6 +1813,127 @@
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
 
+  // 功能設定：一個欄位一列，path 對應 config.json 的 discord.*；數值範圍交給 normalize 驗證。
+  const FEATURE_FIELDS = [
+    { path: 'typing', label: 'typing：顯示「正在輸入」', kind: 'bool' },
+    { path: 'sendDelayMs', label: 'sendDelayMs：連續送出間隔（毫秒）', kind: 'number', min: 0, max: 5000, step: 50 },
+    { path: 'maxMessageChars', label: 'maxMessageChars：單則訊息上限（字）', kind: 'number', min: 200, max: 2000, step: 50 },
+    { path: 'ackMessage', label: 'ackMessage：收到訊息時的回應（留空＝不回）', kind: 'text', wide: true },
+    { path: 'autoCompactTokens', label: 'autoCompactTokens：自動壓縮門檻（0＝關）', kind: 'number', min: 0, max: 1000000, step: 10000 },
+    { path: 'ttftTimeoutMs', label: 'ttftTimeoutMs：等第一個 token 的上限（毫秒，0＝關）', kind: 'number', min: 0, max: 120000, step: 5000 },
+    { path: 'media.enabled', label: 'media.enabled：收圖片與影片', kind: 'bool' },
+    { path: 'media.maxVideoSeconds', label: 'media.maxVideoSeconds：影片抽格秒數', kind: 'number', min: 5, max: 120, step: 1 },
+    { path: 'context.enabled', label: 'context.enabled：帶最近訊息當上下文', kind: 'bool' },
+    { path: 'context.messages', label: 'context.messages：帶幾則（0＝關）', kind: 'number', min: 0, max: 50, step: 1 },
+    { path: 'context.maxChars', label: 'context.maxChars：上下文上限（字）', kind: 'number', min: 0, max: 12000, step: 500 },
+    { path: 'batch.debounceMs', label: 'batch.debounceMs：批次等待（毫秒）', kind: 'number', min: 500, max: 30000, step: 500 },
+    { path: 'batch.maxWaitMs', label: 'batch.maxWaitMs：批次最長等待（毫秒）', kind: 'number', min: 1000, max: 120000, step: 1000 },
+    { path: 'batch.maxMessages', label: 'batch.maxMessages：一批最多幾則', kind: 'number', min: 1, max: 50, step: 1 },
+    { path: 'tts.enabled', label: 'tts.enabled：開放 send_voice', kind: 'bool' },
+    { path: 'tts.baseUrl', label: 'tts.baseUrl：mlx_audio 後端網址', kind: 'text' },
+    { path: 'tts.model', label: 'tts.model：TTS 模型', kind: 'text' },
+    { path: 'tts.accent', label: 'tts.accent：VoiceDesign 的口音提示', kind: 'text' },
+    { path: 'tts.refAudio', label: 'tts.refAudio：參考音檔（TTS 主機上的絕對路徑）', kind: 'text' },
+    { path: 'tts.refText', label: 'tts.refText：參考音逐字稿', kind: 'text', wide: true },
+    { path: 'tts.timeoutMs', label: 'tts.timeoutMs：合成逾時（毫秒）', kind: 'number', min: 5000, max: 90000, step: 1000 },
+    { path: 'tts.maxChars', label: 'tts.maxChars：一句話上限（字）', kind: 'number', min: 1, max: 1000, step: 10 },
+    { path: 'tts.cooldownSec', label: 'tts.cooldownSec：語音冷卻（秒）', kind: 'number', min: 0, max: 3600, step: 1 },
+    { path: 'tts.maxPerTurn', label: 'tts.maxPerTurn：每輪上限', kind: 'number', min: 1, max: 5, step: 1 },
+    { path: 'tts.channels', label: 'tts.channels：開放語音的頻道（一行一個；留空＝全部）', kind: 'ids', wide: true },
+    { path: 'security.blockSensitive', label: 'security.blockSensitive：攔下含敏感資訊的回覆', kind: 'bool' },
+    { path: 'videoLinks.enabled', label: 'videoLinks.enabled：YouTube 連結抽字幕與畫面', kind: 'bool' },
+    { path: 'videoLinks.ytDlpPath', label: 'videoLinks.ytDlpPath：yt-dlp 路徑（留空＝PATH）', kind: 'text' },
+    { path: 'emoji.enabled', label: 'emoji.enabled：自訂表情目錄', kind: 'bool' },
+    { path: 'emoji.maxCandidates', label: 'emoji.maxCandidates：候選數', kind: 'number', min: 3, max: 30, step: 1 },
+    { path: 'emoji.maxChars', label: 'emoji.maxChars：注入上限（字）', kind: 'number', min: 100, max: 3000, step: 50 },
+    { path: 'memes.enabled', label: 'memes.enabled：梗圖庫', kind: 'bool' },
+    { path: 'memes.max', label: 'memes.max：每批帶幾張（0＝不帶）', kind: 'number', min: 0, max: 20, step: 1 },
+    { path: 'reactions.enabled', label: 'reactions.enabled：自己加 reaction', kind: 'bool' },
+    { path: 'reactions.probability', label: 'reactions.probability：機率（0～1）', kind: 'number', min: 0, max: 1, step: 0.01 },
+    { path: 'reactions.cooldownMs', label: 'reactions.cooldownMs：冷卻（毫秒）', kind: 'number', min: 10000, max: 21600000, step: 10000 },
+    { path: 'reactions.maxPerHour', label: 'reactions.maxPerHour：每小時上限', kind: 'number', min: 1, max: 100, step: 1 },
+    { path: 'memory.enabled', label: 'memory.enabled：群友記憶', kind: 'bool' },
+    { path: 'memory.maxFacts', label: 'memory.maxFacts：每人上限', kind: 'number', min: 5, max: 50, step: 1 },
+    { path: 'memory.maxChars', label: 'memory.maxChars：注入上限（字）', kind: 'number', min: 200, max: 3000, step: 50 },
+    { path: 'notes.enabled', label: 'notes.enabled：頻道筆記', kind: 'bool' },
+    { path: 'notes.injectMax', label: 'notes.injectMax：帶幾條', kind: 'number', min: 1, max: 20, step: 1 },
+    { path: 'notes.maxChars', label: 'notes.maxChars：注入上限（字）', kind: 'number', min: 100, max: 3000, step: 50 },
+    { path: 'notes.dailySummary.enabled', label: 'notes.dailySummary.enabled：每日摘要', kind: 'bool' },
+    { path: 'notes.dailySummary.hour', label: 'notes.dailySummary.hour：幾點（0～23）', kind: 'number', min: 0, max: 23, step: 1 },
+    { path: 'knowledge.enabled', label: 'knowledge.enabled：群知識', kind: 'bool' },
+    { path: 'knowledge.maxChars', label: 'knowledge.maxChars：注入上限（字）', kind: 'number', min: 300, max: 4000, step: 100 },
+    { path: 'knowledge.toolMaxChars', label: 'knowledge.toolMaxChars：工具查詢上限（字）', kind: 'number', min: 300, max: 6000, step: 100 },
+    { path: 'followup.enabled', label: 'followup.enabled：回訪排程', kind: 'bool' },
+    { path: 'slang.enabled', label: 'slang.enabled：黑話學習', kind: 'bool' },
+    { path: 'slang.injectMax', label: 'slang.injectMax：帶幾條', kind: 'number', min: 1, max: 30, step: 1 },
+    { path: 'slang.maxChars', label: 'slang.maxChars：注入上限（字）', kind: 'number', min: 200, max: 4000, step: 50 },
+  ];
+  const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  const setPath = (obj, path, value) => {
+    const keys = path.split('.');
+    let target = obj;
+    for (const key of keys.slice(0, -1)) target = (target[key] ??= {});
+    target[keys.at(-1)] = value;
+  };
+  const featureId = (path) => 'cf-' + path.replace(/\./g, '-');
+  const featureGroup = (path) => {
+    if (/^(typing|sendDelayMs|maxMessageChars|ackMessage|autoCompactTokens|ttftTimeoutMs)$/.test(path)) return '對話行為';
+    if (/^(media|context|batch)\./.test(path)) return '媒體、上下文與批次';
+    if (path.startsWith('tts.')) return '語音（TTS）';
+    return '其他功能';
+  };
+
+  function renderFeatureFields(c) {
+    const nodes = [];
+    let group = '';
+    for (const f of FEATURE_FIELDS) {
+      const nextGroup = featureGroup(f.path);
+      if (nextGroup !== group) {
+        group = nextGroup;
+        nodes.push(el('div', { className: 'muted', style: 'grid-column:1/-1;margin-top:6px;font-weight:600' }, group));
+      }
+      const id = featureId(f.path);
+      const value = getPath(c, f.path);
+      if (f.kind === 'bool') {
+        // 一般 input 的 width:100% 會讓 checkbox 撐滿整個格子，這裡要覆蓋掉。
+        const input = el('input', { id, type: 'checkbox', style: 'width:auto;margin:0;flex:none' });
+        input.checked = value === true;
+        nodes.push(el('label', { style: 'display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)' }, input, f.label));
+        continue;
+      }
+      let input;
+      if (f.kind === 'ids') {
+        input = el('textarea', { id });
+        input.value = (value || []).join('\n');
+      } else {
+        const props = { id, type: f.kind === 'number' ? 'number' : 'text' };
+        if (f.kind === 'number') {
+          props.min = f.min;
+          props.max = f.max;
+          props.step = f.step ?? 1;
+        }
+        input = el('input', props);
+        input.value = value ?? '';
+      }
+      nodes.push(el('label', { style: f.wide ? 'grid-column:1/-1' : '' }, f.label, input));
+    }
+    $('feature-fields').replaceChildren(...nodes);
+  }
+
+  function featurePatch() {
+    const patch = {};
+    for (const f of FEATURE_FIELDS) {
+      const node = $(featureId(f.path));
+      let value;
+      if (f.kind === 'bool') value = node.checked;
+      else if (f.kind === 'number') value = Number(node.value);
+      else if (f.kind === 'ids') value = lines(node.value);
+      else value = node.value.trim();
+      setPath(patch, f.path, value);
+    }
+    return patch;
+  }
+
   function fillConfig(c) {
     const join = (v) => (v || []).join('\n');
     $('allow-guilds').value = join(c.allow.guilds);
@@ -1851,6 +1984,7 @@
     const review = bot.review ?? {};
     $('trade-bot-review-enabled').checked = review.enabled !== false;
     $('trade-bot-review-after').value = review.after ?? '19:10';
+    renderFeatureFields(c);
   }
 
   async function loadConfig() {
@@ -2476,6 +2610,26 @@
           // chattyChannels 不受 messageContentIntent 鎖定：先設定好，開了意圖就生效。
           chattyChannels: lines($('chatty-channels').value),
         }),
+      });
+      fillConfig(result.config);
+      msg.textContent = '已儲存（立即生效）';
+      msg.className = 'msg ok';
+      await refresh();
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  $('feature-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const msg = $('feature-msg');
+    msg.textContent = '儲存中…';
+    msg.className = 'msg';
+    try {
+      const result = await api('/api/config', {
+        method: 'POST',
+        body: JSON.stringify(featurePatch()),
       });
       fillConfig(result.config);
       msg.textContent = '已儲存（立即生效）';

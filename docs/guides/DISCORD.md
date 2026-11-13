@@ -553,13 +553,18 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
     `requireMentionInChannel`（一行一個 `頻道ID=true|false`）/ `chattyChannels`（一行一個頻道 ID）直接編輯，
     存檔後**立即生效**並寫回 `config.json`。
     沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）；`chattyChannels` 不鎖，可以先設定好
+  - **功能設定**：`typing`、`sendDelayMs`、`maxMessageChars`、`ackMessage`、`autoCompactTokens`、`ttftTimeoutMs`，
+    以及 `media.enabled`／`maxVideoSeconds`、`context.*`、`batch.*`、`tts.*`、`security.blockSensitive`、
+    `videoLinks.*`、`emoji.*`、`memes.*`、`reactions.*`、`memory.*`、`notes.*`（含每日摘要）、
+    `knowledge.*`、`followup.enabled`、`slang.*`。一欄一列，存檔後立即生效並寫回 `config.json`；
+    格式與範圍由 `normalizeDiscordConfig` 驗證，錯誤會直接顯示在卡片上
   - **執行程式（沙箱）**：`sandbox.enabled` 與 `sandbox.channels`（一行一個頻道 ID），存檔後立即生效並寫回
     `config.json`；image、逾時與輸出上限仍在 `config.json`。image 要先在橋接主機 pull；開啟前先看「執行程式」的邊界
   - **表情目錄**：每個伺服器的表情條目數，可手動更新
   - **邀請機器人**：產生含目前功能權限的邀請連結，可開啟或複製
 - **日誌**（`#logs`）：最近 200 行（記憶體 ring buffer，重啟就清空）
 
-不做的事（跟 QQ 版控制台不同）：人格編輯、QQ 版那種模式切換、語音。那些在 Discord 版沒有對應概念，
+不做的事（跟 QQ 版控制台不同）：人格編輯、QQ 版那種模式切換。那些在 Discord 版沒有對應概念，
 或需要重啟 DSH 才有意義。
 
 > token 留空時會自動產生，存在 `state/discord-console-token`（重啟沿用）。要換 token 就刪掉那個檔，或直接在
@@ -666,6 +671,9 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
    平時不用手動跑：橋接會監聽 `emojiCreate` / `emojiUpdate` / `emojiDelete`，
    15 秒去抖後自動重掃（hash 快取只會索引變動的那幾個）。控制台「表情目錄」卡片也有
    「更新目錄」按鈕，輸出寫在 `state/emoji-build.log`。
+
+   已離開的伺服器不會留在目錄裡：橋接登入時、被踢出伺服器時會刪掉對應的
+   `state/discord-emoji/<guildId>.json`；`npm run build:emojis` 也會清掉不再存在的伺服器目錄。
 
    建置期間卡片會顯示「更新中…（已完成/總數）」與日誌尾巴，子程序的輸出一併進
    控制台「日誌」與 pm2 log，不用等建置結束才看得到進度。

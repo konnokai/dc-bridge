@@ -137,7 +137,7 @@ import {
   takeReloadSummary,
 } from './core/discord-reload.mjs';
 import { describeSensitive, findSensitive, formatSensitiveHit } from './core/discord-security.mjs';
-import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, formatEmojiLine, isUnicodeEmoji, knownEmojiTokens, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, catalogFile, formatEmojiLine, isUnicodeEmoji, knownEmojiTokens, labelEmojiTags, loadCatalogs, loadEmojiUsage, matchStickers, ownReaction, pruneCatalogs, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from './core/discord-emoji.mjs';
 import {
   forgetFact,
   forgetUser,
@@ -1010,6 +1010,18 @@ async function main() {
     if (Date.now() - emojiLoadedAt < 60_000) return;
     emojiCatalogs = loadCatalogs(emojiDir);
     emojiLoadedAt = Date.now();
+  }
+
+  /** 離開的伺服器不要留在目錄裡：模型挑到那些表情，送出會失敗或變成看不懂的 id。 */
+  function pruneEmojiGuilds() {
+    const removed = pruneCatalogs(emojiCatalogs, client.guilds.cache.keys());
+    if (removed.length === 0) return;
+    for (const guildId of removed) {
+      try {
+        fs.rmSync(catalogFile(emojiDir, guildId), { force: true });
+      } catch { /* 檔案已不在就算了 */ }
+    }
+    log(`表情目錄：移除 ${removed.length} 個已離開的伺服器（${removed.join(', ')}）`);
   }
 
   /** 建置日誌尾巴：控制台每 5 秒抓一次，建置期間就看得到跑到第幾批。 */
@@ -5881,6 +5893,10 @@ async function main() {
     handleSlashCommand(interaction).catch((error) => log(`slash command 失敗：${error?.stack ?? error}`));
   });
   // 表情變動 → 15 秒去抖後重掃（hash 快取只會索引新的/換圖的）。
+  client.on(Events.GuildDelete, (guild) => {
+    // available=false 只是 Discord 暫時連不上，不算離開。
+    if (guild.available) pruneEmojiGuilds();
+  });
   client.on(Events.GuildEmojiCreate, (emoji) => {
     log(`表情新增：${emoji.name}`);
     scheduleEmojiBuild(emoji.guild?.id ?? emoji.guildId);
@@ -6269,6 +6285,7 @@ async function main() {
 
   client.once(Events.ClientReady, (ready) => {
     log(`已登入：${ready.user.tag}（${ready.user.id}）`);
+    pruneEmojiGuilds();
     if (ownerIds.size === 0) log('⚠️ 沒有設定 discord.ownerIds：/reset、/status、工具審批都會不可用');
     const noGuildRules = cfg.discord.allow.guilds.length === 0 && cfg.discord.allow.channels.length === 0;
     if (noGuildRules && !cfg.discord.allowAllWhenEmpty) log('⚠️ 頻道白名單為空：只會回應 allow.users 裡的私聊');
@@ -6350,6 +6367,25 @@ async function main() {
       deny: cfg.discord.deny,
       ownerIds: cfg.discord.ownerIds,
       media: cfg.discord.media,
+      tts: cfg.discord.tts,
+      context: cfg.discord.context,
+      batch: cfg.discord.batch,
+      security: cfg.discord.security,
+      emoji: cfg.discord.emoji,
+      memes: cfg.discord.memes,
+      reactions: cfg.discord.reactions,
+      memory: cfg.discord.memory,
+      notes: cfg.discord.notes,
+      knowledge: cfg.discord.knowledge,
+      followup: cfg.discord.followup,
+      slang: cfg.discord.slang,
+      videoLinks: cfg.discord.videoLinks,
+      typing: cfg.discord.typing,
+      sendDelayMs: cfg.discord.sendDelayMs,
+      maxMessageChars: cfg.discord.maxMessageChars,
+      ackMessage: cfg.discord.ackMessage,
+      autoCompactTokens: cfg.discord.autoCompactTokens,
+      ttftTimeoutMs: cfg.discord.ttftTimeoutMs,
       sandbox: cfg.discord.sandbox,
       requireMentionInGuild: cfg.discord.requireMentionInGuild,
       requireMentionInChannel: cfg.discord.requireMentionInChannel,
@@ -6365,16 +6401,39 @@ async function main() {
   }
 
   async function updateConfig(patch) {
-    // 只接受白名單、黑名單、ownerIds、media、sandbox、requireMentionInGuild／InChannel、
-    // chattyChannels；其餘欄位一律沿用目前值。整份候選設定都過一次 normalizeDiscordConfig：
-    // ID 格式、數字範圍都在那裡擋。
+    // 只接受控制台表單會送的白名單與功能設定；其餘欄位（token、console、preset、模型）
+    // 一律沿用目前值。整份候選設定都過一次 normalizeDiscordConfig：格式與範圍都在那裡擋。
     const next = normalizeDiscordConfig({
       ...cfg.discord,
       allow: patch?.allow ?? cfg.discord.allow,
       deny: { ...cfg.discord.deny, ...(patch?.deny ?? {}) },
       ownerIds: patch?.ownerIds ?? cfg.discord.ownerIds,
-      // media 逐欄合併：表單只送數字欄位，不要把 enabled 之類的開關蓋回預設值。
+      // 以下區塊逐欄合併：控制台表單只送有改的欄位，不要把沒送的蓋回預設值。
       media: { ...cfg.discord.media, ...(patch?.media ?? {}) },
+      tts: { ...cfg.discord.tts, ...(patch?.tts ?? {}) },
+      context: { ...cfg.discord.context, ...(patch?.context ?? {}) },
+      batch: { ...cfg.discord.batch, ...(patch?.batch ?? {}) },
+      security: { ...cfg.discord.security, ...(patch?.security ?? {}) },
+      emoji: { ...cfg.discord.emoji, ...(patch?.emoji ?? {}) },
+      memes: { ...cfg.discord.memes, ...(patch?.memes ?? {}) },
+      reactions: { ...cfg.discord.reactions, ...(patch?.reactions ?? {}) },
+      memory: { ...cfg.discord.memory, ...(patch?.memory ?? {}) },
+      notes: {
+        ...cfg.discord.notes,
+        ...(patch?.notes ?? {}),
+        dailySummary: { ...cfg.discord.notes.dailySummary, ...(patch?.notes?.dailySummary ?? {}) },
+      },
+      knowledge: { ...cfg.discord.knowledge, ...(patch?.knowledge ?? {}) },
+      followup: { ...cfg.discord.followup, ...(patch?.followup ?? {}) },
+      slang: { ...cfg.discord.slang, ...(patch?.slang ?? {}) },
+      videoLinks: { ...cfg.discord.videoLinks, ...(patch?.videoLinks ?? {}) },
+      // 純量欄位只認正確型別：normalize 對 boolean 用 `!== false`，字串 "false" 會變成 true。
+      typing: typeof patch?.typing === 'boolean' ? patch.typing : cfg.discord.typing,
+      sendDelayMs: patch?.sendDelayMs ?? cfg.discord.sendDelayMs,
+      maxMessageChars: patch?.maxMessageChars ?? cfg.discord.maxMessageChars,
+      ackMessage: typeof patch?.ackMessage === 'string' ? patch.ackMessage : cfg.discord.ackMessage,
+      autoCompactTokens: patch?.autoCompactTokens ?? cfg.discord.autoCompactTokens,
+      ttftTimeoutMs: patch?.ttftTimeoutMs ?? cfg.discord.ttftTimeoutMs,
       // 控制台只編 enabled 與 channels；image、逾時、上限要改 config.json。
       sandbox: {
         ...cfg.discord.sandbox,
@@ -6415,6 +6474,25 @@ async function main() {
       deny: next.deny,
       ownerIds: next.ownerIds,
       media: next.media,
+      tts: next.tts,
+      context: next.context,
+      batch: next.batch,
+      security: next.security,
+      emoji: next.emoji,
+      memes: next.memes,
+      reactions: next.reactions,
+      memory: next.memory,
+      notes: next.notes,
+      knowledge: next.knowledge,
+      followup: next.followup,
+      slang: next.slang,
+      videoLinks: next.videoLinks,
+      typing: next.typing,
+      sendDelayMs: next.sendDelayMs,
+      maxMessageChars: next.maxMessageChars,
+      ackMessage: next.ackMessage,
+      autoCompactTokens: next.autoCompactTokens,
+      ttftTimeoutMs: next.ttftTimeoutMs,
       sandbox: next.sandbox,
       requireMentionInGuild: next.requireMentionInGuild,
       requireMentionInChannel: next.requireMentionInChannel,
@@ -6437,6 +6515,25 @@ async function main() {
     cfg.discord.deny = next.deny;
     cfg.discord.ownerIds = next.ownerIds;
     cfg.discord.media = next.media;
+    cfg.discord.tts = next.tts;
+    cfg.discord.context = next.context;
+    cfg.discord.batch = next.batch;
+    cfg.discord.security = next.security;
+    cfg.discord.emoji = next.emoji;
+    cfg.discord.memes = next.memes;
+    cfg.discord.reactions = next.reactions;
+    cfg.discord.memory = next.memory;
+    cfg.discord.notes = next.notes;
+    cfg.discord.knowledge = next.knowledge;
+    cfg.discord.followup = next.followup;
+    cfg.discord.slang = next.slang;
+    cfg.discord.videoLinks = next.videoLinks;
+    cfg.discord.typing = next.typing;
+    cfg.discord.sendDelayMs = next.sendDelayMs;
+    cfg.discord.maxMessageChars = next.maxMessageChars;
+    cfg.discord.ackMessage = next.ackMessage;
+    cfg.discord.autoCompactTokens = next.autoCompactTokens;
+    cfg.discord.ttftTimeoutMs = next.ttftTimeoutMs;
     cfg.discord.sandbox = next.sandbox;
     cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
     cfg.discord.requireMentionInChannel = next.requireMentionInChannel;
