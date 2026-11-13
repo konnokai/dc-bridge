@@ -139,15 +139,18 @@ function main() {
     fail(`${remoteDir} 還不是 git repo。一次性設定：\n  cd ${remoteDir} && git init && git remote add origin <repo url> && git fetch origin && git reset --hard origin/main`);
   }
   previous = remote('git rev-parse HEAD').stdout.trim();
-  if (previous === target) {
-    console.log(`伺服器已經是 ${short(target)}，沒有要部署的東西。`);
-    return;
+  // 同一個 commit 也要跑完：上一次可能死在測試或 setup，不能假設伺服器已經套用。
+  const sameCommit = previous === target;
+  if (sameCommit) {
+    log(`伺服器已經是 ${short(target)}：改跑修復流程（套件、測試、setup、重啟、健康檢查）`);
   }
 
   // 3. 這次會換掉哪些檔案（只用來決定要不要重啟 DSH）
-  const changed = changesBetween(previous, target);
-  console.log(`伺服器：${short(previous)} → ${short(target)}（${changed.length} 個檔案）`);
-  if (changed.length) console.log(changed.slice(0, 40).map((f) => `  ${f}`).join('\n'));
+  const changed = sameCommit ? [] : changesBetween(previous, target);
+  if (!sameCommit) {
+    console.log(`伺服器：${short(previous)} → ${short(target)}（${changed.length} 個檔案）`);
+    if (changed.length) console.log(changed.slice(0, 40).map((f) => `  ${f}`).join('\n'));
+  }
   if (dryRun) {
     console.log('\n(dry run) 沒有動任何東西。');
     return;
@@ -165,11 +168,18 @@ function main() {
   }
 
   // 5. 伺服器 checkout。tracked 檔案被改過時 git 會拒絕，正好停在部署前。
-  log(`伺服器 fetch + checkout ${short(target)}`);
-  const after = remote(`git fetch --prune --quiet origin && git checkout --detach ${target} >/dev/null 2>&1 && git rev-parse HEAD`).stdout.trim();
-  if (after !== target) fail(`伺服器 checkout 後是 ${short(after || '（空的）')}，不是 ${short(target)}`);
+  if (!sameCommit) {
+    log(`伺服器 fetch + checkout ${short(target)}`);
+    const after = remote(`git fetch --prune --quiet origin && git checkout --detach ${target} >/dev/null 2>&1 && git rev-parse HEAD`).stdout.trim();
+    if (after !== target) fail(`伺服器 checkout 後是 ${short(after || '（空的）')}，不是 ${short(target)}`);
+  }
   const localChanges = remote('git status --porcelain --untracked-files=no').stdout.trim();
   if (localChanges) fail(`伺服器上的 tracked 檔案跟 commit 不一致：\n${localChanges}`);
+
+  // 依賴沒補齊時，遠端測試會直接 ERR_MODULE_NOT_FOUND。npm install 對齊 package-lock，
+  // 沒變更時只花一秒；--skip-tests 也照跑，因為執行期同樣需要新依賴。
+  log('伺服器 npm install（補新依賴）');
+  remote('npm install --no-audit --no-fund --loglevel=error');
 
   // 6. 遠端再驗一次
   if (!skipTests) {
@@ -183,7 +193,8 @@ function main() {
 
   // 7. 同步 preset、重啟
   const inputs = mcpInputs();
-  const needsDshReload = changed.some(
+  // 同一個 commit 的修復流程一律重跑 setup 與重啟，否則無法確認上次是否真的套用了。
+  const needsDshReload = sameCommit || changed.some(
     (f) => inputs.has(f) || f.startsWith('dsh/agent-presets/') || f.startsWith('plugins/') || f === 'scripts/setup-dsh.mjs',
   );
   const needsRestart = needsDshReload || changed.some((f) => /^(src|public|dsh|plugins)\//.test(f));
