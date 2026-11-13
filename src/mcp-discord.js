@@ -127,7 +127,7 @@ tool(
 
 tool(
   'send_voice',
-  '把一句話說出來，送成一則 Discord 語音訊息。想用聲音回話、唸一段話、唱歌以外的模仿語氣時用；不呼叫就不會發出任何東西。後端沒開或合成失敗時會回錯誤，改用 send_message。',
+  '把一句話丟進背景合成語音（幾十秒）。工具會立刻回「已開始」，頻道會先貼「正在生成語音」；合成好會送【語音完成】，再用 send_voice_file 送出。後端沒開或合成失敗會送【語音失敗】，改用 send_message。',
   {
     token: sessionToken,
     text: z.string().describe('要說的話（會被唸出來，不會變成頻道上的文字；太長會截斷）'),
@@ -137,11 +137,33 @@ tool(
     reply_to: messageRef('要回覆的那則訊息').optional(),
   },
   '/sendVoice',
+  (result) => result.notice ?? result.text,
+  60_000,
+);
+
+tool(
+  'send_voice_file',
+  '把【語音完成】合成好的語音送進目前的 Discord 會話。job 填提示裡的 job id；不要重新合成。使用者已經說不要了就不要送。',
+  {
+    token: sessionToken,
+    job: z.string().describe('【語音完成】提示裡的 job id'),
+  },
+  '/sendVoiceFile',
   (result) => {
     const text = sentDetail(result, '送出語音');
     return result.detail ? `${text}（${result.detail}）` : text;
   },
-  120_000,
+  60_000,
+);
+
+tool(
+  'job_status',
+  '查這個頻道現在有沒有背景工作在跑（生圖、語音）。使用者問「畫好了沒」「語音好了沒」，或你懷疑工作卡住時用；照回覆講，不要用猜的。',
+  {
+    token: sessionToken,
+  },
+  '/jobStatus',
+  (result) => result.text,
 );
 
 tool(

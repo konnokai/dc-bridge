@@ -11,6 +11,7 @@ import {
   cancelImageJobs,
   createImageJobHandler,
   drawUsersForFile,
+  listImageJobs,
   loadImageJobs,
   saveImageJobs,
   sweepStaleImageJobs,
@@ -52,6 +53,7 @@ const handler = createImageJobHandler({
 
 const started = await handler({ phase: 'start', sessionId: 's1', jobId: 'j1' });
 ok(started.key === 'ch:1' && jobs.get('j1')?.users[0]?.userId === 'u1', 'start 記下會話與觸發者');
+ok(jobs.get('j1')?.startedAt === 1000 && jobs.get('j1')?.at === 1000, 'start 記下開始時間');
 
 {
   let knowledgeCalls = 0;
@@ -150,13 +152,14 @@ ok(enqueued.length === beforeDup, '重送的 done 不會重複排進會話');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-image-jobs-'));
   const file = path.join(dir, 'discord-image-jobs.json');
   saveImageJobs(file, {
-    jobs: new Map([['r1', { key: 'ch:1', users: [{ userId: '123456789012345678', name: 'A' }], at: 1000 }]]),
+    jobs: new Map([['r1', { key: 'ch:1', users: [{ userId: '123456789012345678', name: 'A' }], startedAt: 500, at: 1000 }]]),
     pendingDraws: new Map([['r.png', { key: 'ch:1', users: [{ userId: '123456789012345678', name: 'A' }], at: 1000 }]]),
   });
   const loaded = loadImageJobs(file, { keys: new Set(['ch:1']), now: () => 2000 });
   ok(loaded.warning === null, '生圖工作檔正常載入');
   ok(loaded.jobs.get('r1')?.key === 'ch:1' && loaded.jobs.get('r1')?.at === 2000,
     '重啟後工作還在，並從載入時間重新計時');
+  ok(loaded.jobs.get('r1')?.startedAt === 500, '重啟後保留原本的開始時間');
   ok(loaded.pendingDraws.get('r.png')?.users[0]?.userId === '123456789012345678', '重啟後畫圖歸屬還在');
   ok(loaded.pendingDraws.get('r.png')?.at === 1000, '重啟不會延長畫圖歸屬的 15 分鐘');
 
@@ -220,6 +223,20 @@ ok(enqueued.length === beforeDup, '重送的 done 不會重複排進會話');
     '失聯超過 2 分鐘的工作會被清掉');
   ok(IMAGE_JOB_STALE_TEXT.startsWith('【生圖失敗】') && IMAGE_JOB_STALE_TEXT.includes('不要假裝'),
     '失聯通知用生圖失敗的格式，模型知道要跟頻道說');
+}
+
+// job_status：只列這個頻道、依開始時間排序，逾時順手清掉。
+{
+  const jobs = new Map([
+    ['a', { key: 'ch:1', users: [], startedAt: 2000, at: 3000 }],
+    ['b', { key: 'ch:1', users: [], startedAt: 1500, at: 3000 }],
+    ['c', { key: 'ch:2', users: [], startedAt: 1000, at: 3000 }],
+    ['d', { key: 'ch:1', users: [], startedAt: 0, at: 0 }],
+  ]);
+  const list = listImageJobs({ jobs, key: 'ch:1', now: () => 4000, ttlMs: 3500 });
+  ok(list.map((item) => item.id).join() === 'b,a', '只列這個頻道，依開始時間排序');
+  ok(!jobs.has('d'), '逾時的工作不在狀態裡');
+  ok(listImageJobs({ jobs, key: 'nope', now: () => 4000 }).length === 0, '別的頻道看不到');
 }
 
 console.log('\n✅ 背景生圖回報測試通過');

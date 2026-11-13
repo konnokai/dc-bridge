@@ -65,7 +65,7 @@ export function createImageJobHandler({
     }
     if (!key || sessions[key] !== sessionId) throw error('這個會話已經結束，丟棄生圖通知', 403);
     if (phase === 'start') {
-      jobs.set(jobId, { key, users: turnUsers.get(key) ?? [], at });
+      jobs.set(jobId, { key, users: turnUsers.get(key) ?? [], startedAt: at, at });
       // 查知識失敗不能擋生圖：回空陣列，圖照畫。知識是一條一個字串，外掛逐條過濾。
       let knowledge = [];
       try {
@@ -178,7 +178,8 @@ export function loadImageJobs(file, { ttlMs = IMAGE_JOB_TTL_MS, keys = null, now
     if (!knownKey(job.key)) continue;
     const time = Number(job.at);
     if (!Number.isFinite(time) || at - time > ttlMs) continue;
-    jobs.set(jobId, { key: job.key, users: readUsers(job.users), at });
+    const startedAt = Number(job.startedAt);
+    jobs.set(jobId, { key: job.key, users: readUsers(job.users), startedAt: Number.isFinite(startedAt) ? startedAt : time, at });
   }
   const pendingDraws = new Map();
   for (const [rawName, entry] of Object.entries(doc.pendingDraws)) {
@@ -196,7 +197,7 @@ export function loadImageJobs(file, { ttlMs = IMAGE_JOB_TTL_MS, keys = null, now
 /** 原子寫：先寫 .tmp 再 rename，避免半截檔案。 */
 export function saveImageJobs(file, { jobs, pendingDraws } = {}) {
   const doc = { version: IMAGE_JOBS_VERSION, jobs: {}, pendingDraws: {} };
-  for (const [jobId, job] of jobs ?? []) doc.jobs[jobId] = { key: job.key, users: job.users ?? [], at: job.at };
+  for (const [jobId, job] of jobs ?? []) doc.jobs[jobId] = { key: job.key, users: job.users ?? [], startedAt: job.startedAt ?? job.at, at: job.at };
   for (const [name, entry] of pendingDraws ?? []) {
     doc.pendingDraws[name] = { key: entry.key, users: entry.users ?? [], at: entry.at };
   }
@@ -225,4 +226,19 @@ export function sweepStaleImageJobs({ jobs, staleMs = IMAGE_JOB_STALE_MS, now = 
     }
   }
   return stale;
+}
+
+/** 這個頻道還在跑的生圖工作（給 job_status）。 */
+export function listImageJobs({ jobs, key, now = Date.now, ttlMs = IMAGE_JOB_TTL_MS }) {
+  const at = now();
+  const out = [];
+  for (const [jobId, job] of jobs) {
+    if (at - job.at > ttlMs) {
+      jobs.delete(jobId);
+      continue;
+    }
+    if (job.key !== key) continue;
+    out.push({ id: jobId, startedAt: job.startedAt ?? job.at, at: job.at });
+  }
+  return out.sort((a, b) => a.startedAt - b.startedAt);
 }

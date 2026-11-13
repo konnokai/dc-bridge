@@ -64,6 +64,8 @@ const DISCORD_TOOLS = [
   'mcp__discord__send_message',
   'mcp__discord__send_image',
   'mcp__discord__send_voice',
+  'mcp__discord__send_voice_file',
+  'mcp__discord__job_status',
   'mcp__discord__cancel_image',
   'mcp__discord__send_prts_artwork',
   'mcp__discord__get_prts_artwork',

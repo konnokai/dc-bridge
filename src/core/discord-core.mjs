@@ -668,7 +668,7 @@ const PROGRESS_DETAIL_MAX = 80;
 const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
-  'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_voice', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
+  'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_voice', 'mcp__discord__send_voice_file', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__set_custom_status', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   // 給開發者的意見不該在頻道留下任何痕跡。
@@ -709,6 +709,7 @@ const PROGRESS_LABELS = {
   // 生圖要一兩分鐘，進度至少讓頻道知道在畫，不是卡住。
   'generate_image': ['🎨 畫圖'],
   'mcp__discord__cancel_image': ['🛑 取消生圖'],
+  'mcp__discord__job_status': ['📋 查背景工作'],
 };
 
 /** 一次工具呼叫在 Discord 進度訊息裡的那一行；不用列的回 null。args 是 DSH 事件裡的 JSON 字串。 */

@@ -3,6 +3,10 @@
 > 狀態：**已實作**（2026-11-12）。程式在 `src/core/discord-tts.mjs`、`send_voice` 工具與橋接的
 > `agentHandlers.sendVoice`；離線測試 `scripts/test-discord-tts.mjs`。後端只用本機 mlx_audio。
 > 目標：模型能自己決定把一句話「說出來」；合成失敗或送出失敗時，一律退回文字或普通附件，不能讓回覆消失。
+>
+> **2026-11-13 背景化**：`send_voice` 通過檢查後只開背景工作，合成完成由【語音完成】喚醒同一個會話，
+> 模型再用 `send_voice_file` 送出。長時間合成不再佔著 MCP 工具呼叫。流程與狀態工具見
+> `docs/guides/DISCORD.md` 的「語音回覆」。
 
 ## 已完成的實測
 
@@ -49,7 +53,8 @@ await channel.send({ flags: MessageFlags.IsVoiceMessage, files: [att] });
 | `voice` | | CustomVoice 的預設聲（Vivian、Serena、Ryan…）；不給就走 VoiceDesign |
 | `reply_to` | | 同 `send_message` |
 
-回傳跟 `send_message` 一樣的 `#編號`，讓模型後續可以改、收回。
+回傳 `{ status: "started", jobId, text }`，不帶 `#編號`；合成完成後模型再用 `send_voice_file` 送出，
+才會拿到跟 `send_message` 一樣的 `#編號`。
 
 **不新增「自動 TTS」開關。** 要常駐語音就把規則寫進人格，讓模型每輪自己呼叫。
 
@@ -79,8 +84,8 @@ POST http://<mac-mini>:8100/v1/audio/speech
 | --- | --- |
 | `src/core/discord-core.mjs` | 新增 `tts` 設定區塊與範圍驗證（照 `media` 的寫法） |
 | `src/core/discord-tts.mjs` | **新檔**：`synthesizeSpeech()`、`toVoiceOgg()`、`makeWaveform()`、`probeDuration()` |
-| `src/mcp-discord.js` | 新增 `send_voice` 工具（timeout 120 秒） |
-| `src/discord-bridge.js` | `agentHandlers.sendVoice`；`deliverAgentMessage` 加 `voice` 參數；`sendLong` 的 `channel.send` 加 flags 與 waveform |
+| `src/mcp-discord.js` | 新增 `send_voice`（開背景工作）、`send_voice_file`（送出）與 `job_status`（查背景工作） |
+| `src/discord-bridge.js` | `agentHandlers.sendVoice` 開背景工作、`sendVoiceFile` 送出、`jobStatus` 查狀態；`deliverAgentMessage` 加 `voice` 參數；`sendLong` 的 `channel.send` 加 flags 與 waveform |
 | `config.example.json` | 補 `discord.tts` 範例 |
 | `docs/guides/DISCORD.md` | 補設定與權限說明 |
 
@@ -163,7 +168,7 @@ ffmpeg -y -i in.wav -c:a libopus -b:a 32k -ac 1 -ar 48000 out.ogg
 
 | 情況 | 行為 |
 | --- | --- |
-| 後端逾時 / 5xx | tool error，模型改用 `send_message` |
+| 後端逾時 / 5xx | 送【語音失敗】，模型改用 `send_message` |
 | ffmpeg 轉檔失敗 | 同上 |
 | voice message 被 Discord 拒絕 | 自動改送普通附件（同一份 OGG），回報已降級 |
 | 頻道沒有「附加檔案」權限 | 403，訊息跟 `send_image` 一致 |
