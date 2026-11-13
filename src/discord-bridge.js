@@ -6500,7 +6500,8 @@ async function main() {
       trade: next.trade,
     };
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    // config.json 有 Discord token：rename 會換掉原檔，tmp 一定要沿用 0600。
+    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, CONFIG_FILE);
 
     // 切到自由參與（或改了單頻道覆寫）：讓受影響的頻道下一批重新帶一次上下文，
