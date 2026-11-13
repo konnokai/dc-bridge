@@ -112,12 +112,20 @@
   .detail-image { display: block; max-width: 100%; max-height: 60vh; margin: 0 0 12px; border-radius: 10px; background: var(--bg); object-fit: contain; }
   .thumb-button { display: block; padding: 0; background: none; border: 0; cursor: zoom-in; }
   .thumb-button:hover { filter: brightness(1.1); }
-  .tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; margin: 0 0 14px; background: var(--bg); border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tabs { position: sticky; top: 0; z-index: 2; display: flex; gap: 2px; margin: 0 0 14px; background: var(--bg); border-bottom: 1px solid var(--border); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs button { flex: none; background: transparent; color: var(--muted); border-radius: 0; padding: 10px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
   .tabs button:hover { color: var(--text); filter: none; }
   .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
   .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* 功能設定：一個功能一區，區名在左、欄位在右；窄螢幕改成上下。 */
+  .fsec { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 10px 20px; padding: 14px 0; border-top: 1px solid var(--border); }
+  .fsec:first-child { border-top: 0; padding-top: 0; }
+  .fsec h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+  .fsec h3 small { display: block; margin-top: 2px; font: 400 11px var(--mono); color: var(--muted); }
+  /* auto-fill：只有兩三個欄位的區不會被拉成半版寬的大輸入框。 */
+  .fsec .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: end; }
+  @media (max-width: 720px) { .fsec { grid-template-columns: 1fr; gap: 8px; } }
 </style>
 </head>
 <body>
@@ -312,7 +320,7 @@
   <section class="card">
     <h2>功能設定</h2>
     <form id="feature-form" class="grid" novalidate>
-      <div id="feature-fields" class="grid" style="grid-column:1/-1"></div>
+      <div id="feature-fields" style="grid-column:1/-1"></div>
       <div class="row" style="grid-column:1/-1">
         <button type="submit">儲存</button>
         <span id="feature-msg" class="msg"></span>
@@ -1813,16 +1821,17 @@
     if (atBottom) box.scrollTop = box.scrollHeight;
   }
 
-  // 功能設定：一個欄位一列，path 對應 config.json 的 discord.*；數值範圍交給 normalize 驗證。
+  // 功能設定：path 對應 config.json 的 discord.*；數值範圍交給 normalize 驗證。
   const FEATURE_FIELDS = [
     { path: 'typing', label: 'typing：顯示「正在輸入」', kind: 'bool' },
     { path: 'sendDelayMs', label: 'sendDelayMs：連續送出間隔（毫秒）', kind: 'number', min: 0, max: 5000, step: 50 },
     { path: 'maxMessageChars', label: 'maxMessageChars：單則訊息上限（字）', kind: 'number', min: 200, max: 2000, step: 50 },
-    { path: 'ackMessage', label: 'ackMessage：收到訊息時的回應（留空＝不回）', kind: 'text', wide: true },
     { path: 'autoCompactTokens', label: 'autoCompactTokens：自動壓縮門檻（0＝關）', kind: 'number', min: 0, max: 1000000, step: 10000 },
     { path: 'ttftTimeoutMs', label: 'ttftTimeoutMs：等第一個 token 的上限（毫秒，0＝關）', kind: 'number', min: 0, max: 120000, step: 5000 },
+    { path: 'ackMessage', label: 'ackMessage：收到訊息時的回應（留空＝不回）', kind: 'text', wide: true },
     { path: 'media.enabled', label: 'media.enabled：收圖片與影片', kind: 'bool' },
     { path: 'media.maxVideoSeconds', label: 'media.maxVideoSeconds：影片抽格秒數', kind: 'number', min: 5, max: 120, step: 1 },
+    { path: 'videoLinks.enabled', label: 'videoLinks.enabled：YouTube 連結抽字幕與畫面', kind: 'bool' },
     { path: 'context.enabled', label: 'context.enabled：帶最近訊息當上下文', kind: 'bool' },
     { path: 'context.messages', label: 'context.messages：帶幾則（0＝關）', kind: 'number', min: 0, max: 50, step: 1 },
     { path: 'context.maxChars', label: 'context.maxChars：上下文上限（字）', kind: 'number', min: 0, max: 12000, step: 500 },
@@ -1832,15 +1841,14 @@
     { path: 'tts.enabled', label: 'tts.enabled：開放 send_voice', kind: 'bool' },
     { path: 'tts.model', label: 'tts.model：TTS 模型', kind: 'text' },
     { path: 'tts.accent', label: 'tts.accent：VoiceDesign 的口音提示', kind: 'text' },
-    { path: 'tts.refAudio', label: 'tts.refAudio：參考音檔（TTS 主機上的絕對路徑）', kind: 'text' },
-    { path: 'tts.refText', label: 'tts.refText：參考音逐字稿', kind: 'text', wide: true },
     { path: 'tts.timeoutMs', label: 'tts.timeoutMs：合成逾時（毫秒）', kind: 'number', min: 5000, max: 90000, step: 1000 },
     { path: 'tts.maxChars', label: 'tts.maxChars：一句話上限（字）', kind: 'number', min: 1, max: 1000, step: 10 },
     { path: 'tts.cooldownSec', label: 'tts.cooldownSec：語音冷卻（秒）', kind: 'number', min: 0, max: 3600, step: 1 },
     { path: 'tts.maxPerTurn', label: 'tts.maxPerTurn：每輪上限', kind: 'number', min: 1, max: 5, step: 1 },
+    { path: 'tts.refAudio', label: 'tts.refAudio：參考音檔（TTS 主機上的絕對路徑）', kind: 'text', wide: true },
+    { path: 'tts.refText', label: 'tts.refText：參考音逐字稿', kind: 'text', wide: true },
     { path: 'tts.channels', label: 'tts.channels：開放語音的頻道（一行一個；留空＝全部）', kind: 'ids', wide: true },
     { path: 'security.blockSensitive', label: 'security.blockSensitive：攔下含敏感資訊的回覆', kind: 'bool' },
-    { path: 'videoLinks.enabled', label: 'videoLinks.enabled：YouTube 連結抽字幕與畫面', kind: 'bool' },
     { path: 'emoji.enabled', label: 'emoji.enabled：自訂表情目錄', kind: 'bool' },
     { path: 'emoji.maxCandidates', label: 'emoji.maxCandidates：候選數', kind: 'number', min: 3, max: 30, step: 1 },
     { path: 'emoji.maxChars', label: 'emoji.maxChars：注入上限（字）', kind: 'number', min: 100, max: 3000, step: 50 },
@@ -1874,21 +1882,28 @@
     target[keys.at(-1)] = value;
   };
   const featureId = (path) => 'cf-' + path.replace(/\./g, '-');
-  const featureGroup = (path) => {
-    if (/^(typing|sendDelayMs|maxMessageChars|ackMessage|autoCompactTokens|ttftTimeoutMs)$/.test(path)) return '對話行為';
-    if (/^(media|context|batch)\./.test(path)) return '媒體、上下文與批次';
-    if (path.startsWith('tts.')) return '語音（TTS）';
-    return '其他功能';
+  // 分區看 path 第一段；沒有前綴的是對話行為。沒列到的前綴直接顯示原名，欄位不會消失。
+  const FEATURE_SECTIONS = {
+    '': '對話行為', media: '媒體', videoLinks: '影片連結', context: '上下文', batch: '批次',
+    tts: '語音（TTS）', security: '安全', emoji: '表情', memes: '梗圖', reactions: 'Reaction',
+    memory: '群友記憶', notes: '頻道筆記', knowledge: '群知識', followup: '回訪排程', slang: '黑話',
   };
+  const featureSection = (path) => (path.includes('.') ? path.split('.')[0] : '');
 
   function renderFeatureFields(c) {
-    const nodes = [];
-    let group = '';
+    const sections = new Map();
     for (const f of FEATURE_FIELDS) {
-      const nextGroup = featureGroup(f.path);
-      if (nextGroup !== group) {
-        group = nextGroup;
-        nodes.push(el('div', { className: 'muted', style: 'grid-column:1/-1;margin-top:6px;font-weight:600' }, group));
+      const key = featureSection(f.path);
+      let section = sections.get(key);
+      if (!section) {
+        const title = el('h3', { id: 'fsec-' + (key || 'chat') + '-title' }, FEATURE_SECTIONS[key] ?? key);
+        if (key) title.append(el('small', {}, key + '.*'));
+        const box = el('div', { className: 'grid' });
+        const node = el('div', { id: 'fsec-' + (key || 'chat'), className: 'fsec' }, title, box);
+        node.setAttribute('role', 'group');
+        node.setAttribute('aria-labelledby', title.id);
+        section = { node, box };
+        sections.set(key, section);
       }
       const id = featureId(f.path);
       const value = getPath(c, f.path);
@@ -1896,7 +1911,7 @@
         // 一般 input 的 width:100% 會讓 checkbox 撐滿整個格子，這裡要覆蓋掉。
         const input = el('input', { id, type: 'checkbox', style: 'width:auto;margin:0;flex:none' });
         input.checked = value === true;
-        nodes.push(el('label', { style: 'display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)' }, input, f.label));
+        section.box.append(el('label', { style: 'display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);grid-column:1/-1' }, input, f.label));
         continue;
       }
       let input;
@@ -1913,9 +1928,9 @@
         input = el('input', props);
         input.value = value ?? '';
       }
-      nodes.push(el('label', { style: f.wide ? 'grid-column:1/-1' : '' }, f.label, input));
+      section.box.append(el('label', { style: f.wide ? 'grid-column:1/-1' : '' }, f.label, input));
     }
-    $('feature-fields').replaceChildren(...nodes);
+    $('feature-fields').replaceChildren(...[...sections.values()].map((s) => s.node));
   }
 
   function featurePatch() {
