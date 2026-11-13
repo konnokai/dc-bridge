@@ -7,6 +7,7 @@ description: Discord bot 自製表情包（meme）功能計畫：規格、工具
 - 規格（2026-11-07 調整）：長邊 128～256（預設 256）、保持比例、不補邊、來源 <128 拒絕；方形補邊會讓橫幅台詞看不清，所以永不放大；靜態存 PNG、動態存 GIF（≤3 秒、24 格、15 fps）；PNG ≤256KB、GIF ≤512KB，超限依序降色→降 fps→降尺寸；容量全域 300 張／總磁碟 100MB；每頻道每天 5 張、每伺服器每天 20 張；私聊不開放。
 - 跨伺服器共用分兩層（2026-11-07，**已被 2026-11-11 全域共用取代**）：`guild`（預設，從群友圖／聊天衍生，只來源伺服器可見）與 `global`（bot 自己畫的通用圖，不含群友圖片／名字／私人內容，所有伺服器可見）。`save_meme` 加 `shared` 參數；來源是 `ref`／`message` 的群友圖時橋接端強制 `guild`。【常用梗圖】清單：本服 8＋全域 4，每筆帶 `when`。
 - 全域共用（2026-11-11）：移除 `scope`（guild／global）與 `save_meme` 的 `shared` 參數，整庫所有伺服器可見；名稱改全域唯一；`findMeme`／`searchMemes`／`memeHint`／`forgetMeme` 不再收 guildId；【常用梗圖】改 `memes.max`（預設 8）；控制台拿掉「範圍」欄，來源加上伺服器名。舊 index 的 `scope` 讀檔時直接忽略，下次存檔消失；`MEMES_VERSION` 維持 1，不重建既有庫。
+- 全域共用會讓群友貼的圖也能跨伺服器看見；`guildId`／`channelId` 仍作為來源與每日額度歸屬，不再限制可見範圍。模型指引要求不要存含群友姓名、長相或私事的圖，但橋接無法檢查圖片內容，這是操作規則，不是技術守衛。
 - 模型自動留存（2026-11-07）：只限 `generate_image` 產出；每個頻道每天最多自動存 1 張，且要走 `drawQuotaBlock`（額度低不畫）；存完要在頻道講一句（透明）；內容規則圖上不放真人姓名／群友長相／私人事（靠模型自律，管理員可在控制台刪）。
 - 安全規則例外 A（2026-11-07）：persona 第 6 條（`dc-chat.patch.yml:137`）加例外，只回「這個不聊」可換成貼一張 `when` 含「拒絕」的梗圖，仍只有那一張、不加字；兩份 preset 都要改。
 - 資料（2026-11-07）：`state/discord-memes/index.json` 加 `scope`、`origin guild`、`createdBy`（`user`／`model`）；圖檔放 `state/discord-memes/files/`，不分伺服器目錄。
@@ -28,4 +29,5 @@ description: Discord bot 自製表情包（meme）功能計畫：規格、工具
 - 生圖後 `requesters` 補法（2026-11-07）：`createSentImageOwners`（`src/core/discord-memes.mjs`）在記憶體維護「bot 送出的生圖訊息 id → 要求畫圖的人」對照（TTL 24 小時、上限 200 筆、LRU 丟最舊）。橋接送出生圖時，用生圖開始時記下的人（`drawUsersForFile`，查不到就用那一輪的 ★ 觸發者）對照那則訊息 id 記下；`save_meme` 存圖時 `requesters` = 存圖那一輪的 ★ 觸發者 + 這份對照（bot 自己的圖）。生圖完成那一輪是系統提示觸發、沒有 ★，所以靠這份對照；橋接重啟後對照消失，`requesters` 就只剩存圖那一輪的 ★ 觸發者，管理員仍可刪。測試在 `scripts/test-discord-memes.mjs`（`## 7c`）。
 
 - 部署落地（2026-11-07）：commit `cb1624c`（merge of `feat/memes`），已部署到測試伺服器；DSH 重啟後用暫時 stdio client 驗證 `save_meme`／`search_memes`／`forget_meme` 已註冊，伺服器 ffmpeg 7.1.3。真實 Discord 頻道的存圖／送圖端到端尚未驗證；回退 `deploy-discord.mjs --sha 1acf389...`。
+- 全域共用部署（2026-11-11）：`dce4ee9` 已部署；本機與遠端 Discord 測試皆 29/29，`dc-bridge` 與 `dsh` online。線上 `/api/memes` 回傳 2 筆且沒有 `scope`（包含使用者新增的梗圖）；但尚未在另一個伺服器實際用 `meme:` 送圖。舊庫若有同名梗圖，較晚那張只能從控制台刪除；部署時沒有重名。
 - 相關：[[discord-media-handling]]、[[discord-quiet-gate]]、[[discord-image-jobs]]。

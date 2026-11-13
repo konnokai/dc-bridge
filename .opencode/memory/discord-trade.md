@@ -26,6 +26,8 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - 重大訊息：`src/core/material-provider.mjs`，TWSE `t187ap04_L`、TPEx `mopsfin_t187ap04_O`。MOPS 公告日通常比復盤日早一天，parser 收 `[prevTradingDate, date]` 範圍並標每筆實際日期；空結果不快取，下一輪重抓。`getForSymbols` 以 `time + subject` 去重、依日期+時間由新到舊排序、每檔取前 3。
 - 休市日 provider：`src/core/quote-provider.mjs` 的 `getHolidays()`，失敗只快取 5 分鐘（不再 12 小時），空回應算失敗；同時合併重複請求（inflight）；`extraHolidays`（`config.discord.trade.extraHolidays`，YYYY-MM-DD）與 API 結果聯集，供颱風／臨時停市。
 - 商品主檔（`src/core/trade-symbols.mjs`）只留 ETF 規則與常用股票別名，不再是一般股票的白名單。`quote()`／`placeOrder()` 主檔 miss 時用 provider `lookup()` 反查官方行情：4 位數代號（00 開頭 ETF、91 開頭 TDR 除外）就直接當一般股票；官方行情有、但不是一般股票也不在 ETF 主檔，回「不在可交易範圍」（`SYMBOL_NOT_COLLECTED`）；兩邊都查不到才回「查不到這個股票」。`list_symbols` 不帶 query 回可交易範圍與 ETF 清單，帶 query 用 `search()` 查主檔別名與官方行情的一般股票（回饋 df_mwd1b39gb47870，2026-11-12）。
+- 2026-11-11 核對：6196 帆宣在 TWSE 上市資料，不是 TPEx 上櫃；新增股票時以官方行情的交易所欄位為準。
+- 2026-11-11 使用者決定維持 `maxOrderPct=30`，沒有調高到 100%。
 - 不用 Yahoo Finance／yfinance 做台股即時報價：TWSE／TPEx 在 Yahoo 是 20 分鐘延遲，且條款禁止轉散布給第三人（personal use only）。要往盤中即時走，必須找有轉散布授權的行情源；沒有就維持 A 模式收盤結算。
 
 ## 漲跌停與參考價
@@ -60,6 +62,7 @@ description: 模擬股票交易 MVP（台股）：資料來源、漲跌停、市
 - `orderRefFloor` 空時 fail-closed（拒絕舊資料過關）；預約單用 `orderDate` 往前推兩個交易日，春節後第一個交易日仍可算出。
 - 漲停買單、跌停賣單不成交。
 - 結算與 Bot 排程有執行旗標防重疊；`rejectOrder` 遇非 pending 回 null。
+- 2026-11-11 ETF 與漏收股票變更：功能 commit `8b1fe8b`，部署 HEAD `9a8e29b`；Discord 套件測試 29/29 通過。部署後確認 `0050`、`00631L`、`3042`、`6510` 可查，並驗證 00631L 漲停 36.30、跌停 24.20。
 
 ## Bot 交易員
 

@@ -13,6 +13,11 @@ description: 背景生圖工作追蹤、取消語意、GIF 拒絕、send_image �
 - 取消後 `sweepStaleImageJobs` 回空，不會送假的失敗通知。
 - 已知缺口：`src/discord-bridge.js:1954` 的 `cancelImage` 仍是行內寫法，只有核心函式測試，沒有端點測試。
 
+## 工作狀態
+
+- `mcp__discord__job_status` 依目前會話 key 查生圖與語音工作。生圖只回「排隊或生成中」、開始多久、最後回報多久前；沒有百分比或排隊位置，因為外掛在進全域 serial queue 前就回報 start。
+- 截至 2026-11-13，`listImageJobs` 列表時會在記憶體清除過期工作，但不持久化這次清除；影響小，啟動載入時也會清理。
+
 ## GIF
 
 - Codex 不支援 `image_generation_animation` 時，`animated:true` 在 spawn 前就拒絕，不回報 start。
@@ -89,4 +94,4 @@ description: 背景生圖工作追蹤、取消語意、GIF 拒絕、send_image �
 - 對方一路加碼（醜 → 恐怖 → 更恐怖）時，每一階都重新判斷合不合安全邊界，不沿用上一張的結論。
 - docs/guides/DISCORD.md「畫圖」段同步；測試 `scripts/test-discord-bridge.mjs` 有 5 個恐怖相關斷言。
 
-相關：[[codex-imagegen-internals]]、[[discord-codex-quota]]。
+相關：[[codex-imagegen-internals]]、[[discord-codex-quota]]、[[discord-voice-tts]]。

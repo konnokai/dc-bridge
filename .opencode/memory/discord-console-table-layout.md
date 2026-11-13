@@ -12,4 +12,4 @@ description: 控制台黑話／頻道風格表固定版面（table-layout: fixed
 - HTML 每次請求重讀，不用重啟 bridge；已部署到測試伺服器。
 - 兩個 QQ 控制台測試（baseline payload、花費趨勢圖）為既有失敗，與此變更無關。
 
-相關：[[discord-dev-feedback-console]]。
+相關：[[discord-dev-feedback-console]]、[[discord-console-settings]]、[[discord-console-tabs]]。
