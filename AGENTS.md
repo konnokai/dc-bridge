@@ -27,13 +27,16 @@ node scripts/deploy-discord.mjs             # 真的部署
 2. 伺服器 `git fetch --prune` → `git checkout --detach <HEAD>`，再確認 HEAD 與 tracked 檔案都一致。
    伺服器上的 tracked 檔案被手改過時 `git checkout` 會拒絕，部署就停在這裡。
 3. 本機跑 `build-agent-preset-patches.mjs --check` 與 `npm run test:discord`。
-4. 遠端跑 `build-agent-preset-patches.mjs --check` 與所有 `scripts/test-discord-*.mjs`。
+4. 伺服器 `npm ci`（依 package-lock 補依賴），再確認 tracked 檔案沒被改動；然後遠端跑
+   `build-agent-preset-patches.mjs --check` 與所有 `scripts/test-discord-*.mjs`。
 5. 動到 preset／plugin／`scripts/setup-dsh.mjs`，或動到任何 MCP server 會 import 的檔案
    （`src/mcp-*.js` 的遞迴 import）時：先 `npm run setup:discord`，然後
    `pm2 stop dc-bridge` → `pm2 restart dsh` → `sleep 5` → `pm2 start dc-bridge`；
    其他情況只 `pm2 restart dc-bridge`；只改文件就不重啟。
+   伺服器 HEAD 已經在目標 commit、或上次部署留下的 `state/.deployed-sha` 與 HEAD 不一致時，
+   一律當成修復流程，照跑 setup、重啟與健康檢查。
 6. 健康檢查：`dc-bridge`（必要時 `dsh`）是 `online`、180 秒內真的重啟過、error log 沒有變長、
-   重啟後的新 log 看得到 `已登入：`（沒有就當失敗）。
+   重啟後的新 log 看得到 `已登入：`（沒有就當失敗）。通過後才把 commit 寫進 `state/.deployed-sha`。
 
 參數：`--dry-run`、`--sha <sha>`、`--skip-tests`、`--host <user@host>`、`--dir <遠端路徑>`。
 `--skip-tests` 同時跳過本機與遠端測試。

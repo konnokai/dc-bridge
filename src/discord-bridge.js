@@ -1010,18 +1010,26 @@ async function main() {
     if (Date.now() - emojiLoadedAt < 60_000) return;
     emojiCatalogs = loadCatalogs(emojiDir);
     emojiLoadedAt = Date.now();
+    // 磁碟上可能又被 build 寫回來，載入後再清一次。
+    pruneEmojiGuilds();
   }
 
   /** 離開的伺服器不要留在目錄裡：模型挑到那些表情，送出會失敗或變成看不懂的 id。 */
   function pruneEmojiGuilds() {
     const removed = pruneCatalogs(emojiCatalogs, client.guilds.cache.keys());
     if (removed.length === 0) return;
+    const kept = [];
     for (const guildId of removed) {
       try {
         fs.rmSync(catalogFile(emojiDir, guildId), { force: true });
-      } catch { /* 檔案已不在就算了 */ }
+      } catch (error) {
+        // 刪不掉就別假裝成功：下一輪 refresh 會把它載回來，這裡留 log 才查得到原因。
+        kept.push(guildId);
+        log(`表情目錄：刪不掉已離開伺服器的檔案 ${guildId}.json（${error?.message ?? error}）`);
+      }
     }
-    log(`表情目錄：移除 ${removed.length} 個已離開的伺服器（${removed.join(', ')}）`);
+    const dropped = removed.length - kept.length;
+    if (dropped > 0) log(`表情目錄：移除 ${dropped} 個已離開的伺服器（${removed.filter((id) => !kept.includes(id)).join(', ')}）`);
   }
 
   /** 建置日誌尾巴：控制台每 5 秒抓一次，建置期間就看得到跑到第幾批。 */
@@ -1091,6 +1099,7 @@ async function main() {
       emojiBuild = { ...emojiBuild, running: false, finishedAt: Date.now(), exitCode: code };
       emojiCatalogs = loadCatalogs(emojiDir);
       emojiLoadedAt = Date.now();
+      pruneEmojiGuilds();
       log(`表情目錄更新結束（${reason}，exit ${code}）`);
     });
     log(`開始更新表情目錄（${reason}${guildId ? `，guild ${guildId}` : ''}）`);
@@ -3587,9 +3596,9 @@ async function main() {
 
   // 同一會話短時間內的訊息合成一批，一批只開一個模型回合。
   const batcher = createBatcher({
-    debounceMs: cfg.discord.batch.debounceMs,
-    maxWaitMs: cfg.discord.batch.maxWaitMs,
-    maxMessages: cfg.discord.batch.maxMessages,
+    debounceMs: () => cfg.discord.batch.debounceMs,
+    maxWaitMs: () => cfg.discord.batch.maxWaitMs,
+    maxMessages: () => cfg.discord.batch.maxMessages,
     typingMs: TYPING_WINDOW_MS,
     onFlush: (key, items) => {
       // 加 reaction 時 handleMessage 會 await，後到的訊息可能先進批次；按時間排回來。
@@ -6401,32 +6410,37 @@ async function main() {
   }
 
   async function updateConfig(patch) {
-    // 只接受控制台表單會送的白名單與功能設定；其餘欄位（token、console、preset、模型）
-    // 一律沿用目前值。整份候選設定都過一次 normalizeDiscordConfig：格式與範圍都在那裡擋。
+    // 只接受控制台表單會送的白名單與功能設定；其餘欄位（token、console、preset、模型）一律沿用目前值。
+    // 每個區塊逐欄白名單：直接打 API 也不能塞 tts.baseUrl、videoLinks.ytDlpPath、emoji.dir 這類
+    // 會讓橋接去連網址或執行程式的欄位。
+    const pick = (base, incoming, keys) => {
+      const out = { ...base };
+      if (!incoming || typeof incoming !== 'object') return out;
+      for (const key of keys) if (key in incoming) out[key] = incoming[key];
+      return out;
+    };
     const next = normalizeDiscordConfig({
       ...cfg.discord,
       allow: patch?.allow ?? cfg.discord.allow,
       deny: { ...cfg.discord.deny, ...(patch?.deny ?? {}) },
       ownerIds: patch?.ownerIds ?? cfg.discord.ownerIds,
-      // 以下區塊逐欄合併：控制台表單只送有改的欄位，不要把沒送的蓋回預設值。
-      media: { ...cfg.discord.media, ...(patch?.media ?? {}) },
-      tts: { ...cfg.discord.tts, ...(patch?.tts ?? {}) },
-      context: { ...cfg.discord.context, ...(patch?.context ?? {}) },
-      batch: { ...cfg.discord.batch, ...(patch?.batch ?? {}) },
-      security: { ...cfg.discord.security, ...(patch?.security ?? {}) },
-      emoji: { ...cfg.discord.emoji, ...(patch?.emoji ?? {}) },
-      memes: { ...cfg.discord.memes, ...(patch?.memes ?? {}) },
-      reactions: { ...cfg.discord.reactions, ...(patch?.reactions ?? {}) },
-      memory: { ...cfg.discord.memory, ...(patch?.memory ?? {}) },
+      media: pick(cfg.discord.media, patch?.media, ['enabled', 'maxBytes', 'maxModelBytes', 'maxLongEdge', 'maxCount', 'timeoutMs', 'maxVideoSeconds']),
+      tts: pick(cfg.discord.tts, patch?.tts, ['enabled', 'model', 'accent', 'refAudio', 'refText', 'timeoutMs', 'maxChars', 'cooldownSec', 'maxPerTurn', 'channels']),
+      context: pick(cfg.discord.context, patch?.context, ['enabled', 'messages', 'maxChars']),
+      batch: pick(cfg.discord.batch, patch?.batch, ['debounceMs', 'maxWaitMs', 'maxMessages']),
+      security: pick(cfg.discord.security, patch?.security, ['blockSensitive']),
+      emoji: pick(cfg.discord.emoji, patch?.emoji, ['enabled', 'maxCandidates', 'maxChars']),
+      memes: pick(cfg.discord.memes, patch?.memes, ['enabled', 'max']),
+      reactions: pick(cfg.discord.reactions, patch?.reactions, ['enabled', 'probability', 'cooldownMs', 'maxPerHour']),
+      memory: pick(cfg.discord.memory, patch?.memory, ['enabled', 'maxFacts', 'maxChars']),
       notes: {
-        ...cfg.discord.notes,
-        ...(patch?.notes ?? {}),
-        dailySummary: { ...cfg.discord.notes.dailySummary, ...(patch?.notes?.dailySummary ?? {}) },
+        ...pick(cfg.discord.notes, patch?.notes, ['enabled', 'injectMax', 'maxChars']),
+        dailySummary: pick(cfg.discord.notes.dailySummary, patch?.notes?.dailySummary, ['enabled', 'hour']),
       },
-      knowledge: { ...cfg.discord.knowledge, ...(patch?.knowledge ?? {}) },
-      followup: { ...cfg.discord.followup, ...(patch?.followup ?? {}) },
-      slang: { ...cfg.discord.slang, ...(patch?.slang ?? {}) },
-      videoLinks: { ...cfg.discord.videoLinks, ...(patch?.videoLinks ?? {}) },
+      knowledge: pick(cfg.discord.knowledge, patch?.knowledge, ['enabled', 'maxChars', 'toolMaxChars']),
+      followup: pick(cfg.discord.followup, patch?.followup, ['enabled']),
+      slang: pick(cfg.discord.slang, patch?.slang, ['enabled', 'injectMax', 'maxChars']),
+      videoLinks: pick(cfg.discord.videoLinks, patch?.videoLinks, ['enabled']),
       // 純量欄位只認正確型別：normalize 對 boolean 用 `!== false`，字串 "false" 會變成 true。
       typing: typeof patch?.typing === 'boolean' ? patch.typing : cfg.discord.typing,
       sendDelayMs: patch?.sendDelayMs ?? cfg.discord.sendDelayMs,
@@ -6474,35 +6488,31 @@ async function main() {
       deny: next.deny,
       ownerIds: next.ownerIds,
       media: next.media,
-      tts: next.tts,
-      context: next.context,
-      batch: next.batch,
-      security: next.security,
-      emoji: next.emoji,
-      memes: next.memes,
-      reactions: next.reactions,
-      memory: next.memory,
-      notes: next.notes,
-      knowledge: next.knowledge,
-      followup: next.followup,
-      slang: next.slang,
-      videoLinks: next.videoLinks,
-      typing: next.typing,
-      sendDelayMs: next.sendDelayMs,
-      maxMessageChars: next.maxMessageChars,
-      ackMessage: next.ackMessage,
-      autoCompactTokens: next.autoCompactTokens,
-      ttftTimeoutMs: next.ttftTimeoutMs,
       sandbox: next.sandbox,
       requireMentionInGuild: next.requireMentionInGuild,
       requireMentionInChannel: next.requireMentionInChannel,
       chattyChannels: next.chattyChannels,
       trade: next.trade,
     };
+    // 新區塊只在這次真的送了才寫回：/blacklist、/mention 不該把 tts、reactions 等
+    // 整份 normalize 後的預設值一起寫進 config.json。
+    for (const key of ['tts', 'context', 'batch', 'security', 'emoji', 'memes', 'reactions', 'memory', 'notes', 'knowledge', 'followup', 'slang', 'videoLinks']) {
+      if (patch?.[key] !== undefined) doc.discord[key] = next[key];
+    }
+    for (const key of ['typing', 'sendDelayMs', 'maxMessageChars', 'ackMessage', 'autoCompactTokens', 'ttftTimeoutMs']) {
+      if (patch?.[key] !== undefined) doc.discord[key] = next[key];
+    }
     const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
     // config.json 有 Discord token：rename 會換掉原檔，tmp 一定要沿用 0600。
-    fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmp, CONFIG_FILE);
+    // 舊版留下的 tmp 可能還是 0644，先刪掉，mode 才會真的套用。
+    fs.rmSync(tmp, { force: true });
+    try {
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, CONFIG_FILE);
+    } catch (error) {
+      fs.rmSync(tmp, { force: true });
+      throw error;
+    }
 
     // 切到自由參與（或改了單頻道覆寫）：讓受影響的頻道下一批重新帶一次上下文，
     // @ 模式期間沒叫 bot 的閒聊，模型沒看過。這裡一次清全部，設定變更不常發生。
