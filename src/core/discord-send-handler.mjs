@@ -14,6 +14,7 @@ const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().
  * @param options.triggerStore 觸發統計 store
  * @param options.markTriggerDirty 標記統計要存檔
  * @param options.recordBotMessages 記 bot 發言頻率
+ * @param options.recordBotSend 記 bot 這一則回覆的對象；讓位閘門用
  * @param options.takeDrawUsers (key, file) => users：背景生圖完成後送圖的回合沒有觸發者；用檔名拿生圖開始時記下的人
  * @param options.log
  */
@@ -24,6 +25,7 @@ export function createAgentSendHandler({
   triggerStore,
   markTriggerDirty,
   recordBotMessages,
+  recordBotSend = () => {},
   takeDrawUsers = () => [],
   log = () => {},
 }) {
@@ -53,6 +55,11 @@ export function createAgentSendHandler({
     });
     recordSent(result.key, file, { draw });
     recordBotMessages(result.key, result.refs?.length);
+    recordBotSend(result.key, {
+      replyTo: textArg(body.reply_to),
+      ref: result.refs?.at(-1),
+      at: Date.now(),
+    });
     log(`MCP 送出 ${result.key}（${content.length} 字${body.reply_to ? `，回覆 ${textArg(body.reply_to)}` : ''}${body.sticker ? `，貼圖 ${textArg(body.sticker)}` : ''}${file ? `，圖片 ${path.basename(file)}` : ''}）`);
     return result;
   };

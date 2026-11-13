@@ -460,10 +460,12 @@ export function imageRefTag(ref, index) {
  * 正常頻道不帶這一段，persona 的預設判斷原封不動。
  */
 export const CHATTY_HINT_LINES = [
-  '【參與度】這個頻道是大家來找大肥魚講話的地方，不用客氣。',
-  '- 沒有 ★ 也可以接：叫你名字、聊到你、拿你當梗、接著你剛說的話、有人回你剛貼的圖、問你問題，都算在找你。',
-  '- 不用算發言頻率，也不用怕講太多；想接就接。一兩句就好，不要變長篇，也不要當主持人。',
-  '- 別人在互相聊、你真的插不上話就跳過；跳過幾則沒關係，不用每則都跳。',
+  '【參與度】這一段每批重算，以這一段為準；更早摘要裡的參與規則作廢。',
+  '- 標 ⊘ 的人只是不回他；他說的話仍然算對話，也算「有人接手」。',
+  '- 如果這則是接著你上一則跟他講的同一件事：先看中間有沒有別人（含 ⊘）插話；有，就是人類接手，這串退出。就算它問「你」也一樣，不要送文字。',
+  '- 如果不是接著你上一則（新話題、或有人問全頻道）：可以主動接（叫你名字、聊到你、拿你當梗、回你剛貼的東西、問你），只要還沒有人接手。不用算發言頻率。',
+  '- 沒有 ★ 的「你」先當成對前面說話的人；分不清楚就不要接。',
+  '- 只有圖片、連結、貼圖，沒有文字時不要接。',
 ];
 
 /** followup.enabled 才帶這行：工具沒開時叫模型排回訪只會拿到 403。 */
@@ -473,6 +475,60 @@ export const CHATTY_FOLLOWUP_HINT = '- 話題收尾或大家安靜下來時，�
 export function formatParticipationHint(chatty = false, { followup = false } = {}) {
   if (!chatty) return '';
   return [...CHATTY_HINT_LINES, followup ? CHATTY_FOLLOWUP_HINT : ''].filter(Boolean).join('\n');
+}
+
+/** 讓位只在 bot 最後一則之後這麼久內生效；超過就當成新話題。 */
+export const YIELD_WINDOW_MS = 5 * 60_000;
+
+/**
+ * 讓位判斷：bot 最後一則回給 T，T 現在又說話；如果中間有別人（含 ⊘）插話，
+ * 而且這批最後一則還是 T，就代表 T 已經被人類接手，不送模型。
+ * ★、叫名字、回訪、系統訊息、沒有 reply_to 都不擋。
+ *
+ * @param options.botLast { id, seenId, at, replyTo: { id, authorId } | null }
+ * @param options.recent 最近的人類訊息 { id, authorId }[]
+ * @param options.batch 這批訊息 { id, userId }[]
+ * @param options.hasStar 這批有 ★
+ * @param options.named 這批有人叫 bot 的名字
+ * @param options.now
+ */
+export function shouldYield({ botLast, recent = [], batch = [], hasStar = false, named = false, now = Date.now() } = {}) {
+  if (hasStar || named) return false;
+  if (!botLast?.id || !botLast?.replyTo?.authorId || !botLast.replyTo.id) return false;
+  if (!(Number(now) - Number(botLast.at) <= YIELD_WINDOW_MS)) return false;
+  const last = batch.at(-1);
+  if (!last?.id || String(last.userId) !== String(botLast.replyTo.authorId)) return false;
+  // 用 snowflake 排序，不用本機時鐘，避免 bot 送出時間和 Discord 訊息時間有偏差。
+  let start;
+  let end;
+  try {
+    end = BigInt(last.id);
+    start = end < BigInt(botLast.id) ? BigInt(botLast.replyTo.id) : BigInt(botLast.id);
+  } catch {
+    return false;
+  }
+  // 交錯時，bot 這一輪已經看過的訊息不能算插話，否則會誤擋。
+  const seen = /^\d+$/.test(String(botLast.seenId ?? '')) ? BigInt(botLast.seenId) : 0n;
+  const startId = start > seen ? start : seen;
+  return recent.some((entry) => {
+    if (String(entry?.authorId) === String(botLast.replyTo.authorId)) return false;
+    try {
+      const id = BigInt(entry?.id);
+      return id > startId && id < end;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** 整批都沒有文字、只有圖片／貼圖：chatty 頻道直接不送模型。 */
+export function isMediaOnlyBatch(entries) {
+  return Array.isArray(entries) && entries.length > 0 && entries.every((entry) => entry?.mediaOnly);
+}
+
+/** 這批文字裡有沒有直接叫 bot 的名字。 */
+export function isBotNamed(text) {
+  return /(大肥魚|肥魚)/.test(String(text ?? ''));
 }
 
 /**
@@ -529,7 +585,7 @@ export function takeFollowups({ batcher, key, userIds, refs }) {
     text: entry.text,
     direct: entry.direct,
     isOwner: entry.isOwner,
-    ref: refs.register(key, entry.id),
+    ref: refs.register(key, entry.id, { authorId: entry.userId, at: entry.at }),
     // 補句如果是回覆別人，模型至少要看得到在回誰；引用內容留給正常批次。
     replyName: entry.message ? repliedName(entry.message) : '',
     hasImage: entry.hasImage,
