@@ -2,6 +2,7 @@
 
 ## Lessons
 
+- 改完程式碼、部署前一定先跑 `engineering-code-reviewer` 看完整 diff；review 沒過不要部署，也不要先部署再說。
 - 跑 `scripts/test-console-ui.mjs` 時，「All submitted payloads exactly match the pre-redesign console baseline」與「Token usage trend chart renders bars, tiers and range/metric switching」這兩個檢查本來就掛著（結果 29/31），不要花時間追；其他檢查失敗才要查。
 - `node scripts/verify-persona-config.mjs` 在本機一定跑不了（找不到 DSH 安裝目錄的 `node_modules`），這不是回歸失敗、不用修。要驗 persona 就改跑 `node scripts/test-preset-prompt.mjs` 和 `node scripts/build-agent-preset-patches.mjs --check`。
 - 看 Discord 控制台 UI 時先用 `openchamber_web`（照 docs/guides/CONSOLE-UI-TESTING.md 起離線 fixture），不要只用 Playwright 截圖代替。
