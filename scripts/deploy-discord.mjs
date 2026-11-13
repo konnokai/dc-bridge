@@ -139,10 +139,17 @@ function main() {
     fail(`${remoteDir} 還不是 git repo。一次性設定：\n  cd ${remoteDir} && git init && git remote add origin <repo url> && git fetch origin && git reset --hard origin/main`);
   }
   previous = remote('git rev-parse HEAD').stdout.trim();
+  // 上一次成功部署的 commit。上次若死在 checkout 之後，HEAD 已經換了但程序還在跑舊碼，
+  // 這時 marker 會跟 HEAD 不一樣；即使下一個 commit 只改文件，也要補跑 setup 與重啟。
+  const deployedMarker = remote('cat state/.deployed-sha 2>/dev/null || true').stdout.trim();
   // 同一個 commit 也要跑完：上一次可能死在測試或 setup，不能假設伺服器已經套用。
   const sameCommit = previous === target;
+  const unfinished = !sameCommit && deployedMarker !== previous;
+  const repair = sameCommit || unfinished;
   if (sameCommit) {
     log(`伺服器已經是 ${short(target)}：改跑修復流程（套件、測試、setup、重啟、健康檢查）`);
+  } else if (unfinished) {
+    log(`上次部署沒有完成（marker ${short(deployedMarker || '無')}、HEAD ${short(previous)}）：這次一併補跑 setup 與重啟`);
   }
 
   // 3. 這次會換掉哪些檔案（只用來決定要不要重啟 DSH）
@@ -176,10 +183,12 @@ function main() {
   const localChanges = remote('git status --porcelain --untracked-files=no').stdout.trim();
   if (localChanges) fail(`伺服器上的 tracked 檔案跟 commit 不一致：\n${localChanges}`);
 
-  // 依賴沒補齊時，遠端測試會直接 ERR_MODULE_NOT_FOUND。npm install 對齊 package-lock，
-  // 沒變更時只花一秒；--skip-tests 也照跑，因為執行期同樣需要新依賴。
-  log('伺服器 npm install（補新依賴）');
-  remote('npm install --no-audit --no-fund --loglevel=error');
+  // 依賴沒補齊時，遠端測試會直接 ERR_MODULE_NOT_FOUND。npm ci 依 package-lock 重裝，
+  // 不會像 npm install 那樣改寫 lockfile；--skip-tests 也照跑，執行期同樣需要新依賴。
+  log('伺服器 npm ci（補新依賴）');
+  remote('npm ci --no-audit --no-fund --loglevel=error');
+  const afterInstall = remote('git status --porcelain --untracked-files=no').stdout.trim();
+  if (afterInstall) fail(`npm ci 後伺服器上的 tracked 檔案變了：\n${afterInstall}`);
 
   // 6. 遠端再驗一次
   if (!skipTests) {
@@ -193,11 +202,13 @@ function main() {
 
   // 7. 同步 preset、重啟
   const inputs = mcpInputs();
-  // 同一個 commit 的修復流程一律重跑 setup 與重啟，否則無法確認上次是否真的套用了。
-  const needsDshReload = sameCommit || changed.some(
+  // 同一個 commit 的修復流程、或上次部署沒完成，一律重跑 setup 與重啟。
+  const needsDshReload = repair || changed.some(
     (f) => inputs.has(f) || f.startsWith('dsh/agent-presets/') || f.startsWith('plugins/') || f === 'scripts/setup-dsh.mjs',
   );
-  const needsRestart = needsDshReload || changed.some((f) => /^(src|public|dsh|plugins)\//.test(f));
+  // 只升套件版本也要重啟：跑著的程序還載入舊的 node_modules。
+  const depsChanged = changed.some((f) => f === 'package.json' || f === 'package-lock.json');
+  const needsRestart = needsDshReload || depsChanged || changed.some((f) => /^(src|public|dsh|plugins)\//.test(f));
   const errorLog = '$HOME/.pm2/logs/dc-bridge-error.log';
   const outLog = '$HOME/.pm2/logs/dc-bridge-out.log';
   const errorSize = Number(remote(`stat -c %s ${errorLog} 2>/dev/null || echo 0`).stdout.trim());
@@ -248,6 +259,8 @@ function main() {
     if (!fresh.includes('已註冊全域 slash command')) console.warn('  ! 新 log 沒看到「已註冊全域 slash command」');
   }
 
+  // 健康檢查過了才記下「這個 commit 真的跑起來了」；下次部署靠它判斷上次是否完成。
+  remote(`mkdir -p state && printf '%s\\n' ${target} > state/.deployed-sha`);
   log(`完成：${short(target)}`);
   console.log(rollbackHint());
 }
