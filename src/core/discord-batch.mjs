@@ -109,6 +109,8 @@ export function createBatcher({
   clearTimer = clearTimeout,
 }) {
   const batches = new Map(); // key -> { items, firstAt, deadline, timer, urgent, typing }
+  // 參數可以是數字或 () => 數字：控制台改 batch 設定後不用重啟。
+  const setting = (value) => Number(typeof value === 'function' ? value() : value);
 
   function flush(key) {
     const batch = batches.get(key);
@@ -126,7 +128,7 @@ export function createBatcher({
       else if (until > deadline) deadline = until;
     }
     clearTimer(batch.timer);
-    batch.deadline = Math.min(deadline, batch.firstAt + maxWaitMs);
+    batch.deadline = Math.min(deadline, batch.firstAt + setting(maxWaitMs));
     batch.timer = setTimer(() => flush(key), Math.max(0, batch.deadline - now()));
     batch.timer?.unref?.();
   }
@@ -152,11 +154,12 @@ export function createBatcher({
     if (item.userId) batch.typing.delete(String(item.userId));
     batch.items.push(item);
     const waited = now() - batch.firstAt;
-    if (batch.items.length >= maxMessages || waited >= maxWaitMs) {
+    if (batch.items.length >= setting(maxMessages) || waited >= setting(maxWaitMs)) {
       flush(key);
       return;
     }
-    const wait = batch.urgent ? Math.min(debounceMs, urgentMs) : debounceMs;
+    const debounce = setting(debounceMs);
+    const wait = batch.urgent ? Math.min(debounce, urgentMs) : debounce;
     schedule(key, batch, now() + wait);
   }
 
@@ -204,7 +207,8 @@ export function createBatcher({
       if (entry.direct && entry.userId) directUsers.add(String(entry.userId));
       return Boolean(entry.urgent) || followsDirect;
     });
-    const wait = batch.urgent ? Math.min(debounceMs, urgentMs) : debounceMs;
+    const debounce = setting(debounceMs);
+    const wait = batch.urgent ? Math.min(debounce, urgentMs) : debounce;
     // 批次項目的順序不一定照時間排（handleMessage 有 await），取最晚的那一則。
     const lastAt = Math.max(...batch.items.map((entry) => Number(entry.at) || 0));
     schedule(key, batch, (lastAt || now()) + wait);

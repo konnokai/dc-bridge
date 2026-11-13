@@ -1830,7 +1830,6 @@
     { path: 'batch.maxWaitMs', label: 'batch.maxWaitMs：批次最長等待（毫秒）', kind: 'number', min: 1000, max: 120000, step: 1000 },
     { path: 'batch.maxMessages', label: 'batch.maxMessages：一批最多幾則', kind: 'number', min: 1, max: 50, step: 1 },
     { path: 'tts.enabled', label: 'tts.enabled：開放 send_voice', kind: 'bool' },
-    { path: 'tts.baseUrl', label: 'tts.baseUrl：mlx_audio 後端網址', kind: 'text' },
     { path: 'tts.model', label: 'tts.model：TTS 模型', kind: 'text' },
     { path: 'tts.accent', label: 'tts.accent：VoiceDesign 的口音提示', kind: 'text' },
     { path: 'tts.refAudio', label: 'tts.refAudio：參考音檔（TTS 主機上的絕對路徑）', kind: 'text' },
@@ -1842,7 +1841,6 @@
     { path: 'tts.channels', label: 'tts.channels：開放語音的頻道（一行一個；留空＝全部）', kind: 'ids', wide: true },
     { path: 'security.blockSensitive', label: 'security.blockSensitive：攔下含敏感資訊的回覆', kind: 'bool' },
     { path: 'videoLinks.enabled', label: 'videoLinks.enabled：YouTube 連結抽字幕與畫面', kind: 'bool' },
-    { path: 'videoLinks.ytDlpPath', label: 'videoLinks.ytDlpPath：yt-dlp 路徑（留空＝PATH）', kind: 'text' },
     { path: 'emoji.enabled', label: 'emoji.enabled：自訂表情目錄', kind: 'bool' },
     { path: 'emoji.maxCandidates', label: 'emoji.maxCandidates：候選數', kind: 'number', min: 3, max: 30, step: 1 },
     { path: 'emoji.maxChars', label: 'emoji.maxChars：注入上限（字）', kind: 'number', min: 100, max: 3000, step: 50 },
@@ -1926,8 +1924,12 @@
       const node = $(featureId(f.path));
       let value;
       if (f.kind === 'bool') value = node.checked;
-      else if (f.kind === 'number') value = Number(node.value);
-      else if (f.kind === 'ids') value = lines(node.value);
+      else if (f.kind === 'number') {
+        // 留空或非法值不要送：Number('') 是 0，會把 ttftTimeoutMs 這類欄位默默關掉。
+        if (node.value.trim() === '') continue;
+        value = Number(node.value);
+        if (!Number.isFinite(value)) continue;
+      } else if (f.kind === 'ids') value = lines(node.value);
       else value = node.value.trim();
       setPath(patch, f.path, value);
     }

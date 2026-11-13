@@ -159,6 +159,11 @@ console.log('## 1. 設定收斂');
   ok(cfg.requireMentionInGuild === true, '頻道預設要 @bot');
   ok(Object.keys(cfg.requireMentionInChannel).length === 0, '單頻道覆寫預設空');
   ok(cfg.prts.proxyUrl === '' && cfg.prts.proxyToken === '', 'PRTS proxy 預設關閉');
+  ok(normalizeDiscordConfig({ reactions: { probability: 0.15 } }).reactions.probability === 0.15,
+    'reactions.probability 保留小數（不能四捨五入成 0）');
+  ok(normalizeDiscordConfig({ reactions: { probability: 0.6 } }).reactions.probability === 0.6,
+    'reactions.probability 0.6 不會變成 1');
+  ok(normalizeDiscordConfig({ tts: { accent: '' } }).tts.accent === '', 'tts.accent 留空字串 = 不補');
   const prtsProxy = normalizeDiscordConfig({ prts: { proxyUrl: ' https://proxy.example ', proxyToken: ' secret ' } });
   ok(prtsProxy.prts.proxyUrl === 'https://proxy.example' && prtsProxy.prts.proxyToken === 'secret',
     'PRTS proxy 設定會 trim');
@@ -2805,6 +2810,23 @@ console.log('## 7d3. 批次');
   ok(capFlushed.length === 0, '打字不能把批次留過頭');
   advance(1);
   ok(capFlushed[0] === '500', '打字最多延到 maxWaitMs');
+
+  // 控制台改 batch 設定：getter 要在下一次用到時讀新值。
+  const liveFlushed = [];
+  let liveCap = 3;
+  const liveBatcher = createBatcher({
+    debounceMs: 20_000,
+    maxWaitMs: 30_000,
+    maxMessages: () => liveCap,
+    onFlush: (key, items) => liveFlushed.push(items.map((i) => i.id).join()),
+    now: () => clock,
+    setTimer: (fn, ms) => { const t = { fn, at: clock + ms, live: true }; timers.push(t); return t; },
+    clearTimer: (t) => { if (t) t.live = false; },
+  });
+  liveBatcher.add('ch:10', { id: 600, userId: 'u7' });
+  liveCap = 1;
+  liveBatcher.add('ch:10', { id: 601, userId: 'u8' });
+  ok(liveFlushed[0] === '600,601', 'maxMessages 改成新值後立刻生效');
 
   console.log('## 7d3b. take 與 send 前的補句檢查');
   {

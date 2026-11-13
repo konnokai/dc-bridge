@@ -82,6 +82,12 @@ export function normalizeDiscordConfig(raw) {
     return Math.min(max, Math.max(min, Math.round(n)));
   };
   const text = (value, fallback) => (typeof value === 'string' && value.trim() ? value.trim() : fallback);
+  // 小數用的 clamp：Math.round 會把 0.15 變成 0、0.6 變成 1。
+  const clampFloat = (value, fallback, min, max) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  };
 
   // Base 模型沒有預設聲音：refAudio 沒填就會每次亂抽。設定錯誤在啟動時就擋，不要等到第一次 send_voice。
   const ttsModel = text(src.tts?.model, 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16');
@@ -158,7 +164,8 @@ export function normalizeDiscordConfig(raw) {
       baseUrl: httpBaseUrl(src.tts?.baseUrl, 'discord.tts.baseUrl'),
       model: ttsModel,
       // VoiceDesign 沒給口音時會隨機挑到粵語腔；每次合成都在 instruct 後面補這段。
-      accent: text(src.tts?.accent, '標準台灣華語，咬字清楚，不要用粵語'),
+      // 留空字串 = 不補，只有完全沒填才用預設值。
+      accent: typeof src.tts?.accent === 'string' ? src.tts.accent.trim() : '標準台灣華語，咬字清楚，不要用粵語',
       // Base 模型的聲音複製：參考音檔在 TTS 主機上的路徑，加上那段話的逐字稿。
       // 兩個都填才會啟用；啟用時 instruct／accent／voice 都不送。
       refAudio: ttsRefAudio,
@@ -221,7 +228,7 @@ export function normalizeDiscordConfig(raw) {
     reactions: {
       // 沒被 @ 的頻道訊息，偶爾加一個 reaction（不廢話）。
       enabled: src.reactions?.enabled === true,
-      probability: clamp(src.reactions?.probability, 0.15, 0, 1),
+      probability: clampFloat(src.reactions?.probability, 0.15, 0, 1),
       cooldownMs: clamp(src.reactions?.cooldownMs, 10 * 60_000, 10_000, 6 * 3600_000),
       maxPerHour: clamp(src.reactions?.maxPerHour, 10, 1, 100),
       minKeywordScore: clamp(src.reactions?.minKeywordScore, 2, 1, 10),

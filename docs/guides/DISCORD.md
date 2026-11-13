@@ -554,10 +554,11 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
     存檔後**立即生效**並寫回 `config.json`。
     沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）；`chattyChannels` 不鎖，可以先設定好
   - **功能設定**：`typing`、`sendDelayMs`、`maxMessageChars`、`ackMessage`、`autoCompactTokens`、`ttftTimeoutMs`，
-    以及 `media.enabled`／`maxVideoSeconds`、`context.*`、`batch.*`、`tts.*`、`security.blockSensitive`、
-    `videoLinks.*`、`emoji.*`、`memes.*`、`reactions.*`、`memory.*`、`notes.*`（含每日摘要）、
-    `knowledge.*`、`followup.enabled`、`slang.*`。一欄一列，存檔後立即生效並寫回 `config.json`；
-    格式與範圍由 `normalizeDiscordConfig` 驗證，錯誤會直接顯示在卡片上
+    以及 `media.enabled`／`maxVideoSeconds`、`context.*`、`batch.*`、`tts.enabled`／模型／語氣／參考音／長度與冷卻、
+    `security.blockSensitive`、`videoLinks.enabled`、`emoji.*`、`memes.*`、`reactions.*`、`memory.*`、
+    `notes.*`（含每日摘要）、`knowledge.*`、`followup.enabled`、`slang.*`。一欄一列，存檔後立即生效並寫回
+    `config.json`；格式與範圍由 `normalizeDiscordConfig` 驗證，錯誤會直接顯示在卡片上。
+    `tts.baseUrl`、`videoLinks.ytDlpPath`、`emoji.dir` 這類會連網址或執行程式的欄位刻意只在 `config.json` 改
   - **執行程式（沙箱）**：`sandbox.enabled` 與 `sandbox.channels`（一行一個頻道 ID），存檔後立即生效並寫回
     `config.json`；image、逾時與輸出上限仍在 `config.json`。image 要先在橋接主機 pull；開啟前先看「執行程式」的邊界
   - **表情目錄**：每個伺服器的表情條目數，可手動更新
