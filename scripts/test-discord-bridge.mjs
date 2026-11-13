@@ -142,7 +142,7 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'send_voice', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_voice', 'send_voice_file', 'job_status', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'propose_knowledge', 'save_meme', 'search_memes', 'forget_meme',
@@ -3413,6 +3413,12 @@ console.log('## 7e. Discord MCP 發送工具');
       && !sendVoiceTool.inputSchema?.required?.includes('language')
       && !sendVoiceTool.inputSchema?.required?.includes('voice')
       && !sendVoiceTool.inputSchema?.required?.includes('reply_to'), 'send_voice：text 必填，其餘可省略');
+    const sendVoiceFileTool = tools.find((t) => t.name === 'send_voice_file');
+    ok(sendVoiceFileTool.inputSchema?.required?.includes('job')
+      && !sendVoiceFileTool.inputSchema?.required?.includes('token'), 'send_voice_file：job 必填，token 可省略');
+    const jobStatusTool = tools.find((t) => t.name === 'job_status');
+    ok(!jobStatusTool.inputSchema?.required?.includes('token')
+      && Object.keys(jobStatusTool.inputSchema?.properties ?? {}).join() === 'token', 'job_status：只有可省略的 token');
     const sendPrtsTool = tools.find((t) => t.name === 'send_prts_artwork');
     ok(sendPrtsTool.inputSchema?.required?.includes('artwork_id')
       && !sendPrtsTool.inputSchema?.required?.includes('token')
@@ -3461,6 +3467,8 @@ console.log('## 7e. Discord MCP 發送工具');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
       send_voice: ['/sendVoice', { text: '早安' }],
+      send_voice_file: ['/sendVoiceFile', { job: 'job-1' }],
+      job_status: ['/jobStatus', {}],
       send_prts_artwork: ['/prtsArtwork', { artwork_id: '立绘_阿米娅_1.png', variant: 'preview' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],

@@ -235,10 +235,19 @@ import {
   cancelImageJobs,
   createImageJobHandler,
   drawUsersForFile,
+  listImageJobs,
   loadImageJobs,
   saveImageJobs,
   sweepStaleImageJobs,
 } from './core/discord-image-jobs.mjs';
+import {
+  addVoiceJob,
+  hasWorkingVoiceJob,
+  listVoiceJobs,
+  pruneVoiceJobs,
+  takeVoiceJob,
+  voiceJobFor,
+} from './core/discord-voice-jobs.mjs';
 import { readDshCredential } from './web-search.js';
 import { resolvePriceTable } from './model-prices.js';
 import { truncateText } from './md-to-plain.js';
@@ -741,6 +750,9 @@ async function main() {
   const sandboxRuns = new Map(); // key -> 這個回合已經跑過幾次程式（目前上限 1）
   const voicePerTurn = new Map(); // key -> 這個回合已經送出幾則語音
   const voiceLastAt = new Map(); // key -> 上一則語音送出的時間（跨回合冷卻）
+  // 背景語音：jobId -> { key, sessionId, status, startedAt, at, buffer?, waveform?, duration?, replyTo?, notice? }
+  // 只放記憶體：合成幾十秒，橋接重啟就讓它重來，不用清理孤兒檔案。
+  const voiceJobs = new Map();
   let sandboxBusy = false; // 全域同時只跑一個容器
   // 背景生圖：jobId -> { key, users, at }；完成後把觸發者掛到檔名上，等 send_image 再記畫圖次數。
   // 工作要存檔：橋接重啟時外掛還在本來那個 DSH 行程裡跑，不能跟著記憶體消失。
@@ -1259,6 +1271,11 @@ async function main() {
     turnTriggerRecorded.delete(key);
     sandboxRuns.delete(key);
     voicePerTurn.delete(key);
+    for (const [jobId, job] of voiceJobs) {
+      if (job.key !== key) continue;
+      voiceJobs.delete(jobId);
+      void job.notice?.delete().catch(() => {});
+    }
     pendingDirect.delete(key);
     turnDirect.delete(key);
     pendingDirectMessages.delete(key);
@@ -2259,6 +2276,67 @@ async function main() {
     return botActiveRun;
   }
 
+  /** job_status 用的短時間：秒或分＋秒。 */
+  function formatJobAge(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    if (seconds < 60) return `${seconds} 秒`;
+    return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  }
+
+  /**
+   * 背景合成語音。完成後叫醒同一個會話，讓模型用 send_voice_file 送出；
+   * 失敗就退回每輪名額、刪掉預告，再叫模型改用文字解釋。
+   */
+  async function runVoiceJob(job, params) {
+    try {
+      const wav = await synthesizeSpeech({
+        baseUrl: cfg.discord.tts.baseUrl,
+        model: cfg.discord.tts.model,
+        text: params.speak,
+        instruct: params.instruct,
+        accent: cfg.discord.tts.accent,
+        language: params.language,
+        voice: params.voice,
+        refAudio: cfg.discord.tts.refAudio,
+        refText: cfg.discord.tts.refText,
+        timeoutMs: cfg.discord.tts.timeoutMs,
+      });
+      const voice = await toVoiceOgg(wav);
+      job.status = 'ready';
+      job.at = Date.now();
+      job.buffer = voice.buffer;
+      job.waveform = voice.waveform;
+      job.duration = voice.duration;
+      if (sessions[job.key] !== job.sessionId) {
+        voiceJobs.delete(job.id);
+        void job.notice?.delete().catch(() => {});
+        return;
+      }
+      enqueuePrompt(job.key, {
+        entries: [],
+        direct: false,
+        system: true,
+        epoch: epochOf(job.key),
+        text: `【語音完成】已合成 ${voice.duration} 秒（job ${job.id}）。用 mcp__discord__send_voice_file 送出（job 填 ${job.id}），不要重新合成。${params.note ? `${params.note}；` : ''}使用者如果已經說不要了，就不要送。`,
+      });
+      log(`語音合成完成 ${job.key}（job ${job.id}，${voice.duration} 秒）`);
+    } catch (error) {
+      voiceJobs.delete(job.id);
+      // 回合已經換了就不要退名額：voicePerTurn 在新回合會重新從 0 算。
+      if (turnStartedAt.get(job.key) === job.turnToken) job.refund();
+      void job.notice?.delete().catch(() => {});
+      if (sessions[job.key] !== job.sessionId) return;
+      log(`語音合成失敗 ${job.key}（job ${job.id}）：${error?.message ?? error}`);
+      enqueuePrompt(job.key, {
+        entries: [],
+        direct: false,
+        system: true,
+        epoch: epochOf(job.key),
+        text: `【語音失敗】${String(error?.message ?? error).slice(0, 300)}\n跟頻道說這次沒錄成，改用 send_message；不要重試同一句。`,
+      });
+    }
+  }
+
   const agentHandlers = {
     // 模型自己取消生圖：使用者說「不要畫了」或發現參數填錯時用。
     // 直接刪掉工作，外掛下一次 poll 會拿到 cancel 並中止 Codex；逾時掃描也不會再送失敗通知。
@@ -2516,6 +2594,11 @@ async function main() {
       const followup = takeFollowupNotice(key);
       if (followup) return followup;
 
+      // 冷卻從開始合成時算；合成最長約兩分鐘，過了冷卻還能再開一個，這裡擋掉疊在同一頻道。
+      if (hasWorkingVoiceJob({ jobs: voiceJobs, key })) {
+        throw toolError('這個頻道已經有一則語音在合成，等【語音完成】再試', 409);
+      }
+
       // 被念出來的字一樣會公開，敏感資訊閘門不能只擋文字訊息。
       agentSender.checkSensitive(sessionId, [speak, instruct].filter(Boolean).join('\n'));
 
@@ -2525,52 +2608,134 @@ async function main() {
       // 合成要幾十秒：先佔每輪名額與冷卻，兩個並行呼叫才不會都通過。失敗再退回去。
       voicePerTurn.set(key, used + 1);
       voiceLastAt.set(key, Date.now());
+      const turnToken = turnStartedAt.get(key) ?? 0;
       const refund = () => {
         voicePerTurn.set(key, used);
         if (previousLastAt) voiceLastAt.set(key, previousLastAt);
         else voiceLastAt.delete(key);
       };
 
-      let voice;
-      try {
-        const wav = await synthesizeSpeech({
-          baseUrl: cfg.discord.tts.baseUrl,
-          model: cfg.discord.tts.model,
-          text: speak,
-          instruct,
-          accent: cfg.discord.tts.accent,
-          language: body.language,
-          voice: body.voice,
-          refAudio: cfg.discord.tts.refAudio,
-          refText: cfg.discord.tts.refText,
-          timeoutMs: cfg.discord.tts.timeoutMs,
-        });
-        voice = await toVoiceOgg(wav);
-      } catch (error) {
-        refund();
-        throw toolError(`語音合成失敗：${error?.message ?? error}；改用 send_message 送文字`, 502);
-      }
+      // 檢查都過了才預告：被擋下的呼叫不會留下一句沒有下文的「正在生成」。
+      const notice = await channel.send({
+        content: '-# 正在生成語音，要幾十秒，等我一下…',
+        allowedMentions: { parse: [] },
+        flags: MessageFlags.SuppressNotifications | MessageFlags.SuppressEmbeds,
+      }).catch((error) => {
+        log(`語音預告送出失敗（${key}）：${error?.message ?? error}`);
+        return null;
+      });
 
+      const job = addVoiceJob({
+        jobs: voiceJobs,
+        job: {
+          id: randomUUID(),
+          key,
+          sessionId,
+          status: 'working',
+          startedAt: Date.now(),
+          replyTo: textArg(body.reply_to),
+          note,
+          instruct,
+          refusal,
+          turnToken,
+          refund,
+          notice,
+        },
+      });
+      void runVoiceJob(job, {
+        speak,
+        instruct,
+        language: body.language,
+        voice: body.voice,
+        note,
+      });
+      noteTrigger(key);
+      log(`MCP 開始合成語音 ${key}（${Array.from(speak).length} 字，job ${job.id}）`);
+      return {
+        key,
+        status: 'started',
+        jobId: job.id,
+        text: `語音正在背景合成（約幾十秒）。${notice ? '頻道已貼「正在生成語音」' : '預告沒送出去，先用 send_message 跟頻道說一聲'}，直接結束這一輪；完成後會送【語音完成】，再用 mcp__discord__send_voice_file 送出（job 填 ${job.id}）。不要自己再補預告，也不要重新合成。`,
+      };
+    },
+    // 把【語音完成】合成好的音檔送進頻道；只認這個頻道自己的 job id。
+    async sendVoiceFile(body) {
+      const { sessionId, key } = await agentSender.resolve(body.token);
+      const job = voiceJobFor({ jobs: voiceJobs, key, jobId: body.job });
+      if (!job || job.sessionId !== sessionId) {
+        throw toolError('找不到這個語音工作（可能已送出、逾時或橋接重啟過）；要重錄就再呼叫 send_voice', 404);
+      }
+      if (job.status === 'working') throw toolError('語音還在合成，等【語音完成】再送', 409);
+      if (job.status !== 'ready') throw toolError('這個語音工作沒有成功；改用 send_message 送文字', 409);
+
+      const quietAt = quietUntil(key);
+      if (quietSendBlocked({ quietUntil: quietAt })) {
+        throw toolError(`安靜中（到 ${formatQuietUntil(quietAt)}），只能用 add_reaction 回；要恢復說話先 set_quiet minutes=0`, 409);
+      }
+      if (turnFollowupHeld.has(key)) {
+        return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
+      }
+      const followup = takeFollowupNotice(key);
+      if (followup) return followup;
+
+      const taken = takeVoiceJob({ jobs: voiceJobs, key, jobId: job.id });
+      if (!taken) throw toolError('這個語音工作已經被送出或逾時；要重錄就再呼叫 send_voice', 404);
+      const sendVoice = (replyTo) => agentSender.send({
+        token: body.token,
+        replyTo,
+        voice: {
+          buffer: taken.buffer,
+          waveform: taken.waveform,
+          duration: taken.duration,
+          name: 'voice-message.ogg',
+        },
+      });
       let result;
       try {
-        result = await agentSender.send({
-          token: body.token,
-          replyTo: textArg(body.reply_to),
-          voice: { ...voice, name: 'voice-message.ogg' },
-        });
+        result = await sendVoice(taken.replyTo);
       } catch (error) {
-        refund();
-        throw error;
+        // 只有回覆目標被刪或 #編號 失效才改成不帶回覆重送；
+        // 403 代表這個人不能回（退出、被封鎖、不理名單），不要繞過。
+        if (taken.replyTo && error?.statusCode === 404) {
+          log(`語音回覆目標不存在（${key}），改成不帶回覆再送`);
+          try {
+            result = await sendVoice('');
+          } catch (retryError) {
+            void taken.notice?.delete().catch(() => {});
+            throw retryError;
+          }
+        } else {
+          // 不重試：網路逾時可能其實已經送出，重送會變兩則。失敗就讓模型改用文字。
+          void taken.notice?.delete().catch(() => {});
+          throw error;
+        }
       }
       noteTrigger(result.key);
       recordBotMessages(result.key, result.refs?.length);
-      // 冷卻從真的送出時算，不是從開始合成時算。
       voiceLastAt.set(key, Date.now());
-      if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
+      void taken.notice?.delete().catch(() => {});
+      if (taken.refusal?.note) refusals.note(taken.refusal.note.key, taken.refusal.note.userId);
       const cloneMode = Boolean(cfg.discord.tts.refAudio);
-      const detail = [note, cloneMode && instruct ? '固定聲音模式不使用 instruct' : '', result.detail].filter(Boolean).join('；');
-      log(`MCP 送出語音 ${key}（${Array.from(speak).length} 字，${voice.duration} 秒${instruct && !cloneMode ? `，語氣：${instruct}` : ''}${detail ? `，${detail}` : ''}）`);
+      const detail = [taken.note, cloneMode && taken.instruct ? '固定聲音模式不使用 instruct' : '', result.detail].filter(Boolean).join('；');
+      log(`MCP 送出語音 ${key}（job ${taken.id}，${taken.duration} 秒${detail ? `，${detail}` : ''}）`);
       return { ...result, ...(detail ? { detail } : {}) };
+    },
+    // 背景工作狀態：生圖與語音都只看這個頻道。
+    async jobStatus(body) {
+      const { key } = await agentSender.resolve(body.token);
+      const now = Date.now();
+      const nowFn = () => now;
+      const lines = [];
+      for (const job of listVoiceJobs({ jobs: voiceJobs, key, now: nowFn })) {
+        const age = formatJobAge(now - job.startedAt);
+        lines.push(job.status === 'ready'
+          ? `語音：已合成，等你用 send_voice_file 送出（job ${job.id}，開始 ${age}前）`
+          : `語音：合成中（開始 ${age}前）`);
+      }
+      for (const job of listImageJobs({ jobs: imageJobs, key, now: nowFn })) {
+        lines.push(`生圖：排隊或生成中（開始 ${formatJobAge(now - job.startedAt)}前，最後回報 ${formatJobAge(now - job.at)}前）`);
+      }
+      return { key, text: lines.length ? `背景工作：\n- ${lines.join('\n- ')}` : '目前沒有在跑的背景工作。' };
     },
     async react(body) {
       const result = await agentSender.react({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
@@ -4067,9 +4232,9 @@ async function main() {
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
-      if (/^mcp__discord__(send_message|send_image|send_voice|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
+      if (/^mcp__discord__(send_message|send_image|send_voice|send_voice_file|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
       const state = progress.get(key);
-      if (state && /^mcp__discord__(send_message|send_image|send_voice|send_sticker|create_poll)$/.test(name)) state.replied = true;
+      if (state && /^mcp__discord__(send_message|send_image|send_voice|send_voice_file|send_sticker|create_poll)$/.test(name)) state.replied = true;
       const line = state ? describeToolCall(name, event.data?.arguments) : null;
       if (line) {
         const leaks = cfg.discord.security.blockSensitive && findSensitive(line, agentSecrets());
@@ -4145,7 +4310,7 @@ async function main() {
       // 沒有呼叫工具就真的不送。回合文字可能只是思考，不是要發出去的內容，
       // 所以這裡不代送；只留一行日誌方便追「模型忘了用工具」。
       const text = String(ended.text ?? '').trim();
-      log(`回合完成但沒有呼叫發送工具（${key}${attempted ? '，工具呼叫失敗' : ''}）${text ? `：${text.slice(0, 80)}${text.length > 80 ? '…' : ''}` : ''}`);
+      log(`回合完成但這一輪沒有實際送出訊息（${key}${attempted ? '，工具呼叫失敗或轉成背景工作' : ''}）${text ? `：${text.slice(0, 80)}${text.length > 80 ? '…' : ''}` : ''}`);
       // ★ 的回合只回了文字：提醒一次，免得群友以為被忽略。
       // 提醒自己的回合 direct=false，不會再觸發；有下一批在跑就交給那一批，不另外開回合。
       if (direct && !attempted && text && !quietUntil(key) && !turnGate.isBusy(key)
@@ -6339,6 +6504,10 @@ async function main() {
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
   // 外掛失聯（DSH 重啟、當掉、連不上）：不會再有 poll 或 done，等 2 分鐘就收掉並告訴頻道。
   const imageJobSweep = setInterval(() => {
+    for (const job of pruneVoiceJobs({ jobs: voiceJobs })) {
+      log(`語音工作逾時，丟棄（${job.key}，job ${job.id}）`);
+      void job.notice?.delete().catch(() => {});
+    }
     const stale = sweepStaleImageJobs({ jobs: imageJobs });
     if (stale.length === 0) return;
     persistImageJobs();

@@ -124,7 +124,7 @@ pm2 logs dc-bridge
 | `tts.accent` | mlx 每次合成自動接在 `instruct` 後面的口音提示，預設「標準台灣華語，咬字清楚，不要用粵語」。VoiceDesign 只給情緒時可能挑到粵語腔；留空 = 不補 |
 | `tts.refAudio` | 選用：Base 模型的參考音檔路徑，**在 TTS 主機上**（不是橋接這台），要絕對路徑，例如 `/Users/konnokai/tts-server/refs/voice.wav`。要跟 `tts.refText` 一起填才會啟用聲音複製 |
 | `tts.refText` | 參考音檔的逐字稿，要跟音檔內容一字不差；橋接會自動轉簡體。填了 `refAudio` 就不能留空 |
-| `tts.timeoutMs` | 等後端合成的上限，預設 60000（5 ~ 90 秒）。150 字大約要 45 秒，再長就調高 `maxChars`／這裡（不要超過 MCP 工具的 120 秒） |
+| `tts.timeoutMs` | 背景等後端合成的上限，預設 60000（5 ~ 90 秒）。150 字大約要 45 秒，再長就調高 `maxChars`／這裡；超過就送【語音失敗】 |
 | `tts.maxChars` | 一句話最多幾個字，預設 150（1 ~ 1000）。超過就截斷，工具回覆會說只唸了前面多少字 |
 | `tts.cooldownSec` | 同一頻道兩則語音的最短間隔，預設 30 秒（0 = 不限制） |
 | `tts.maxPerTurn` | 一輪最多幾則語音，預設 1（1 ~ 5）。也一起佔「一輪 5 則」的名額 |
@@ -780,6 +780,8 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - 生圖中要取消（參數填錯、改變主意）：模型呼叫 `mcp__discord__cancel_image`，橋接把這個頻道還在跑或排隊中的
   生圖工作全部刪掉；外掛下一次 poll（最多 15 秒）收到 cancel 就中止 Codex，不會再收到【生圖完成】或失敗通知。
   群組頻道裡有人喊停，會連別人正在畫的一起取消。
+- 有人問「畫好了沒」：模型用 `mcp__discord__job_status` 查這個頻道的背景工作（生圖與語音）。
+  生圖只回「排隊或生成中、開始多久、最後回報幾秒前」；橋接看不到 Codex 內部的進度，也不知道前面還排幾張。
 - 開始與完成記在 `state/discord-image-jobs.json`（原子寫、權限 0600）。橋接重啟時外掛還在本來的 DSH 行程裡，
   重啟後 poll 會接回同一個工作，完成提示照樣送回會話。
 - 這個目錄只留最近 100 張，舊的會自動刪掉。bot 需要 **Attach Files** 權限（`/invite` 的連結已包含）。
@@ -812,6 +814,15 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 
 模型可以呼叫 `mcp__discord__send_voice`，把一句話說成 Discord 的語音訊息。這是工具，不是自動裝飾：
 不呼叫就不會有聲音，每輪上限與冷卻都在 `discord.tts` 裡調。
+
+- 合成在背景跑：`send_voice` 通過開關、頻道、冷卻、每輪上限與安靜檢查後，橋接先貼一句
+  「正在生成語音」就立刻回「已開始」，不佔用會話。合成好會把【語音完成】（含 job id）排進同一個會話，
+  模型再用 `mcp__discord__send_voice_file` 送出；失敗送【語音失敗】，模型改用 `send_message`。
+- 背景語音工作只存在記憶體，最多等 10 分鐘；`/reset` 會連工作與預告一起清掉，橋接重啟就重來。
+  同一個頻道同時只合成一則：上一則還在合成時再呼叫 `send_voice` 會回 409。
+- 橋接沒有全域語音佇列：每個頻道各自直接打 TTS 後端，只有同頻道的冷卻與每輪上限。
+  多個會話同時合成時，排隊或合批由 mlx_audio 決定（依版本與是否用 `refAudio` 而定）；
+  `tts.timeoutMs` 是背景合成的上限，超過就送【語音失敗】。
 
 ### 本機 mlx_audio（Apple Silicon，MLX）
 
@@ -855,8 +866,8 @@ VoiceDesign 每次呼叫都會重新抽聲線。要固定聲音，把 `tts.model
 
 ### 送出與權限
 
-- 失敗一律退回文字：合成或轉檔失敗回工具錯誤（模型會改用 `send_message`）；
-  Discord 拒絕語音訊息時只重送一次普通 OGG 附件，兩種都失敗才回錯誤。
+- 失敗一律退回文字：合成或轉檔失敗送【語音失敗】（模型會改用 `send_message`）；
+  Discord 拒絕語音訊息時只重送一次普通 OGG 附件，兩種都失敗才回工具錯誤。
 - 需要 bot 的 **Attach Files** 權限；語音訊息另外需要 **Send Voice Messages**。沒有後者時橋接直接改送一般音檔。
   舊版客戶端或部分第三方客戶端可能把它顯示成一般音檔，這是 Discord 端的限制。
 
@@ -1205,10 +1216,16 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   或用 `file="meme:<名稱>"` 送梗圖庫的圖（見「梗圖庫」）。
   `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖與梗圖庫；
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
-- `mcp__discord__send_voice`（`text`、`instruct`／`language`／`voice`／`reply_to` 可省略）：把一句話合成語音訊息送進頻道。
+- `mcp__discord__send_voice`（`text`、`instruct`／`language`／`voice`／`reply_to` 可省略）：把一句話丟進背景合成語音。
   `text` 被唸出來，不會變成頻道上的文字；`instruct` 描述語氣（最多 200 字），`language` 可填 `zh`／`en`／`ja`／`ko`，
-  `voice` 只有 CustomVoice 模型能用。回傳格式跟 `send_message` 一樣。後端逾時、轉檔失敗或沒有 Attach Files 權限都回錯誤，
-  模型改用 `send_message`；Discord 拒絕語音訊息時橋接自動改送同一份 OGG 普通附件，工具回覆會說已降級
+  `voice` 只有 CustomVoice 模型能用。通過開關、頻道、冷卻與每輪上限後，橋接先貼「正在生成語音」再回「已開始」，
+  合成好送【語音完成】（含 job id），失敗送【語音失敗】；兩者都在同一個會話另開一輪
+- `mcp__discord__send_voice_file`（`job`）：把【語音完成】合成好的語音送進頻道。
+  `job` 填提示裡的 id；只認這個頻道、還沒逾時的工作。回覆目標的訊息被刪或 `#編號` 失效時，
+  改成不帶回覆送出；對方退出、被封鎖或在不理名單則照原樣拒絕。
+  Discord 拒絕語音訊息時橋接自動改送同一份 OGG 普通附件，工具回覆會說已降級；沒有 Attach Files 權限就回錯誤
+- `mcp__discord__job_status`（沒有參數）：查這個頻道的背景工作（生圖、語音）。
+  只回「排隊或生成中、開始多久、最後回報幾秒前」或「已合成等你送出」，看不到百分比與排隊位置
 - `mcp__discord__cancel_image`（沒有參數）：取消這個頻道所有還在跑或排隊中的生圖。使用者說「不要畫了」
   或發現 prompt 填錯時用；橋接刪掉工作後，外掛下一次 poll（最多 15 秒）中止 Codex，
   不會再收到【生圖完成】或失敗通知。目前沒有生圖時回 404。
@@ -1415,7 +1432,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   同一會話的訊息照順序送，超過 2000 字由橋接切段。
 - **改和收回只認自己送的**：模型被 prompt injection 也改不了審批提示（例如改成「回通過繼續」騙管理員），也刪不掉別人的訊息。
   不用 discord.js 的 `deletable`：bot 有 Manage Messages 時它對別人的訊息也是 true。
-- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但沒有呼叫發送工具」。只按了 reaction 或只收回訊息不算。
+- **模型沒呼叫工具時**：這一輪就沒有回覆；日誌會記「回合完成但這一輪沒有實際送出訊息」。只按了 reaction 或只收回訊息不算。
   有人叫 bot 的回合（★）若模型只輸出文字、沒呼叫任何會送到 Discord 的工具（發送、reaction、修改、收回），
   橋接會在同一個會話補一句提醒，請它用工具回話（每 10 分鐘最多一次；提醒自己的回合不會再觸發），
   免得群友以為被忽略。模型收到提醒後仍然可以不說話。
@@ -1424,7 +1441,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
 `POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
-`/send`（`send_message` 與 `send_image` 共用）、`/sendVoice`、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/meme-save`、`/meme-search`、`/meme-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/sendVoice`、`/sendVoiceFile`、`/jobStatus`、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/meme-save`、`/meme-search`、`/meme-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
@@ -1614,7 +1631,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 | 頻道裡 @bot 沒反應 | bot 有 `Read Message History` / `Send Messages` 權限？頻道在 `allow.channels` 或伺服器在 `allow.guilds`？ |
 | 回「找不到 preset」 | 跑 `node scripts/setup-dsh.mjs --discord`，然後**重啟 DSH** |
 | `DSH 鉴权不可用` | `~/.dsh/.credentials.yaml` 讀不到，或 DSH 不在本機。確認 `DSH_HOME` |
-| 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但沒有呼叫發送工具」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
+| 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但這一輪沒有實際送出訊息」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
 | 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |
 | 叫它畫圖卻只回文字 | DSH profile 沒裝 `dsh-generate-image`，或 Codex CLI 沒登入。跑 `dsh plugin --profile web add github:zemul/dsh-generate-image`，終端機跑一次 `codex` 登入，再重啟 DSH |
 | 叫它畫動圖卻說不支援 | Codex 的 `features list` 沒有 `image_generation_animation`（0.167 為止的穩定版都沒有）。更新 Codex 後**重啟 DSH**；更新前先畫靜態圖。有 feature 但生圖失敗且訊息是 `GIF output is not enabled for this request`，代表帳號還沒開 GIF preview，等 OpenAI 開 |
