@@ -1624,6 +1624,24 @@ console.log('## 7c1. MCP /send 統計');
     '/send 的參數原樣傳給 agentSender');
 }
 
+console.log('## 7c1b. recordBotSend');
+{
+  const infos = [];
+  const send = createAgentSendHandler({
+    agentSender: { async send() { return { key: 'ch:1', refs: ['k1'] }; } },
+    turnUsers: new Map(),
+    turnTriggerRecorded: new Set(),
+    triggerStore: { users: {} },
+    markTriggerDirty: () => {},
+    recordBotMessages: () => {},
+    recordBotSend: (key, info) => infos.push({ key, ...info }),
+    log: () => {},
+  });
+  await send({ token: 't', content: 'x', reply_to: '#abc123' });
+  ok(infos.length === 1 && infos[0].key === 'ch:1' && infos[0].replyTo === '#abc123' && infos[0].ref === 'k1',
+    '送出後把 reply_to 與自己的 ref 交給讓位閘門');
+}
+
 console.log('## 7c2. 不理名單與重複拒絕');
 {
   ok(isRefusalMessage('這題我不碰，換一個'), '認得「這題我不碰，換一個」');
@@ -2488,6 +2506,13 @@ console.log('## 7d2b. 訊息編號（#ref）');
   ok(refs.register('ch:1', '1300000000000000001') === a, '同一則訊息重複登記，編號不變');
   ok(refs.lookup('ch:1', `#${a.toUpperCase()} `) === '1300000000000000001', '查詢接受 #、大寫與空白');
   ok(refs.lookup('ch:2', a) === null, '別的頻道查不到（令牌只能指自己頻道的訊息）');
+
+  const metaRef = refs.register('ch:1', '1300000000000000002', { authorId: 'U1', at: 123 });
+  ok(refs.details('ch:1', metaRef)?.authorId === 'U1', 'details 拿得到登記時的 meta');
+  refs.register('ch:1', '1300000000000000002');
+  ok(refs.details('ch:1', metaRef)?.authorId === 'U1', '重新登記不帶 meta 時保留原本的');
+  refs.register('ch:1', '1300000000000000002', { authorId: 'U2' });
+  ok(refs.details('ch:1', metaRef)?.authorId === 'U2', '帶新 meta 時換掉');
 
   // 橋接重啟 = 新的編號表。同一則訊息還是同一個編號；舊編號在新表裡查不到，不會指到別則。
   const restarted = createMessageRefs();

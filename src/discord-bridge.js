@@ -222,7 +222,7 @@ import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
 import { deliverVoiceFile, synthesizeSpeech, toVoiceOgg, voiceGate } from './core/discord-tts.mjs';
-import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, takeFollowups, triggerUsers, visibleName } from './core/discord-batch.mjs';
+import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isBotNamed, isMediaOnlyBatch, isVisible, repliedName, resolveMentions, shouldYield, takeFollowups, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { createUrgentTyping } from './core/discord-typing.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, usageReport } from './core/discord-usage.mjs';
@@ -950,6 +950,10 @@ async function main() {
   let agentApiHandle = null;
   const primedKeys = new Set(); // 自由參與：這次啟動後已經帶過頻道上下文的會話
   const silentPending = new Map(); // key -> 還沒被任何一批上下文帶到的「只當背景」訊息 id
+  const botLast = new Map(); // key -> { id, seenId, at, replyTo: { id, authorId } | null }；讓位閘門用
+  const recentHumans = new Map(); // key -> { id, authorId, at }[]：最近的人類訊息（含 ⊘）
+  // 讓位閘門影子模式：只記 log，不真的擋；觀察 1–2 天後改成 false。
+  const YIELD_GATE_SHADOW = true;
   const needsOpening = new Set(); // key → 新會話的開場提示還沒真的送進模型
   const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
   const quietState = createQuietState(); // key -> 安靜到什麼時候
@@ -1247,6 +1251,8 @@ async function main() {
     offlineHintAt.delete(key);
     primedKeys.delete(key);
     silentPending.delete(key);
+    botLast.delete(key);
+    recentHumans.delete(key);
     refusals.forget(key);
     agentSender.forgetKey(key);
     quietState.forget(key);
@@ -1747,6 +1753,34 @@ async function main() {
   /** 模型自己送出的訊息也算進發言頻率（長訊息切成幾則就記幾則）。 */
   function recordBotMessages(key, count = 1) {
     for (let i = 0; i < Math.max(1, count); i += 1) activity.record(key, { bot: true });
+    // 沒有 reply_to 的送出（圖片／貼圖）先讓讓位閘門失效；下一則文字回覆會再蓋回來。
+    noteBotSend(key, { replyTo: '' });
+  }
+
+  const RECENT_HUMANS_MAX = 30;
+
+  /** 最近的人類訊息（含 ⊘、//）：讓位閘門要判斷 bot 之後有誰插話。 */
+  function noteHuman(key, message) {
+    const list = recentHumans.get(key) ?? [];
+    list.push({
+      id: String(message.id),
+      authorId: String(message.author?.id ?? ''),
+      at: Number(message.createdTimestamp) || Date.now(),
+    });
+    if (list.length > RECENT_HUMANS_MAX) list.splice(0, list.length - RECENT_HUMANS_MAX);
+    recentHumans.set(key, list);
+  }
+
+  /** bot 最後一則回給誰；reply_to 的對象要看得到作者才算數。 */
+  function noteBotSend(key, { replyTo = '', ref = '', at = Date.now() } = {}) {
+    const meta = replyTo ? messageRefs.details(key, replyTo) : null;
+    const authorId = String(meta?.authorId ?? '');
+    botLast.set(key, {
+      id: ref ? String(messageRefs.lookup(key, ref) ?? '') : '',
+      seenId: String(turnLastMessage.get(key) ?? ''),
+      at: Number(at) || Date.now(),
+      replyTo: authorId ? { id: String(meta?.id ?? ''), authorId } : null,
+    });
   }
 
   /** 模型真的送出訊息時記一次；同一個回合送好幾則只算一次。 */
@@ -1799,7 +1833,7 @@ async function main() {
     const self = message.author?.id === client.user.id ? '（你）' : '';
     const replyTo = repliedName(message);
     const reply = replyTo ? ` ↪回覆 ${flat(replyTo, 40)}` : '';
-    return `#${messageRefs.register(key, message.id)} ${shortTime(message.createdAt)} ${flat(authorName(message), 40)}${self}${reply}：${text}`;
+    return `#${messageRefs.register(key, message.id, { authorId: message.author?.id, at: message.createdTimestamp })} ${shortTime(message.createdAt)} ${flat(authorName(message), 40)}${self}${reply}：${text}`;
   }
 
   /** search_history 比對的文字：內文、貼圖名稱、連結預覽、component 文字與附件標題。 */
@@ -2033,6 +2067,7 @@ async function main() {
     triggerStore,
     markTriggerDirty,
     recordBotMessages,
+    recordBotSend: noteBotSend,
     takeDrawUsers: (key, file) => drawUsersForFile({
       pendingDraws,
       key,
@@ -2691,15 +2726,17 @@ async function main() {
         },
       });
       let result;
+      let replyTo = taken.replyTo;
       try {
-        result = await sendVoice(taken.replyTo);
+        result = await sendVoice(replyTo);
       } catch (error) {
         // 只有回覆目標被刪或 #編號 失效才改成不帶回覆重送；
         // 403 代表這個人不能回（退出、被封鎖、不理名單），不要繞過。
         if (taken.replyTo && error?.statusCode === 404) {
           log(`語音回覆目標不存在（${key}），改成不帶回覆再送`);
           try {
-            result = await sendVoice('');
+            replyTo = '';
+            result = await sendVoice(replyTo);
           } catch (retryError) {
             void taken.notice?.delete().catch(() => {});
             throw retryError;
@@ -2712,6 +2749,7 @@ async function main() {
       }
       noteTrigger(result.key);
       recordBotMessages(result.key, result.refs?.length);
+      noteBotSend(result.key, { replyTo, ref: result.refs?.at(-1) });
       voiceLastAt.set(key, Date.now());
       void taken.notice?.delete().catch(() => {});
       if (taken.refusal?.note) refusals.note(taken.refusal.note.key, taken.refusal.note.userId);
@@ -4561,7 +4599,7 @@ async function main() {
     const skipped = [];
     for (const entry of job.entries) {
       skipped.push(...(entry.media?.skipped ?? []));
-      const entryRef = messageRefs.register(key, entry.id);
+      const entryRef = messageRefs.register(key, entry.id, { authorId: entry.userId, at: entry.at });
       // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
       // 到這裡才讀 message.embeds：批次至少等過幾秒（有人 @ 時 8 秒），多半拿到了。沒有就只剩網址。
       // 轉發的預覽圖在快照裡，一起算。
@@ -4611,7 +4649,7 @@ async function main() {
         if (referenced && !ignoredUser(referenced.author?.id)
           && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
           quote = formatQuote({
-            ref: messageRefs.register(key, referenced.id),
+            ref: messageRefs.register(key, referenced.id, { authorId: referenced.author?.id, at: referenced.createdTimestamp }),
             author: authorName(referenced),
             content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), emojiCatalogs),
             hasImage: messageParts(referenced).hasImage,
@@ -4675,7 +4713,7 @@ async function main() {
         if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);
         context = formatRecentContext(
           history.reverse().map((entry) => ({
-            ref: messageRefs.register(key, entry.id),
+            ref: messageRefs.register(key, entry.id, { authorId: entry.author?.id, at: entry.createdTimestamp }),
             author: authorName(entry),
             content: labelEmojiTags(resolveMentions(withStickers(entry), entry), emojiCatalogs),
             replyName: repliedName(entry),
@@ -4830,6 +4868,39 @@ async function main() {
     };
   }
 
+  /** 讓位閘門：bot 最後一則回給 T，T 之後有人插話，且這批最後一則還是 T。 */
+  function yieldGateDecision(key, job) {
+    const batch = job.entries.map((entry) => ({
+      id: String(entry.id ?? ''),
+      userId: String(entry.userId ?? ''),
+    }));
+    const hasStar = job.entries.some((entry) => entry.direct);
+    // 只看原始文字：text 可能含表情目錄描述，描述裡剛好有「肥魚」不該算叫名字。
+    const named = job.entries.some((entry) => isBotNamed(entry.rawText));
+    return shouldYield({
+      botLast: botLast.get(key),
+      recent: recentHumans.get(key) ?? [],
+      batch,
+      hasStar,
+      named,
+    });
+  }
+
+  /** 影子模式的 log 要能和 session log 對照：只記 id，不記內文。 */
+  function yieldLogDetail(key, job) {
+    const last = botLast.get(key);
+    const recent = (recentHumans.get(key) ?? []).slice(-6).map((entry) => `${entry.id}:${entry.authorId}`).join(',');
+    return ` bot=${last?.id || '-'} seen=${last?.seenId || '-'} T=${last?.replyTo?.authorId || '-'} batch=${job.entries.at(-1)?.id || '-'} recent=${recent || '-'}`;
+  }
+
+  /** 跳過一批但不讓它消失：下一批的【最近頻道訊息】會把它帶進來。 */
+  function skipSilently(key, job, reason) {
+    primedKeys.delete(key);
+    const lastId = job.entries.at(-1)?.id;
+    if (lastId) silentPending.set(key, lastId);
+    log(`${reason} ${key}（${job.entries.length} 則）`);
+  }
+
   /** @returns 有沒有排出一個模型回合（沒有就不會有 turn/end，閘門要自己放行） */
   async function deliverPrompt(key, job) {
     const { epoch } = job;
@@ -4846,6 +4917,19 @@ async function main() {
         ? `安靜期間延後回訪 ${key}`
         : `安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
       return false;
+    }
+    // chatty 頻道的兩個硬閘門：先影子模式只記 log，觀察 1–2 天再真的擋。
+    const chattyTurn = isChattyChannel(cfg.discord, job.channel?.id) && !job.direct
+      && !job.followup && !job.reminder && !job.system;
+    if (chattyTurn) {
+      if (yieldGateDecision(key, job)) {
+        if (YIELD_GATE_SHADOW) log(`讓位（影子，不擋）${key}（${job.entries.length} 則）${yieldLogDetail(key, job)}`);
+        else { skipSilently(key, job, '讓位跳過'); return false; }
+      }
+      if (isMediaOnlyBatch(job.entries)) {
+        if (YIELD_GATE_SHADOW) log(`純媒體（影子，不擋）${key}（${job.entries.length} 則） batch=${job.entries.at(-1)?.id || '-'}`);
+        else { skipSilently(key, job, '純媒體跳過'); return false; }
+      }
     }
     const sessionId = await ensureSession(key);
     if (epoch !== epochOf(key)) {
@@ -5658,6 +5742,8 @@ async function main() {
       && shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
     if (!isConversationAllowed(cfg.discord, ids)) return;
     const key = conversationKeyFor(ids);
+    // 讓位緩衝：所有允許的訊息都記，含 ⊘ 與 //；讓位要看到誰插話。
+    noteHuman(key, message);
     if (!addressedToBot && cfg.discord.deny.self.includes(message.author.id)) {
       // 記下這則還沒被上下文帶到：下一批若沒涵蓋它（它在批次最後一則之後），會再重帶一次。
       primedKeys.delete(key);
@@ -5665,9 +5751,9 @@ async function main() {
       log(`略過 ${key} user=${message.author.id}（/blacklist 退出，只當上下文）`);
       return;
     }
-    // 發言頻率：這則在 handleMessage 最前面就記，早於所有 return（含 // 與空訊息）。
+    // 發言頻率：這則在 handleMessage 最前面就記，早於 // 與空訊息的 return。
     activity.record(key);
-    // 表情使用次數：同樣早於所有 return，// 訊息也算（那只是叫模型不要回，不是不存在）。
+    // 表情使用次數：同樣早於 // 與空訊息的 return，// 訊息也算（那只是叫模型不要回，不是不存在）。
     const usageCatalog = guildId ? emojiCatalogs.get(String(guildId)) : null;
     if (cfg.discord.emoji.enabled && usageCatalog
       && bumpEmojiUsage(emojiUsage, guildId, message.content, { entries: usageCatalog.entries }) > 0) markEmojiUsageDirty();
@@ -5767,6 +5853,8 @@ async function main() {
       isOwner,
       media,
       hasImage: parts.hasImage,
+      // 整則沒有文字、只有圖片／貼圖：chatty 頻道的純媒體閘門用。
+      mediaOnly: !fullText && (media.accepted.length > 0 || parts.stickers.length > 0),
       at: message.createdTimestamp,
     });
     lastActive.set(key, Date.now());

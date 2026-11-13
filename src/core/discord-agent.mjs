@@ -72,30 +72,39 @@ export function messageRefOf(messageId, length = MESSAGE_REF_LENGTH) {
 
 /** 每個會話 key 各自一張編號表：令牌只能查到自己頻道的訊息。 */
 export function createMessageRefs({ perKey = MESSAGE_REFS_PER_KEY } = {}) {
-  const tables = new Map(); // key -> Map(ref -> messageId)，插入順序就是新舊順序
+  const tables = new Map(); // key -> Map(ref -> { id, meta })，插入順序就是新舊順序
 
-  function register(key, messageId) {
+  function register(key, messageId, meta = null) {
     const id = String(messageId ?? '');
     if (!id) return '';
     let table = tables.get(key);
     if (!table) { table = new Map(); tables.set(key, table); }
     // 撞號就加長，直到沒撞或撞到的就是自己。
     let ref = messageRefOf(id);
-    for (let length = MESSAGE_REF_LENGTH + 1; table.has(ref) && table.get(ref) !== id; length += 1) {
+    for (let length = MESSAGE_REF_LENGTH + 1; table.has(ref) && table.get(ref)?.id !== id; length += 1) {
       ref = messageRefOf(id, length);
     }
+    // 同一則訊息常常會再登記一次（例如補句、read_history）；這次沒帶 meta 時
+    // 保留舊的，不然讓位閘門會突然查不到作者。
+    const kept = meta ? { ...meta, id } : (table.get(ref)?.id === id ? table.get(ref).meta : null);
     table.delete(ref);
-    table.set(ref, id);
+    table.set(ref, { id, meta: kept });
     while (table.size > perKey) table.delete(table.keys().next().value);
     return ref;
   }
 
   function lookup(key, ref) {
     const normalized = String(ref ?? '').trim().replace(/^#/, '').toLowerCase();
-    return tables.get(key)?.get(normalized) ?? null;
+    return tables.get(key)?.get(normalized)?.id ?? null;
   }
 
-  return { register, lookup };
+  /** 這則 #編號 登記時附帶的資料（作者、時間）；沒有就 null。 */
+  function details(key, ref) {
+    const normalized = String(ref ?? '').trim().replace(/^#/, '').toLowerCase();
+    return tables.get(key)?.get(normalized)?.meta ?? null;
+  }
+
+  return { register, lookup, details };
 }
 
 /**
