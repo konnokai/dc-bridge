@@ -47,6 +47,19 @@
       "timeoutMs": 25000,
       "maxVideoSeconds": 60
     },
+    "tts": {
+      "enabled": false,
+      "baseUrl": "http://192.168.1.10:8100",
+      "model": "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+      "accent": "標準台灣華語，咬字清楚，不要用粵語",
+      "refAudio": "",
+      "refText": "",
+      "timeoutMs": 60000,
+      "maxChars": 150,
+      "cooldownSec": 30,
+      "maxPerTurn": 1,
+      "channels": []
+    },
     "prts": {
       "proxyUrl": "",
       "proxyToken": ""

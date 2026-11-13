@@ -142,14 +142,14 @@ const GUILD = '333333333333333333';
 const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
-  'send_message', 'send_image', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
+  'send_message', 'send_image', 'send_voice', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
   'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'propose_knowledge', 'save_meme', 'search_memes', 'forget_meme',
   'submit_feedback', 'list_feedback', 'edit_feedback',
 ].map((name) => `mcp__discord__${name}`);
 const SLANG_TOOL_NAMES = ['lookup_slang', 'record_slang', 'record_channel_tag'].map((name) => `mcp__slang__${name}`);
-const VISIBLE_TOOLS = /send_message|send_image|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
+const VISIBLE_TOOLS = /send_message|send_image|send_voice|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll/;
 
 console.log('## 1. 設定收斂');
 {
@@ -1690,7 +1690,7 @@ console.log('## 7b. 邀請連結');
   ok(params.get('client_id') === USER, '帶正確的 client_id');
   ok(params.get('scope') === 'bot applications.commands', 'scope 含 bot 與 applications.commands');
   ok(params.get('permissions') === invitePermissionsBitfield().toString(), 'permissions 與權限清單一致');
-  ok(invitePermissionsBitfield().toString() === '563224831708224', '目前功能權限總和固定（563224831708224）');
+  ok(invitePermissionsBitfield().toString() === '633593575885888', '目前功能權限總和固定（633593575885888）');
 
   for (const permission of INVITE_PERMISSIONS) {
     ok(BigInt(PermissionFlagsBits[permission.key]) === permission.bit,
@@ -1701,6 +1701,7 @@ console.log('## 7b. 邀請連結');
   ok(keys.includes('SendMessagesInThreads'), '包含討論串傳送訊息');
   ok(keys.includes('SendPolls'), '包含建立投票（create_poll）');
   ok(keys.includes('AttachFiles'), '包含附加檔案（send_image）');
+  ok(keys.includes('SendVoiceMessages'), '包含傳送語音訊息（send_voice）');
   ok(keys.includes('EmbedLinks'), '包含嵌入連結（search_gifs 貼的 GIF 網址才會有圖）');
   ok(!keys.includes('Administrator') && !keys.includes('ManageGuild'),
     '不要求 Administrator / ManageGuild');
@@ -3383,6 +3384,13 @@ console.log('## 7e. Discord MCP 發送工具');
       && !sendImageTool.inputSchema?.required?.includes('token')
       && !sendImageTool.inputSchema?.required?.includes('content')
       && !sendImageTool.inputSchema?.required?.includes('reply_to'), 'send_image：file 必填，token／content／reply_to 可省略');
+    const sendVoiceTool = tools.find((t) => t.name === 'send_voice');
+    ok(sendVoiceTool.inputSchema?.required?.includes('text')
+      && !sendVoiceTool.inputSchema?.required?.includes('token')
+      && !sendVoiceTool.inputSchema?.required?.includes('instruct')
+      && !sendVoiceTool.inputSchema?.required?.includes('language')
+      && !sendVoiceTool.inputSchema?.required?.includes('voice')
+      && !sendVoiceTool.inputSchema?.required?.includes('reply_to'), 'send_voice：text 必填，其餘可省略');
     const sendPrtsTool = tools.find((t) => t.name === 'send_prts_artwork');
     ok(sendPrtsTool.inputSchema?.required?.includes('artwork_id')
       && !sendPrtsTool.inputSchema?.required?.includes('token')
@@ -3430,6 +3438,7 @@ console.log('## 7e. Discord MCP 發送工具');
       'get_prts_artwork 把 1024px 圖回給模型');
     const routes = {
       send_sticker: ['/send', { sticker: 'wave' }],
+      send_voice: ['/sendVoice', { text: '早安' }],
       send_prts_artwork: ['/prtsArtwork', { artwork_id: '立绘_阿米娅_1.png', variant: 'preview' }],
       add_reaction: ['/react', { message: '#k7f3ab', emoji: '😂' }],
       remove_reaction: ['/unreact', { message: '#k7f3ab', emoji: '😂' }],
