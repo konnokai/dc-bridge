@@ -1398,6 +1398,17 @@ try {
       await p.goto(`${base}#settings`);
       const box = p.locator('#require-mention-channels');
       await p.waitForFunction(() => document.querySelector('#require-mention-channels').value === '111111111111111111=false');
+      // 每個區都要有中文區名；忘了把新前綴加進 FEATURE_SECTIONS 時，這裡會抓到英文 key。
+      const unnamed = await p.locator('#feature-fields .fsec h3').evaluateAll((heads) => heads
+        .filter((h) => {
+          const key = h.querySelector('small')?.textContent?.replace(/\.\*$/, '');
+          return key && h.firstChild.textContent === key;
+        })
+        .map((h) => h.firstChild.textContent));
+      assert.deepEqual(unnamed, [], '每個功能區都有中文區名');
+      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 50, '50 個功能欄位都還在');
+      assert.equal(await p.locator('#fsec-tts #cf-tts-channels').count(), 1, 'TTS 欄位歸在語音區');
+      assert.equal(await p.locator('#fsec-videoLinks #cf-videoLinks-enabled').count(), 1, '影片連結自己一區');
       await p.locator('#tabbtn-overview').click();
       await p.waitForFunction(() => document.body.textContent.includes('1 個頻道覆寫'));
       await p.locator('#tabbtn-settings').click();

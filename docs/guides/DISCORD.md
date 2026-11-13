@@ -556,7 +556,8 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   - **功能設定**：`typing`、`sendDelayMs`、`maxMessageChars`、`ackMessage`、`autoCompactTokens`、`ttftTimeoutMs`，
     以及 `media.enabled`／`maxVideoSeconds`、`context.*`、`batch.*`、`tts.enabled`／模型／語氣／參考音／長度與冷卻、
     `security.blockSensitive`、`videoLinks.enabled`、`emoji.*`、`memes.*`、`reactions.*`、`memory.*`、
-    `notes.*`（含每日摘要）、`knowledge.*`、`followup.enabled`、`slang.*`。一欄一列，存檔後立即生效並寫回
+    `notes.*`（含每日摘要）、`knowledge.*`、`followup.enabled`、`slang.*`。每個功能一區（區名在左），
+    欄位在區內自動排成 1～3 欄；存檔後立即生效並寫回
     `config.json`；格式與範圍由 `normalizeDiscordConfig` 驗證，錯誤會直接顯示在卡片上。
     `tts.baseUrl`、`videoLinks.ytDlpPath`、`emoji.dir` 這類會連網址或執行程式的欄位刻意只在 `config.json` 改
   - **執行程式（沙箱）**：`sandbox.enabled` 與 `sandbox.channels`（一行一個頻道 ID），存檔後立即生效並寫回
