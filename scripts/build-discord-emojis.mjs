@@ -273,6 +273,17 @@ async function main() {
       changedGuilds += 1;
       log(`寫入 ${path.relative(ROOT, file)}：${doc.entries.length} 條`);
     }
+    // 已離開的伺服器不會再出現在 client.guilds：把舊目錄一起刪掉，免得模型挑到送不出去的表情。
+    if (!onlyGuild) {
+      const alive = new Set(client.guilds.cache.keys());
+      let staleFiles = [];
+      try { staleFiles = fs.readdirSync(CATALOG_DIR); } catch { staleFiles = []; }
+      for (const name of staleFiles) {
+        if (!/^\d+\.json$/.test(name) || alive.has(name.slice(0, -5))) continue;
+        fs.rmSync(path.join(CATALOG_DIR, name), { force: true });
+        log(`移除已離開伺服器的目錄：${name}`);
+      }
+    }
   } finally {
     await client.destroy();
   }

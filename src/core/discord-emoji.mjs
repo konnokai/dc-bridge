@@ -54,6 +54,18 @@ export function loadCatalogs(dir) {
   return out;
 }
 
+/** 只留機器人還在的伺服器；回傳被移除的 guild id。 */
+export function pruneCatalogs(catalogs, guildIds) {
+  const alive = new Set([...guildIds].map(String));
+  const removed = [];
+  for (const id of [...catalogs.keys()]) {
+    if (alive.has(String(id))) continue;
+    catalogs.delete(id);
+    removed.push(String(id));
+  }
+  return removed;
+}
+
 /** 查詢字串 → 關鍵字集合（ASCII 詞 + 中文 bigram + 去停用字的單字）。 */
 export function queryTokens(text) {
   const value = String(text ?? '').toLowerCase();

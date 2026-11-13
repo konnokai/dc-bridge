@@ -101,7 +101,7 @@ import {
 } from '../src/core/discord-ignore.mjs';
 import { createReactionInbox, formatReactionInbox } from '../src/core/discord-feedback.mjs';
 import { describeSensitive, findSensitive, formatSensitiveHit } from '../src/core/discord-security.mjs';
-import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, countEmojiTags, formatEmojiLine, labelEmojiTags, loadEmojiUsage, matchStickers, ownReaction, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
+import { bumpEmojiUsage, buildEmojiHint, buildEmojiIndex, countEmojiTags, formatEmojiLine, labelEmojiTags, loadEmojiUsage, matchStickers, ownReaction, pruneCatalogs, queryTokens, reactionKey, retrieveEmojis, saveEmojiUsage, substituteEmojiNames } from '../src/core/discord-emoji.mjs';
 import {
   AGENT_MAX_CONTENT,
   REACT_PER_TURN_LIMIT,
@@ -4596,6 +4596,15 @@ console.log('## 10. 引用、上下文、出站閘門');
 
 console.log('## 11. 表情目錄與代換');
 {
+  const prune = new Map([
+    ['111', { guildId: '111', entries: [] }],
+    ['222', { guildId: '222', entries: [] }],
+    ['333', { guildId: '333', entries: [] }],
+  ]);
+  const removed = pruneCatalogs(prune, ['111', '333']);
+  ok(removed.join(',') === '222' && !prune.has('222') && prune.size === 2, '離開的伺服器目錄會被移除');
+  ok(pruneCatalogs(prune, ['111', '333']).length === 0, '沒有離開的伺服器時不動目錄');
+
   const catalogs = new Map([
     ['111', { guildId: '111', entries: [
       { id: 'e1', name: 'kekw', description: '大笑', tags: ['笑', '嘲諷'], usage: '覺得好笑時' },
