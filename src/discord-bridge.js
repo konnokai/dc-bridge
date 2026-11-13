@@ -12,7 +12,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ActivityType, ButtonStyle, ChannelType, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
+import { ActivityType, AttachmentBuilder, ButtonStyle, ChannelType, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, SnowflakeUtil } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   COMPACT_NOTICE,
@@ -221,6 +221,7 @@ import { fetchTwitterImage, fetchTwitterPost, firstTwitterPost, twitterImageUrls
 import { searchGifs, GIF_QUERY_MAX, GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
 import { createAgentSender, createMessageRefs, startAgentApi } from './core/discord-agent.mjs';
+import { deliverVoiceFile, synthesizeSpeech, toVoiceOgg, voiceGate } from './core/discord-tts.mjs';
 import { createBatcher, createTurnGate, defang, formatBatch, formatParticipationHint, imageRefTag, isVisible, repliedName, resolveMentions, takeFollowups, triggerUsers, visibleName } from './core/discord-batch.mjs';
 import { createUrgentTyping } from './core/discord-typing.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
@@ -738,6 +739,8 @@ async function main() {
   const pendingUsers = new Map(); // key -> {{userId,name}[]}[]：已投遞、回合還沒開始的觸發者
   const turnUsers = new Map(); // key -> 目前回合的觸發者
   const sandboxRuns = new Map(); // key -> 這個回合已經跑過幾次程式（目前上限 1）
+  const voicePerTurn = new Map(); // key -> 這個回合已經送出幾則語音
+  const voiceLastAt = new Map(); // key -> 上一則語音送出的時間（跨回合冷卻）
   let sandboxBusy = false; // 全域同時只跑一個容器
   // 背景生圖：jobId -> { key, users, at }；完成後把觸發者掛到檔名上，等 send_image 再記畫圖次數。
   // 工作要存檔：橋接重啟時外掛還在本來那個 DSH 行程裡跑，不能跟著記憶體消失。
@@ -1234,6 +1237,7 @@ async function main() {
     persistImageJobs();
     turnTriggerRecorded.delete(key);
     sandboxRuns.delete(key);
+    voicePerTurn.delete(key);
     pendingDirect.delete(key);
     turnDirect.delete(key);
     pendingDirectMessages.delete(key);
@@ -1421,8 +1425,11 @@ async function main() {
     return channel;
   }
 
-  /** replyTo 和檔案只掛在第一段，sticker 只掛在最後一段。file 是 {buffer, name}。 */
-  async function sendLong(key, text, { replyTo = null, stickerId = null, file = null } = {}) {
+  /**
+   * replyTo 和檔案只掛在第一段，sticker 只掛在最後一段。file 是 {buffer, name}；
+   * voice 的檔案多帶 waveform/duration，而且整則要掛 IsVoiceMessage。
+   */
+  async function sendLong(key, text, { replyTo = null, stickerId = null, file = null, voice = false } = {}) {
     const channel = await resolveChannel(key);
     refreshEmojiCatalogs();
     // 模型輸出 `:名稱:`，這裡換成真正的 emoji tag；找不到就保留原文。
@@ -1434,7 +1441,8 @@ async function main() {
       sent.push(await channel.send({
         ...(part ? { content: part } : {}),
         ...(index === 0 && replyTo ? { reply: { messageReference: replyTo, failIfNotExists: false } } : {}),
-        ...(index === 0 && file ? { files: [{ attachment: file.buffer, name: file.name }] } : {}),
+        ...(index === 0 && file ? { files: [fileAttachment(file)] } : {}),
+        ...(index === 0 && voice ? { flags: MessageFlags.IsVoiceMessage } : {}),
         ...(index === parts.length - 1 && stickerId ? { stickers: [stickerId] } : {}),
         // parse: [] —— 模型輸出不會意外 @everyone 或 @某人；回覆也不額外 ping 對方
         allowedMentions: { parse: [], repliedUser: false },
@@ -1442,6 +1450,15 @@ async function main() {
       if (cfg.discord.sendDelayMs > 0) await sleep(cfg.discord.sendDelayMs);
     }
     return sent;
+  }
+
+  /** 一般附件直接丟物件；語音要 waveform 與 duration 才走 AttachmentBuilder。 */
+  function fileAttachment(file) {
+    if (!file?.waveform) return { attachment: file.buffer, name: file.name };
+    const attachment = new AttachmentBuilder(file.buffer, { name: file.name });
+    attachment.setWaveform(file.waveform);
+    if (Number(file.duration) > 0) attachment.setDuration(Number(file.duration));
+    return attachment;
   }
 
   // ── 智能體工具（MCP） ────────────────────────────────────────────────────
@@ -1481,7 +1498,7 @@ async function main() {
     return [...guild.stickers.cache.values()].filter((sticker) => sticker.available !== false);
   }
 
-  async function deliverAgentMessage(key, { content, replyTo, sticker, file }) {
+  async function deliverAgentMessage(key, { content, replyTo, sticker, file, voice }) {
     const replyMessage = replyTo ? await fetchByRef(key, replyTo) : null;
     // 退出、被封鎖或在不理名單的人：他的訊息只能當上下文，不能回覆。
     if (replyMessage && !canReadMessage(cfg.discord, replyMessage, client.user.id, ignoredUser)) {
@@ -1494,6 +1511,33 @@ async function main() {
       // 貼圖只能送所屬伺服器的；私聊與別服的都送不了。
       if (!found) throw toolError(`這個伺服器沒有貼圖「${sticker}」：先用 search_stickers 查貼圖名稱`, 404);
       stickerId = found.id;
+    }
+    // 語音不帶文字：說出來的話不是頻道上的訊息本體。沒有權限或被拒一次才降級成普通附件。
+    if (voice) {
+      const channel = await resolveChannel(key);
+      const plain = { buffer: voice.buffer, name: voice.name };
+      const plainSent = () => sendLong(key, '', { replyTo: replyMessage?.id ?? null, file: plain });
+      // 語音訊息要獨立的 Send Voice Messages 權限；沒有就別浪費一次 API 呼叫。
+      if (channel.permissionsFor?.(client.user)?.has(PermissionFlagsBits.SendVoiceMessages) === false) {
+        const sent = await plainSent();
+        return { ids: sent.map((message) => message.id), detail: 'bot 沒有「傳送語音訊息」權限，已改送一般音檔' };
+      }
+      let outcome;
+      try {
+        outcome = await deliverVoiceFile({
+          sendVoice: () => sendLong(key, '', { replyTo: replyMessage?.id ?? null, file: voice, voice: true }),
+          sendPlain: plainSent,
+        });
+      } catch (error) {
+        if (error?.code === 50013) {
+          throw Object.assign(toolError('bot 沒有「附加檔案」或「傳送語音訊息」權限，語音送不出去', 403), { uploadFailure: true });
+        }
+        throw error;
+      }
+      return {
+        ids: outcome.sent.map((message) => message.id),
+        ...(outcome.detail ? { detail: outcome.detail } : {}),
+      };
     }
     // `meme:<名稱>` 走梗圖庫；其他只認 generate_image 的輸出目錄，模型給的 path 先收斂成檔名再組回去。
     let meme = null;
@@ -1520,7 +1564,7 @@ async function main() {
       const drawUsers = drawUsersForFile({ pendingDraws, key, file, ttlMs: IMAGE_JOB_TTL_MS }).map((user) => user.userId);
       sentImageOwners.record(sent[0]?.id, drawUsers.length ? drawUsers : directTriggerIds(key));
     }
-    return sent.map((message) => message.id);
+    return { ids: sent.map((message) => message.id) };
   }
 
   /**
@@ -2424,6 +2468,88 @@ async function main() {
       // 真的送出成功才累加：第一則失敗時，下一次仍然是第一次拒絕。
       if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
       return result;
+    },
+    // 語音：合成、轉檔、送出都在這裡；安靜與補句跟 send 完全一樣，文字不進頻道。
+    async sendVoice(body) {
+      const { sessionId, key, channel } = await agentSender.resolve(body.token);
+      const used = voicePerTurn.get(key) ?? 0;
+      const previousLastAt = voiceLastAt.get(key) ?? 0;
+      const gate = voiceGate({
+        tts: cfg.discord.tts,
+        channelId: channel.id,
+        text: body.text,
+        instruct: body.instruct,
+        used,
+        lastAt: previousLastAt,
+      });
+      if (gate.error) throw toolError(gate.error, gate.status);
+      const { speak, instruct, note } = gate;
+
+      const quietAt = quietUntil(key);
+      if (quietSendBlocked({ quietUntil: quietAt })) {
+        throw toolError(`安靜中（到 ${formatQuietUntil(quietAt)}），只能用 add_reaction 回；要恢復說話先 set_quiet minutes=0`, 409);
+      }
+      if (turnFollowupHeld.has(key)) {
+        return { key, refs: [], notice: '剛剛有新訊息，這個回合先停在這裡；請看完補句後再重新決定要送什麼，不要只送後半句。' };
+      }
+      const followup = takeFollowupNotice(key);
+      if (followup) return followup;
+
+      // 被念出來的字一樣會公開，敏感資訊閘門不能只擋文字訊息。
+      agentSender.checkSensitive(sessionId, [speak, instruct].filter(Boolean).join('\n'));
+
+      const refusal = await prepareRefusal({ token: body.token, content: speak, reply_to: body.reply_to });
+      if (refusal?.replaced) return refusal.replaced;
+
+      // 合成要幾十秒：先佔每輪名額與冷卻，兩個並行呼叫才不會都通過。失敗再退回去。
+      voicePerTurn.set(key, used + 1);
+      voiceLastAt.set(key, Date.now());
+      const refund = () => {
+        voicePerTurn.set(key, used);
+        if (previousLastAt) voiceLastAt.set(key, previousLastAt);
+        else voiceLastAt.delete(key);
+      };
+
+      let voice;
+      try {
+        const wav = await synthesizeSpeech({
+          baseUrl: cfg.discord.tts.baseUrl,
+          model: cfg.discord.tts.model,
+          text: speak,
+          instruct,
+          accent: cfg.discord.tts.accent,
+          language: body.language,
+          voice: body.voice,
+          refAudio: cfg.discord.tts.refAudio,
+          refText: cfg.discord.tts.refText,
+          timeoutMs: cfg.discord.tts.timeoutMs,
+        });
+        voice = await toVoiceOgg(wav);
+      } catch (error) {
+        refund();
+        throw toolError(`語音合成失敗：${error?.message ?? error}；改用 send_message 送文字`, 502);
+      }
+
+      let result;
+      try {
+        result = await agentSender.send({
+          token: body.token,
+          replyTo: textArg(body.reply_to),
+          voice: { ...voice, name: 'voice-message.ogg' },
+        });
+      } catch (error) {
+        refund();
+        throw error;
+      }
+      noteTrigger(result.key);
+      recordBotMessages(result.key, result.refs?.length);
+      // 冷卻從真的送出時算，不是從開始合成時算。
+      voiceLastAt.set(key, Date.now());
+      if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
+      const cloneMode = Boolean(cfg.discord.tts.refAudio);
+      const detail = [note, cloneMode && instruct ? '固定聲音模式不使用 instruct' : '', result.detail].filter(Boolean).join('；');
+      log(`MCP 送出語音 ${key}（${Array.from(speak).length} 字，${voice.duration} 秒${instruct && !cloneMode ? `，語氣：${instruct}` : ''}${detail ? `，${detail}` : ''}）`);
+      return { ...result, ...(detail ? { detail } : {}) };
     },
     async react(body) {
       const result = await agentSender.react({ token: body.token, message: textArg(body.message), emoji: textArg(body.emoji) });
@@ -3876,6 +4002,7 @@ async function main() {
     if (event.type === 'turn/start') {
       clearTtftTimer(frame.sessionId);
       agentSender.startTurn(key);
+      voicePerTurn.delete(key);
       memoryWrites.delete(key);
       noteWrites.delete(key);
       knowledgeWrites.delete(key);
@@ -3919,9 +4046,9 @@ async function main() {
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
-      if (/^mcp__discord__(send_message|send_image|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
+      if (/^mcp__discord__(send_message|send_image|send_voice|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
       const state = progress.get(key);
-      if (state && /^mcp__discord__(send_message|send_image|send_sticker|create_poll)$/.test(name)) state.replied = true;
+      if (state && /^mcp__discord__(send_message|send_image|send_voice|send_sticker|create_poll)$/.test(name)) state.replied = true;
       const line = state ? describeToolCall(name, event.data?.arguments) : null;
       if (line) {
         const leaks = cfg.discord.security.blockSensitive && findSensitive(line, agentSecrets());

@@ -126,6 +126,25 @@ tool(
 );
 
 tool(
+  'send_voice',
+  '把一句話說出來，送成一則 Discord 語音訊息。想用聲音回話、唸一段話、唱歌以外的模仿語氣時用；不呼叫就不會發出任何東西。後端沒開或合成失敗時會回錯誤，改用 send_message。',
+  {
+    token: sessionToken,
+    text: z.string().describe('要說的話（會被唸出來，不會變成頻道上的文字；太長會截斷）'),
+    instruct: z.string().optional().describe('語氣或聲音描述，例如「溫柔、帶點笑意」「低沉平靜的男聲」；最多 200 字。固定聲音模式（tts.refAudio）下這一欄沒有作用'),
+    language: z.enum(['zh', 'en', 'ja', 'ko']).optional().describe('語言，預設自動判斷'),
+    voice: z.string().optional().describe('CustomVoice 模型的預設聲（Vivian、Serena、Ryan…）；VoiceDesign 模型不用填'),
+    reply_to: messageRef('要回覆的那則訊息').optional(),
+  },
+  '/sendVoice',
+  (result) => {
+    const text = sentDetail(result, '送出語音');
+    return result.detail ? `${text}（${result.detail}）` : text;
+  },
+  120_000,
+);
+
+tool(
   'cancel_image',
   '取消這個頻道所有還在跑或排隊中的生圖。使用者說「不要畫了」「取消畫圖」，或發現 prompt／參數填錯時用；取消後就不會再收到【生圖完成】。',
   {

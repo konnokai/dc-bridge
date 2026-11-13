@@ -21,7 +21,7 @@ export const INVITE_SCOPES = Object.freeze(['bot', 'applications.commands']);
  *
  * 不含 Administrator / Manage Guild / Manage Messages：
  * 這些目前都用不到。AttachFiles 是畫圖用的（`send_image` 要把生圖上傳到頻道），
- * 沒有它就會在送出時被 Discord 拒絕。bit 值與 discord.js 的 PermissionFlagsBits 一致，
+ * SendVoiceMessages 是 `send_voice` 用的；沒有它們就會在送出時被 Discord 拒絕。bit 值與 discord.js 的 PermissionFlagsBits 一致，
  * scripts/test-discord-bridge.mjs 會對賬。
  */
 export const INVITE_PERMISSIONS = Object.freeze([
@@ -34,6 +34,7 @@ export const INVITE_PERMISSIONS = Object.freeze([
   { key: 'UseExternalEmojis', label: '使用外部表情', bit: 1n << 18n },
   { key: 'SendPolls', label: '建立投票', bit: 1n << 49n },
   { key: 'AttachFiles', label: '附加檔案', bit: 1n << 15n },
+  { key: 'SendVoiceMessages', label: '傳送語音訊息', bit: 1n << 46n },
 ]);
 
 export function invitePermissionsBitfield() {
@@ -81,6 +82,20 @@ export function normalizeDiscordConfig(raw) {
     return Math.min(max, Math.max(min, Math.round(n)));
   };
   const text = (value, fallback) => (typeof value === 'string' && value.trim() ? value.trim() : fallback);
+
+  // Base 模型沒有預設聲音：refAudio 沒填就會每次亂抽。設定錯誤在啟動時就擋，不要等到第一次 send_voice。
+  const ttsModel = text(src.tts?.model, 'mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16');
+  const ttsRefAudio = text(src.tts?.refAudio, '');
+  const ttsRefText = text(src.tts?.refText, '');
+  if (ttsRefText && !ttsRefAudio) throw new Error('discord.tts.refText 有值但 refAudio 是空的');
+  if (ttsRefAudio) {
+    if (!ttsRefText) throw new Error('discord.tts.refAudio 有值但 refText 是空的');
+    if (!ttsRefAudio.startsWith('/')) {
+      throw new Error('discord.tts.refAudio 要填 TTS 主機上的絕對路徑（以 / 開頭）');
+    }
+  } else if (/-base(-|$)/i.test(ttsModel)) {
+    throw new Error('discord.tts.model 是 Base 模型但沒有 refAudio：Base 沒有預設聲音，每次呼叫會亂抽');
+  }
 
   return {
     token: typeof src.token === 'string' ? src.token.trim() : '',
@@ -136,6 +151,25 @@ export function normalizeDiscordConfig(raw) {
       timeoutMs: clamp(src.media?.timeoutMs, 25_000, 2000, 60_000),
       // 影片只抽前面這麼多秒的畫面：後面再多也只是白解碼。6 格最多蓋住 120 秒（fps 下限）。
       maxVideoSeconds: clamp(src.media?.maxVideoSeconds, 60, 5, 120),
+    },
+    tts: {
+      // 語音回覆：模型呼叫 send_voice 才合成，不是每則自動轉語音。預設關閉（要連後端）。
+      enabled: src.tts?.enabled === true,
+      baseUrl: httpBaseUrl(src.tts?.baseUrl, 'discord.tts.baseUrl'),
+      model: ttsModel,
+      // VoiceDesign 沒給口音時會隨機挑到粵語腔；每次合成都在 instruct 後面補這段。
+      accent: text(src.tts?.accent, '標準台灣華語，咬字清楚，不要用粵語'),
+      // Base 模型的聲音複製：參考音檔在 TTS 主機上的路徑，加上那段話的逐字稿。
+      // 兩個都填才會啟用；啟用時 instruct／accent／voice 都不送。
+      refAudio: ttsRefAudio,
+      refText: ttsRefText,
+      timeoutMs: clamp(src.tts?.timeoutMs, 60_000, 5000, 90_000),
+      maxChars: clamp(src.tts?.maxChars, 150, 1, 1000),
+      // 同一頻道兩則語音的最短間隔；0 = 不限制。
+      cooldownSec: clamp(src.tts?.cooldownSec, 30, 0, 3600),
+      maxPerTurn: clamp(src.tts?.maxPerTurn, 1, 1, 5),
+      // 留空 = 全部頻道；有值 = 只開這些頻道。
+      channels: idList(src.tts?.channels, 'discord.tts.channels'),
     },
     // 選用：Cloudflare Worker + R2 的 PRTS 圖片快取。留空就直連。
     prts: {
@@ -235,6 +269,21 @@ export function normalizeDiscordConfig(raw) {
       timeoutMs: clamp(src.slang?.timeoutMs, 90_000, 15_000, 300_000),
     },
   };
+}
+
+/**
+ * 外部 HTTP 服務的位址（例如 TTS 後端）。
+ * 空白 = 沒設定；非 http(s) 直接拋，避免把 script:／file: 帶進 fetch。
+ */
+function httpBaseUrl(value, label) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string') throw new TypeError(`${label} 必須是字串`);
+  const raw = value.trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  let url;
+  try { url = new URL(raw); } catch { throw new TypeError(`${label} 不是合法網址：${value}`); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError(`${label} 只能是 http(s)：${value}`);
+  return raw;
 }
 
 /** 控制台綁定位址：只擋空白/超長；IP 或 hostname 都交給 listen() 解析。 */
@@ -612,7 +661,7 @@ const PROGRESS_DETAIL_MAX = 80;
 const PROGRESS_LINES_MAX = 6;
 // 發訊息、貼圖、reaction、投票、修改、收回本身就看得到，不用再列進度。
 const PROGRESS_SILENT = new Set([
-  'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
+  'mcp__discord__send_message', 'mcp__discord__send_image', 'mcp__discord__send_voice', 'mcp__discord__send_sticker', 'mcp__discord__add_reaction',
   'mcp__discord__remove_reaction', 'mcp__discord__set_quiet', 'mcp__discord__set_custom_status', 'mcp__discord__ignore_user', 'mcp__discord__schedule_followup',
   'mcp__discord__create_poll', 'mcp__discord__edit_message', 'mcp__discord__delete_message',
   // 給開發者的意見不該在頻道留下任何痕跡。

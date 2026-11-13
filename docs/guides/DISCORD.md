@@ -118,6 +118,17 @@ pm2 logs dc-bridge
 | `media.maxCount` | 一則訊息與整批各最多處理幾張，預設 4（1 ~ 8）；影片抽格後算 1 張 |
 | `media.timeoutMs` | 單張縮圖／影片抽格的 ffmpeg 逾時，預設 25000 |
 | `media.maxVideoSeconds` | 影片只看前面幾秒，預設 60（5 ~ 120；6 格抽樣的上限就是 120 秒） |
+| `tts.enabled` | 模型可以用 `send_voice` 送語音訊息，預設 `false`。不開就不會連出去 |
+| `tts.baseUrl` | mlx 的後端網址（只收 `http(s)`），例如 `http://192.168.98.105:8100`；尾端的 `/` 會拿掉 |
+| `tts.model` | mlx 的模型名稱，預設 `mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16`。換成 CustomVoice 模型時才能填 `voice` |
+| `tts.accent` | mlx 每次合成自動接在 `instruct` 後面的口音提示，預設「標準台灣華語，咬字清楚，不要用粵語」。VoiceDesign 只給情緒時可能挑到粵語腔；留空 = 不補 |
+| `tts.refAudio` | 選用：Base 模型的參考音檔路徑，**在 TTS 主機上**（不是橋接這台），要絕對路徑，例如 `/Users/konnokai/tts-server/refs/voice.wav`。要跟 `tts.refText` 一起填才會啟用聲音複製 |
+| `tts.refText` | 參考音檔的逐字稿，要跟音檔內容一字不差；橋接會自動轉簡體。填了 `refAudio` 就不能留空 |
+| `tts.timeoutMs` | 等後端合成的上限，預設 60000（5 ~ 90 秒）。150 字大約要 45 秒，再長就調高 `maxChars`／這裡（不要超過 MCP 工具的 120 秒） |
+| `tts.maxChars` | 一句話最多幾個字，預設 150（1 ~ 1000）。超過就截斷，工具回覆會說只唸了前面多少字 |
+| `tts.cooldownSec` | 同一頻道兩則語音的最短間隔，預設 30 秒（0 = 不限制） |
+| `tts.maxPerTurn` | 一輪最多幾則語音，預設 1（1 ~ 5）。也一起佔「一輪 5 則」的名額 |
+| `tts.channels` | 開放語音的頻道 ID；空陣列 = 全部頻道 |
 | `prts.proxyUrl` | 選用：Cloudflare Worker 的網址（例如 `https://prts-artwork-cache.<account>.workers.dev`）。留空就直連 PRTS |
 | `prts.proxyToken` | 選用：Worker 的 `PRTS_PROXY_TOKEN`，要跟 Worker secret 一樣；`proxyUrl` 有值時才生效 |
 | `videoLinks.enabled` | 群友貼 YouTube 這類連結時，`view_message` 用 yt-dlp 附字幕逐字稿、標題章節並抽幾格畫面，預設 `false` |
@@ -489,11 +500,12 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 | 新增反應 | 偶爾加 reaction |
 | 使用外部表情 | 送其他伺服器的自訂表情 |
 | 建立投票 | `create_poll` |
-| 附加檔案 | `send_image` 把生圖上傳到頻道 |
+| 附加檔案 | `send_image` 把生圖上傳到頻道；`send_voice` 的語音訊息也走這個權限 |
+| 傳送語音訊息 | `send_voice` 送 Discord 語音訊息；沒有時橋接改送一般 OGG 附件 |
 | 嵌入連結 | `search_gifs` 的 GIF 網址要展開才有圖 |
 
 - scope 是 `bot applications.commands`。**`applications.commands` 不能省**，少了它 slash command 不會註冊。
-- bitfield 是 `563224831708224`；不含 Administrator、Manage Guild、Manage Messages。
+- bitfield 是 `633593575885888`；不含 Administrator、Manage Guild、Manage Messages。
 - 2026-10-27 加了「建立投票」，2026-10-30 加了「附加檔案」，2026-10-31 加了「嵌入連結」。之前邀請的 bot 沒有重開連結也通常能發投票（@everyone 預設有這個權限），
   但「附加檔案」不一定有；舊 bot 要重開一次 `/invite` 連結，或由管理員手動給權限。沒有「嵌入連結」時 GIF 只會是一串網址。
 - 已經在伺服器裡的 bot 再開一次連結，Discord 會用新權限更新它的身分組，不會重複邀請。
@@ -682,7 +694,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 
 跨伺服器的自訂表情：bot 只要有 `USE_EXTERNAL_EMOJIS` 權限、而且是 emoji 所屬伺服器的成員，
 就能送；**觀眾端不需要 Nitro 也看得到**（Nitro 限制的是使用者自己打字）。
-用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `563224831708224`）。
+用 `/invite` 或控制台產生的連結已包含這個權限（bitfield `633593575885888`）。
 貼圖（guild sticker）才是綁伺服器的：`send_sticker` 只送當前伺服器的貼圖，私聊與別服的送不了。
 
 ### 表情反應（reaction）
@@ -786,6 +798,58 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   每一階都重新判斷，不沿用上一張的結論。
 - 設定圖是外部作品：角色形象出自 ZipZipPipe，補全由 lmy414 做的，授權 **CC BY-NC-SA 4.0（非商業）**。
   來源、署名與授權全文見 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
+
+## 語音回覆（選用）
+
+模型可以呼叫 `mcp__discord__send_voice`，把一句話說成 Discord 的語音訊息。這是工具，不是自動裝飾：
+不呼叫就不會有聲音，每輪上限與冷卻都在 `discord.tts` 裡調。
+
+### 本機 mlx_audio（Apple Silicon，MLX）
+
+後端是 Mac mini 上的 [mlx-audio](https://github.com/Blaizzy/mlx-audio)：
+
+```bash
+# Mac mini，Python 3.10+ 的獨立環境
+uv tool install "mlx-audio[server]"
+mlx_audio.server --host 0.0.0.0 --port 8100
+```
+
+- 8000 常常被其他本機服務（例如 omlx-server）佔用；換埠時 `tts.baseUrl` 要一起改。
+- 第一次呼叫 `/v1/audio/speech` 時才下載模型（Qwen3-TTS 1.7B 約 3.5GB），之後快取在 `HF_HOME`。
+  這台的 `run.sh` 把 `HF_HOME` 指到 `~/tts-server/hf`；要手動預抓模型時記得帶同一個 `HF_HOME`，不然會下載到別的位置。
+- 橋接用 `POST /v1/audio/speech` 要 WAV，再用 ffmpeg 轉 OGG/Opus 32k 單聲道；
+  波形與長度一起算好，交給 Discord 的 `IsVoiceMessage` flag。
+- `lang_code` 要送全名（`Chinese`／`English`／`Japanese`／`Korean`）；送 `zh` 這種短碼等於沒指定語言。
+  橋接會轉好，模型只要填 `language: "zh"` 之類的。
+- **實測：繁體中文會被當成粵語唸，送簡體才是普通話。** 橋接在送進 mlx 前會用 OpenCC 轉簡體
+  （日文假名、韓文不轉）。accent 只能讓它變成「中國腔的普通話」，調不出台灣腔。
+- 後端沒有認證，只放 LAN 或 VPN。橋接和 Mac mini 不在同一個網段時，先把 `tts.baseUrl` 指到可達的位置。
+
+**固定聲音（Base 模型）**
+
+VoiceDesign 每次呼叫都會重新抽聲線。要固定聲音，把 `tts.model` 換成 Base 模型，再給一組參考音：
+
+```json
+"tts": {
+  "model": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
+  "refAudio": "/Users/konnokai/tts-server/refs/voice.wav",
+  "refText": "參考音檔裡實際唸的那段話"
+}
+```
+
+- `refAudio` 是 **Mac mini 上的絕對路徑**（mlx_audio 直接讀檔），不是上傳檔案；不能用 `~` 或相對路徑。
+- `refText` 要跟參考音一字不差；橋接會自動轉簡體再送，不用自己轉。
+- 兩個都填才會走 ICL 複製。設定錯誤在載入時就擋：只填一邊、`refAudio` 不是絕對路徑、
+  或 `model` 是 Base 但沒填 `refAudio`（Base 沒有預設聲音，會每次亂抽）。
+- 走複製時不送 `instruct`、`accent`、`voice`；那些是 VoiceDesign／CustomVoice 用的。
+- 參考音建議 5～15 秒乾淨人聲、單一說話者；太長會拖慢每次合成。
+
+### 送出與權限
+
+- 失敗一律退回文字：合成或轉檔失敗回工具錯誤（模型會改用 `send_message`）；
+  Discord 拒絕語音訊息時只重送一次普通 OGG 附件，兩種都失敗才回錯誤。
+- 需要 bot 的 **Attach Files** 權限；語音訊息另外需要 **Send Voice Messages**。沒有後者時橋接直接改送一般音檔。
+  舊版客戶端或部分第三方客戶端可能把它顯示成一般音檔，這是 Discord 端的限制。
 
 ## 執行程式（選用）
 
@@ -1102,7 +1166,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 
 ### 觸發對話統計
 
-- 只有模型真的送出訊息（`send_message`／`send_image`／`send_sticker`／`create_poll`）才記一次；
+- 只有模型真的送出訊息（`send_message`／`send_image`／`send_voice`／`send_sticker`／`create_poll`）才記一次；
   同一個回合送好幾則只算一次，避免模型連發把數字洗高。
 - 另外記「繪圖次數」：`send_image` 每成功送出一張生圖就加一次（`meme:` 梗圖不算），歸給這個回合叫 bot 的人；
   不影響對話次數與最後觸發時間。
@@ -1132,6 +1196,10 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   或用 `file="meme:<名稱>"` 送梗圖庫的圖（見「梗圖庫」）。
   `file` 填【生圖完成】提示裡的 `path`（完整路徑或檔名都行），橋接只認 `state/discord-images` 裡的圖與梗圖庫；
   可以順便帶一句話，佔「一輪 5 則」的名額。沒有 `content` 也可以只送圖。回傳格式跟 `send_message` 一樣
+- `mcp__discord__send_voice`（`text`、`instruct`／`language`／`voice`／`reply_to` 可省略）：把一句話合成語音訊息送進頻道。
+  `text` 被唸出來，不會變成頻道上的文字；`instruct` 描述語氣（最多 200 字），`language` 可填 `zh`／`en`／`ja`／`ko`，
+  `voice` 只有 CustomVoice 模型能用。回傳格式跟 `send_message` 一樣。後端逾時、轉檔失敗或沒有 Attach Files 權限都回錯誤，
+  模型改用 `send_message`；Discord 拒絕語音訊息時橋接自動改送同一份 OGG 普通附件，工具回覆會說已降級
 - `mcp__discord__cancel_image`（沒有參數）：取消這個頻道所有還在跑或排隊中的生圖。使用者說「不要畫了」
   或發現 prompt 填錯時用；橋接刪掉工作後，外掛下一次 poll（最多 15 秒）中止 Codex，
   不會再收到【生圖完成】或失敗通知。目前沒有生圖時回 404。
@@ -1347,13 +1415,13 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
 `POST /imageJob`（DSH 外掛回報背景生圖開始／完成／失敗；帶 `sessionId`，也不要求會話令牌）與
-`/send`（`send_message` 與 `send_image` 共用）、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/meme-save`、`/meme-search`、`/meme-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
+`/send`（`send_message` 與 `send_image` 共用）、`/sendVoice`、`/react`、`/edit`、`/delete`、`/poll`、`/quiet`、`/custom-status`、`/ignore`、`/followup`、`/emojis`、`/stickers`、`/gif`、`/history`、`/search`、`/view`、`/user`、`/server`、`/remember`、`/forget-fact`、`/note`、`/notes-search`、`/note-forget`、`/meme-save`、`/meme-search`、`/meme-forget`、`/dev-feedback`、`/dev-feedback-list`、`/dev-feedback-edit`，網址與令牌寫在 `state/discord-agent.json`
 （橋接重啟就換一組）。MCP server 是 `src/mcp-discord.js`，由 DSH 以 stdio 拉起。
 **新增或修改工具要重啟 DSH**（MCP server 由 DSH 拉起），只重啟橋接不會生效。
 
 ## 行為細節
 
-- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_image`／`send_sticker`／`create_poll` 時送出；回合文字不會自動貼出。不做逐字串流。
+- 回覆只在模型呼叫 `mcp__discord__send_message`／`send_image`／`send_voice`／`send_sticker`／`create_poll` 時送出；回合文字不會自動貼出。不做逐字串流。
 - **進度訊息**：模型在一個回合裡第一次用工具時（不管有沒有人叫 bot），橋接會在頻道貼一則灰色小字（`-#`）的進度，
   回合結束就刪掉。每呼叫一個工具加一行，例如「🔍 搜尋：關鍵字」、「🌐 讀取網頁：網域」、「📜 翻聊天紀錄」、「🔎 搜尋聊天紀錄：關鍵字」、「🎨 畫圖」。
   只在思考、沒用工具時不貼（「正在輸入」就夠了）。發訊息、貼圖、送圖、reaction、投票、修改、收回不列（那本身就看得到）。
