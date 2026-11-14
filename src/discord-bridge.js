@@ -55,7 +55,7 @@ import {
   viewMessageTarget,
   isChattyChannel,
 } from './core/discord-core.mjs';
-import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
+import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, replyTargetId, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
@@ -950,7 +950,7 @@ async function main() {
   let agentApiHandle = null;
   const primedKeys = new Set(); // 自由參與：這次啟動後已經帶過頻道上下文的會話
   const silentPending = new Map(); // key -> 還沒被任何一批上下文帶到的「只當背景」訊息 id
-  const botLast = new Map(); // key -> { id, seenId, at, replyTo: { id, authorId } | null }；讓位閘門用
+  const botLastByUser = new Map(); // key -> Map<userId, { ids, at, replyTo }>；讓位閘門只認 bot 回給同一個人的那幾則
   const recentHumans = new Map(); // key -> { id, authorId, at }[]：最近的人類訊息（含 ⊘）
   // 讓位閘門影子模式：只記 log，不真的擋；觀察 1–2 天後改成 false。
   const YIELD_GATE_SHADOW = true;
@@ -1251,7 +1251,7 @@ async function main() {
     offlineHintAt.delete(key);
     primedKeys.delete(key);
     silentPending.delete(key);
-    botLast.delete(key);
+    botLastByUser.delete(key);
     recentHumans.delete(key);
     refusals.forget(key);
     agentSender.forgetKey(key);
@@ -1753,8 +1753,6 @@ async function main() {
   /** 模型自己送出的訊息也算進發言頻率（長訊息切成幾則就記幾則）。 */
   function recordBotMessages(key, count = 1) {
     for (let i = 0; i < Math.max(1, count); i += 1) activity.record(key, { bot: true });
-    // 沒有 reply_to 的送出（圖片／貼圖）先讓讓位閘門失效；下一則文字回覆會再蓋回來。
-    noteBotSend(key, { replyTo: '' });
   }
 
   const RECENT_HUMANS_MAX = 30;
@@ -1771,16 +1769,22 @@ async function main() {
     recentHumans.set(key, list);
   }
 
-  /** bot 最後一則回給誰；reply_to 的對象要看得到作者才算數。 */
-  function noteBotSend(key, { replyTo = '', ref = '', at = Date.now() } = {}) {
+  /** bot 最後一則回給誰；reply_to 的對象要看得到作者才算數。長訊息切成幾段時每個 id 都留。 */
+  function noteBotSend(key, { replyTo = '', refs = [], at = Date.now() } = {}) {
     const meta = replyTo ? messageRefs.details(key, replyTo) : null;
     const authorId = String(meta?.authorId ?? '');
-    botLast.set(key, {
-      id: ref ? String(messageRefs.lookup(key, ref) ?? '') : '',
-      seenId: String(turnLastMessage.get(key) ?? ''),
+    if (!authorId) return;
+    const ids = (Array.isArray(refs) ? refs : [refs])
+      .map((ref) => String(messageRefs.lookup(key, ref) ?? ''))
+      .filter(Boolean);
+    const perUser = botLastByUser.get(key) ?? new Map();
+    const previous = perUser.get(authorId);
+    perUser.set(authorId, {
+      ids: [...(previous?.ids ?? []), ...ids].slice(-5),
       at: Number(at) || Date.now(),
-      replyTo: authorId ? { id: String(meta?.id ?? ''), authorId } : null,
+      replyTo: { id: String(meta?.id ?? ''), authorId },
     });
+    botLastByUser.set(key, perUser);
   }
 
   /** 模型真的送出訊息時記一次；同一個回合送好幾則只算一次。 */
@@ -2749,7 +2753,7 @@ async function main() {
       }
       noteTrigger(result.key);
       recordBotMessages(result.key, result.refs?.length);
-      noteBotSend(result.key, { replyTo, ref: result.refs?.at(-1) });
+      noteBotSend(result.key, { replyTo, refs: result.refs });
       voiceLastAt.set(key, Date.now());
       void taken.notice?.delete().catch(() => {});
       if (taken.refusal?.note) refusals.note(taken.refusal.note.key, taken.refusal.note.userId);
@@ -4868,29 +4872,55 @@ async function main() {
     };
   }
 
-  /** 讓位閘門：bot 最後一則回給 T，T 之後有人插話，且這批最後一則還是 T。 */
+  /** bot 回給 T 之後，還有沒有回過別人。 */
+  function botRepliedOthersAfter(key, userId, targetId) {
+    const perUser = botLastByUser.get(key);
+    if (!perUser || !targetId) return false;
+    let target;
+    try { target = BigInt(targetId); } catch { return false; }
+    for (const [otherId, record] of perUser) {
+      if (String(otherId) === String(userId)) continue;
+      try {
+        if (record.ids.some((id) => BigInt(id) > target)) return true;
+      } catch { /* 非數字 id 略過 */ }
+    }
+    return false;
+  }
+
+  /** 讓位閘門：T 回覆 bot 回給他的那一則，中間有人插話，而且 bot 也回過插話的人。 */
   function yieldGateDecision(key, job) {
+    const last = job.entries.at(-1);
+    const userId = String(last?.userId ?? '');
     const batch = job.entries.map((entry) => ({
       id: String(entry.id ?? ''),
       userId: String(entry.userId ?? ''),
     }));
-    const hasStar = job.entries.some((entry) => entry.direct);
     // 只看原始文字：text 可能含表情目錄描述，描述裡剛好有「肥魚」不該算叫名字。
     const named = job.entries.some((entry) => isBotNamed(entry.rawText));
+    // 同批還有別人 @bot：那一則不能被一起丟掉。
+    const othersStar = job.entries.some((entry) => entry.direct && String(entry.userId) !== userId);
+    const replyToId = replyTargetId(last?.message) ?? '';
     return shouldYield({
-      botLast: botLast.get(key),
+      botLast: botLastByUser.get(key)?.get(userId) ?? null,
       recent: recentHumans.get(key) ?? [],
       batch,
-      hasStar,
+      // 只認「回覆 bot 那一則」；轉發、討論串起點與單純接話都不算。
+      replyToId,
       named,
+      othersStar,
+      botAfter: botRepliedOthersAfter(key, userId, replyToId),
     });
   }
 
   /** 影子模式的 log 要能和 session log 對照：只記 id，不記內文。 */
   function yieldLogDetail(key, job) {
-    const last = botLast.get(key);
+    const lastEntry = job.entries.at(-1);
+    const userId = String(lastEntry?.userId ?? '');
+    const target = botLastByUser.get(key)?.get(userId) ?? null;
+    const replyToId = replyTargetId(lastEntry?.message) ?? '';
+    const othersStar = job.entries.filter((entry) => entry.direct && String(entry.userId) !== userId).length;
     const recent = (recentHumans.get(key) ?? []).slice(-6).map((entry) => `${entry.id}:${entry.authorId}`).join(',');
-    return ` bot=${last?.id || '-'} seen=${last?.seenId || '-'} T=${last?.replyTo?.authorId || '-'} batch=${job.entries.at(-1)?.id || '-'} recent=${recent || '-'}`;
+    return ` bot=${target?.ids?.join('/') || '-'} reply=${replyToId || '-'} botAfter=${botRepliedOthersAfter(key, userId, replyToId) ? 1 : 0} others★=${othersStar} T=${userId || '-'} batch=${lastEntry?.id || '-'} recent=${recent || '-'}`;
   }
 
   /** 跳過一批但不讓它消失：下一批的【最近頻道訊息】會把它帶進來。 */
@@ -4918,18 +4948,17 @@ async function main() {
         : `安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
       return false;
     }
-    // chatty 頻道的兩個硬閘門：先影子模式只記 log，觀察 1–2 天再真的擋。
-    const chattyTurn = isChattyChannel(cfg.discord, job.channel?.id) && !job.direct
-      && !job.followup && !job.reminder && !job.system;
-    if (chattyTurn) {
-      if (yieldGateDecision(key, job)) {
-        if (YIELD_GATE_SHADOW) log(`讓位（影子，不擋）${key}（${job.entries.length} 則）${yieldLogDetail(key, job)}`);
-        else { skipSilently(key, job, '讓位跳過'); return false; }
-      }
-      if (isMediaOnlyBatch(job.entries)) {
-        if (YIELD_GATE_SHADOW) log(`純媒體（影子，不擋）${key}（${job.entries.length} 則） batch=${job.entries.at(-1)?.id || '-'}`);
-        else { skipSilently(key, job, '純媒體跳過'); return false; }
-      }
+    // 讓位閘門所有頻道都跑（收窄成「回覆 bot 那一則」）；純媒體閘門只給 chatty。
+    // 兩個都先影子模式只記 log，觀察後再真的擋。
+    const gateTurn = !job.followup && !job.reminder && !job.system;
+    const chattyTurn = isChattyChannel(cfg.discord, job.channel?.id) && !job.direct && gateTurn;
+    if (gateTurn && yieldGateDecision(key, job)) {
+      if (YIELD_GATE_SHADOW) log(`讓位（影子，不擋）${key}（${job.entries.length} 則）${yieldLogDetail(key, job)}`);
+      else { skipSilently(key, job, '讓位跳過'); return false; }
+    }
+    if (chattyTurn && isMediaOnlyBatch(job.entries)) {
+      if (YIELD_GATE_SHADOW) log(`純媒體（影子，不擋）${key}（${job.entries.length} 則） batch=${job.entries.at(-1)?.id || '-'}`);
+      else { skipSilently(key, job, '純媒體跳過'); return false; }
     }
     const sessionId = await ensureSession(key);
     if (epoch !== epochOf(key)) {

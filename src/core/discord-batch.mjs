@@ -481,40 +481,42 @@ export function formatParticipationHint(chatty = false, { followup = false } = {
 export const YIELD_WINDOW_MS = 5 * 60_000;
 
 /**
- * 讓位判斷：bot 最後一則回給 T，T 現在又說話；如果中間有別人（含 ⊘）插話，
- * 而且這批最後一則還是 T，就代表 T 已經被人類接手，不送模型。
- * ★、叫名字、回訪、系統訊息、沒有 reply_to 都不擋。
+ * 讓位判斷：T 回覆的正是 bot 回給他的那一則、中間有別人（含 ⊘）插話，而且 bot 之後
+ * 也回過別人，就代表 T 這串已經被人類接手，不送模型。
  *
- * @param options.botLast { id, seenId, at, replyTo: { id, authorId } | null }
+ * 只認「T 回覆的正是 bot 回給他的那一則」：單純接著講話不算，避免誤擋追問。
+ * 叫名字、回訪、系統訊息不擋。★ 本身不擋——回覆 bot 就是 ★，這條規則照樣適用。
+ *
+ * @param options.botLast bot 最近回給 T 的訊息 { ids: string[], at, replyTo: { id, authorId } | null }
  * @param options.recent 最近的人類訊息 { id, authorId }[]
  * @param options.batch 這批訊息 { id, userId }[]
- * @param options.hasStar 這批有 ★
+ * @param options.replyToId 這批最後一則回覆的訊息 id
  * @param options.named 這批有人叫 bot 的名字
+ * @param options.othersStar 同批還有別人 @bot
+ * @param options.botAfter bot 回給 T 之後，也回過別人
  * @param options.now
  */
-export function shouldYield({ botLast, recent = [], batch = [], hasStar = false, named = false, now = Date.now() } = {}) {
-  if (hasStar || named) return false;
-  if (!botLast?.id || !botLast?.replyTo?.authorId || !botLast.replyTo.id) return false;
+export function shouldYield({ botLast, recent = [], batch = [], replyToId = '', named = false, othersStar = false, botAfter = false, now = Date.now() } = {}) {
+  if (named || othersStar || !botAfter) return false;
+  if (!botLast?.replyTo?.authorId) return false;
   if (!(Number(now) - Number(botLast.at) <= YIELD_WINDOW_MS)) return false;
   const last = batch.at(-1);
   if (!last?.id || String(last.userId) !== String(botLast.replyTo.authorId)) return false;
-  // 用 snowflake 排序，不用本機時鐘，避免 bot 送出時間和 Discord 訊息時間有偏差。
+  const target = String(replyToId ?? '');
+  if (!target || !(botLast.ids ?? []).includes(target)) return false;
   let start;
   let end;
   try {
+    start = BigInt(target);
     end = BigInt(last.id);
-    start = end < BigInt(botLast.id) ? BigInt(botLast.replyTo.id) : BigInt(botLast.id);
   } catch {
     return false;
   }
-  // 交錯時，bot 這一輪已經看過的訊息不能算插話，否則會誤擋。
-  const seen = /^\d+$/.test(String(botLast.seenId ?? '')) ? BigInt(botLast.seenId) : 0n;
-  const startId = start > seen ? start : seen;
   return recent.some((entry) => {
     if (String(entry?.authorId) === String(botLast.replyTo.authorId)) return false;
     try {
       const id = BigInt(entry?.id);
-      return id > startId && id < end;
+      return id > start && id < end;
     } catch {
       return false;
     }
