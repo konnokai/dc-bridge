@@ -32,7 +32,7 @@
 - [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying 與 REST member 補抓；互動次數接在記憶那一行（你回過他 N 回合，最後一次 X 前）
 - [[discord-group-consensus-memory]] — 提議中的「群共識」記憶類型缺口：管理員新增一句、可過期、每輪注入、擋貶低評價；feedback df_mw6f6fbe08b055；未實作（2026-11-07）
 - [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂；摘要 301 字上限、19 條別名回填、測試保護力
-- [[discord-chatty-channels]] — chattyChannels 主動參與、【參與度】提示、followup 6/天、接話重播與已部署的讓位／純媒體閘門（2026-11-13）
+- [[discord-chatty-channels]] — chattyChannels 主動參與、【參與度】提示與 followup；讓位／純媒體閘門收窄與 2026-11-14 部署狀態（仍影子模式）
 - [[discord-codex-quota]] — Codex 額度查詢（app-server JSON-RPC）、生圖守門 15%/5%、快照、5 小時窗口重置 ping（gpt-6-luna test）
 - [[discord-commandcode-provider]] — Command Code provider switch：預設 provider/model、價目表別名、額度 API 與每月 $70 shortcut（2026-11-07）
 - [[discord-jev-decision-gate]] — Jev 決策閘門分析：模型細節、成本資料（10,958 回合）、結論不值得做、影子模式計畫、provider 切換驗證點（2026-11-07）
