@@ -49,7 +49,7 @@ console.log('## 3. 提示詞');
   ok(formatParticipationHint(undefined) === '', '沒傳值也不帶');
   const hint = formatParticipationHint(true);
   ok(hint.includes(CHATTY_HINT_LINES[0]), 'chatty 帶完整區塊');
-  for (const phrase of ['【參與度】', '就算它問「你」也一樣', '⊘ 的人只是不回他', '新話題、或有人問全頻道', '只有圖片、連結、貼圖']) {
+  for (const phrase of ['【參與度】', '就算它標 ★、問「你」也一樣', '⊘ 的人只是不回他', '新話題、或有人問全頻道', '只有圖片、連結、貼圖']) {
     ok(hint.includes(phrase), `區塊包含「${phrase}」`);
   }
   ok(!hint.includes('schedule_followup'), 'followup 沒開就不叫它排回訪');
@@ -106,6 +106,11 @@ console.log('## 6. 橋接有接上');
   const persona = fs.readFileSync(path.resolve('dsh/agent-presets/dc-chat/agent.cordis.yml'), 'utf8');
   ok(persona.includes('這批有【參與度】區塊時'), 'persona 說明【參與度】優先');
   ok(persona.includes('★ 優先於黑名單'), 'persona 明講 ★ 優先於黑名單');
+  ok(persona.includes('插話接手就退出'), 'persona 明講插話接手就退出');
+  ok(persona.includes('就算標 ★、問「你」也一樣'), '插話接手連 ★ 也適用');
+  ok(persona.includes('符合下面「插話接手就退出」的除外'), '★ 規則排除插話接手');
+  ok(persona.includes('符合「插話接手就退出」的訊息'), 'reaction 該按清單收插話接手');
+  ok(CHATTY_HINT_LINES.join('').includes('標 ★'), '【參與度】的插話退出也明講 ★ 不例外');
   ok(persona.includes('他其他沒標 ★ 的訊息仍然只看不回'), 'persona 的 ⊘ 例外只限退出者本人');
   ok(persona.includes('他說的話仍然算在對話裡'), 'persona 明講 ⊘ 的話仍算對話');
 }
