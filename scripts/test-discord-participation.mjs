@@ -49,7 +49,7 @@ console.log('## 3. 提示詞');
   ok(formatParticipationHint(undefined) === '', '沒傳值也不帶');
   const hint = formatParticipationHint(true);
   ok(hint.includes(CHATTY_HINT_LINES[0]), 'chatty 帶完整區塊');
-  for (const phrase of ['【參與度】', '就算它問「你」也一樣', '⊘ 的人只是不回他', '新話題、或有人問全頻道', '只有圖片、連結、貼圖']) {
+  for (const phrase of ['【參與度】', '就算它標 ★、問「你」也一樣', '⊘ 的人只是不回他', '新話題、或有人問全頻道', '只有圖片、連結、貼圖']) {
     ok(hint.includes(phrase), `區塊包含「${phrase}」`);
   }
   ok(!hint.includes('schedule_followup'), 'followup 沒開就不叫它排回訪');
@@ -90,6 +90,10 @@ console.log('## 6. 橋接有接上');
   ok(bridge.includes('formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled })'), '批次 prompt 會帶【參與度】');
   ok(/chatty \? '' : formatActivityLine\(activity\.stats\(key\)\)/.test(bridge), 'chatty 頻道不印發言頻率');
   ok(bridge.includes('shouldYield({'), '讓位閘門有接上');
+  ok(bridge.includes('botLastByUser.get(key)?.get(userId)'), '讓位只看 bot 回給 T 的那幾則');
+  ok(bridge.includes('replyTargetId(last?.message)'), '讓位要求 T 真的回覆 bot 那一則');
+  ok(bridge.includes('botRepliedOthersAfter'), '讓位要求 bot 也回過插話的人');
+  ok(bridge.includes('const gateTurn = !job.followup'), '讓位閘門所有頻道都跑，純媒體仍只給 chatty');
   ok(bridge.includes('YIELD_GATE_SHADOW'), '讓位閘門影子模式開關存在');
   ok(bridge.includes('isMediaOnlyBatch(job.entries)'), '純媒體閘門有接上');
   ok(bridge.includes('mediaOnly: !fullText'), '批次有記 mediaOnly');
@@ -106,6 +110,11 @@ console.log('## 6. 橋接有接上');
   const persona = fs.readFileSync(path.resolve('dsh/agent-presets/dc-chat/agent.cordis.yml'), 'utf8');
   ok(persona.includes('這批有【參與度】區塊時'), 'persona 說明【參與度】優先');
   ok(persona.includes('★ 優先於黑名單'), 'persona 明講 ★ 優先於黑名單');
+  ok(persona.includes('插話接手就退出'), 'persona 明講插話接手就退出');
+  ok(persona.includes('就算標 ★、問「你」也一樣'), '插話接手連 ★ 也適用');
+  ok(persona.includes('符合下面「插話接手就退出」的除外'), '★ 規則排除插話接手');
+  ok(persona.includes('符合「插話接手就退出」的訊息'), 'reaction 該按清單收插話接手');
+  ok(CHATTY_HINT_LINES.join('').includes('標 ★'), '【參與度】的插話退出也明講 ★ 不例外');
   ok(persona.includes('他其他沒標 ★ 的訊息仍然只看不回'), 'persona 的 ⊘ 例外只限退出者本人');
   ok(persona.includes('他說的話仍然算在對話裡'), 'persona 明講 ⊘ 的話仍算對話');
 }
@@ -114,41 +123,33 @@ console.log('## 7. 讓位閘門');
 {
   const T = '111111111111111111';
   const U = '222222222222222222';
-  const botLast = { id: '1010', at: 1_010_000, replyTo: { id: '1000', authorId: T } };
+  const botLast = { ids: ['1010'], at: 1_010_000, replyTo: { id: '1000', authorId: T } };
   const third = [{ id: '1015', authorId: U }];
-  ok(shouldYield({ botLast, recent: third, batch: [{ id: '1020', userId: T }], now: 1_021_000 }), 'T 之後有人插話 → 讓位');
-  ok(!shouldYield({ botLast, recent: [], batch: [{ id: '1020', userId: T }], now: 1_021_000 }), '沒有插話 → 不讓位');
-  ok(!shouldYield({ botLast, recent: third, batch: [{ id: '1020', userId: T }], hasStar: true, now: 1_021_000 }), '★ 不讓位');
-  ok(!shouldYield({ botLast, recent: third, batch: [{ id: '1020', userId: T }], named: true, now: 1_021_000 }), '叫名字不讓位');
-  ok(!shouldYield({ botLast: { id: '1010', at: 1_010_000, replyTo: null }, recent: third, batch: [{ id: '1020', userId: T }], now: 1_021_000 }), '沒有 reply_to 不讓位');
-  ok(!shouldYield({ botLast, recent: third, batch: [{ id: '1020', userId: U }], now: 1_021_000 }), '最後一則是別人 → 新話題');
-  ok(!shouldYield({ botLast, recent: third, batch: [{ id: '1020', userId: T }], now: botLast.at + YIELD_WINDOW_MS + 1 }), '超過 5 分鐘不讓位');
-  ok(!shouldYield({ botLast, recent: [{ id: '1005', authorId: U }], batch: [{ id: '1020', userId: T }], now: 1_021_000 }), '插話在 bot 回覆之前 → 不算');
-  ok(shouldYield({
-    botLast: { id: '1010', at: 1_010_000, replyTo: { id: '1000', authorId: T } },
-    recent: [{ id: '1005', authorId: U }],
-    batch: [{ id: '1009', userId: T }],
-    now: 1_011_000,
-  }), '交錯：T 的訊息比 bot 早，中間的插話要算');
-  ok(shouldYield({
-    botLast: { id: '1010', at: 1_010_000, replyTo: { id: '1000', authorId: T } },
-    recent: [{ id: '1015', authorId: U }],
+  const call = (extra = {}) => ({
+    botLast,
+    recent: third,
     batch: [{ id: '1020', userId: T }],
+    replyToId: '1010',
+    botAfter: true,
     now: 1_021_000,
-  }), '正常：bot 之後、T 之前有插話 → 讓位');
-  ok(!shouldYield({ botLast, recent: [{ id: '1015', authorId: T }], batch: [{ id: '1020', userId: T }], now: 1_021_000 }), '只有 T 自己回來 → 不讓位');
-  ok(!shouldYield({
-    botLast: { id: '1010', seenId: '1005', at: 1_010_000, replyTo: { id: '1000', authorId: T } },
-    recent: [{ id: '1005', authorId: U }],
-    batch: [{ id: '1009', userId: T }],
-    now: 1_011_000,
-  }), '交錯：插話在 bot 已看過範圍內 → 不讓位');
-  ok(!shouldYield({
-    botLast: { id: '1010', at: 1_010_000, replyTo: { id: '1000', authorId: T } },
-    recent: [{ id: 'not-a-snowflake', authorId: U }],
-    batch: [{ id: '1020', userId: T }],
-    now: 1_021_000,
-  }), 'id 不是數字 → 放行');
+    ...extra,
+  });
+  ok(shouldYield(call()), 'T 回覆 bot 那一則，中間有人插話 → 讓位');
+  ok(!shouldYield(call({ recent: [] })), '沒有插話 → 不讓位');
+  ok(!shouldYield(call({ replyToId: '' })), '★ 但沒回覆 bot 那一則 → 不讓位');
+  ok(!shouldYield(call({ replyToId: '1005' })), '回覆的不是 bot 給他的那一則 → 不讓位');
+  ok(shouldYield(call({
+    botLast: { ids: ['1010', '1012'], at: 1_010_000, replyTo: { id: '1000', authorId: T } },
+  })), '長訊息切成多段，回覆第一段 → 讓位');
+  ok(!shouldYield(call({ botAfter: false })), 'bot 沒回過插話的人 → 不讓位');
+  ok(!shouldYield(call({ othersStar: true })), '同批有別人的 ★ → 不讓位');
+  ok(!shouldYield(call({ named: true })), '叫名字不讓位');
+  ok(!shouldYield(call({ botLast: { ids: ['1010'], at: 1_010_000, replyTo: null } })), 'bot 沒回過他 → 不讓位');
+  ok(!shouldYield(call({ batch: [{ id: '1020', userId: U }] })), '最後一則是別人 → 新話題');
+  ok(!shouldYield(call({ now: botLast.at + YIELD_WINDOW_MS + 1 })), '超過 5 分鐘不讓位');
+  ok(!shouldYield(call({ recent: [{ id: '1005', authorId: U }] })), '插話在 bot 回覆之前 → 不算');
+  ok(!shouldYield(call({ recent: [{ id: '1015', authorId: T }] })), '只有 T 自己回來 → 不讓位');
+  ok(!shouldYield(call({ recent: [{ id: 'not-a-snowflake', authorId: U }] })), 'id 不是數字 → 放行');
 }
 {
   ok(isMediaOnlyBatch([{ mediaOnly: true }, { mediaOnly: true }]), '整批純媒體');

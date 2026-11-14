@@ -29,6 +29,9 @@ description: chattyChannels 主動參與模式、【參與度】提示、followu
 - chatty 純媒體批次由 `isMediaOnlyBatch` 跳過；目前只辨識無文字的圖片／貼圖，不涵蓋只有連結的訊息。bot 名稱比對只看 `rawText`，目前字串固定為「大肥魚／肥魚」，改 persona 名稱時要同步修改。
 - 跳過時執行 `primedKeys.delete` 並將最後一則放進 `silentPending`，讓後續批次補帶 context；若被跳過批次長於 `context.messages`，較舊訊息可能漏掉。
 - 截至 2026-11-13，`YIELD_GATE_SHADOW = true`，兩個閘門都只記 log、不影響模型回合。影子 log 在 `~/.pm2/logs/dc-bridge-out.log`，包含 bot、seen、T、batch、recent 的 id，不含訊息本文。commit `0ce887f` 已部署測試伺服器；當時尚未切正式模式或 `/reset`。
+- 2026-11-14：`chattyChannels` 只有 `739040035571236905`、`1564602942839853116`、`1564618925180723230`。正式群 `ch:1073905098457108551` 不在名單，兩個閘門都不會跑；那邊的 ★ 插話接手改由 persona 判斷（同一個對話串已答過、中間有別的人類插話、他又接著問 → 只按一個 reaction），persona 對所有頻道生效。
+- 影子 log 實測（11-14 00:00–21:51，21 小時）：讓位 18 次、純媒體 19 次，全部在 `739040035571236905`。兩個誤擋：12:26 凱爾希（在回答 bot 自己問「飛天貓是哪隻」）、18:13 頭上的沒晃啊（畫圖回饋）。共同點是 T 的訊息不是回覆 bot。
+- 2026-11-14 收窄並改到所有頻道：只擋「T 回覆的正是 bot 回給他的那一則」（`replyTargetId`，轉發不算），bot 那一則用每個人各自的最後幾則（`botLastByUser`，長訊息切段都留）；還要 bot 之後也回過插話的人（`botAfter`）。同批有別人的 ★ 整批不擋。★ 不再豁免。純媒體閘門仍只給 chatty、仍要求沒有 ★。影子 log 多了 `reply`、`botAfter`、`others★` 三個欄位。
 - 將 `YIELD_GATE_SHADOW` 改成 `false` 會同時啟用兩個閘門：匹配的批次不會送進模型，因此不會有回覆、typing 或 token 用量。跳過批次會在後續 context 補帶，但可能受 `context.messages` 上限影響。兩閘門共用此開關，不能分開啟用。
 - 驗證：`node scripts/test-discord-participation.mjs`、`node scripts/test-discord-bridge.mjs`、`node scripts/build-agent-preset-patches.mjs --check` 通過；`npm run test:discord` 為 31/31 scripts passed。
 
