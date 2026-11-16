@@ -1,6 +1,6 @@
 ---
 name: discord-chatty-channels
-description: chattyChannels 主動參與模式、【參與度】提示、followup 上限，以及 2026-11-13 部署的讓位與純媒體閘門
+description: chattyChannels 主動參與、followup 上限，以及讓位／純媒體閘門的影子觀察與查詢方式
 ---
 
 `discord.chattyChannels`：頻道 ID 陣列，列在這裡的頻道不套「10 分鐘送了幾則」活動行與 N×5 閘門，批次前多一段【參與度】提示，沒 ★ 也可以接，並允許用 `schedule_followup` 自己排回訪開新話題。
@@ -32,7 +32,9 @@ description: chattyChannels 主動參與模式、【參與度】提示、followu
 - 收窄前的設定快照（2026-11-14）：`chattyChannels` 有三個頻道，正式群不在名單，所以舊版兩個閘門不會在正式群執行；那邊的 ★ 插話接手由 persona 判斷。之後讓位閘門改成所有頻道執行，見下方收窄紀錄。
 - 影子 log 實測（11-14 00:00–21:51，21 小時）：讓位 18 次、純媒體 19 次，全部在 `739040035571236905`。兩個誤擋：12:26 凱爾希（在回答 bot 自己問「飛天貓是哪隻」）、18:13 頭上的沒晃啊（畫圖回饋）。共同點是 T 的訊息不是回覆 bot。
 - 2026-11-14 收窄並改到所有頻道：只擋「T 回覆的正是 bot 回給他的那一則」（`replyTargetId`，轉發不算），bot 那一則用每個人各自的最後幾則（`botLastByUser`，長訊息切段都留）；還要 bot 之後也回過插話的人（`botAfter`）。同批有別人的 ★ 整批不擋。★ 不再豁免。純媒體閘門仍只給 chatty、仍要求沒有 ★。影子 log 多了 `reply`、`botAfter`、`others★` 三個欄位。
-- 2026-11-16 觀察（部署後 39 小時）：讓位 0 次、純媒體 52 次（全在 `739040035571236905`，全是 1 則純附件／貼圖，抽 3 筆都「不接」）。公共頻道 400 則人工比對有 2 個接近型態，都沒觸發且原因正確（一個 bot 回插話者在 T 之後、`botAfter=0`；一個 bot 沒回插話者）。使用者決定先維持影子。詳細查詢步驟在 OpenChamber 的 Notes「讓位／純媒體閘門觀察（2026-11-16）」。
+- 2026-11-16 觀察（部署後 39 小時）：讓位 0 次、純媒體 52 次（全在 `739040035571236905`，全是 1 則純附件／貼圖，抽 3 筆都「不接」）。公共頻道最近 400 則人工比對有 2 個接近型態，都沒觸發且原因正確（一個 bot 尚未回插話者，`botAfter=0`；一個 bot 沒回插話者）。樣本不足以評估誤擋率；使用者決定先維持影子，沒有部署切換。
+- 下次查詢先看 `~/.pm2/logs/`：每日輪替檔 `dc-bridge-out__YYYY-MM-DD_00-00-00.log` 存前一天內容，當天在 `dc-bridge-out.log`。用 `grep '讓位（影子' ~/.pm2/logs/dc-bridge-out*.log` 和 `grep '純媒體（影子' ~/.pm2/logs/dc-bridge-out*.log` 找命中。log 只有訊息 ID，沒有內文。
+- 讓位命中要核對：`batch` 訊息的 `message_reference.message_id` 等於 `reply`；`reply` 是 bot 回給 T 的訊息；`botAfter=1`；`others★=0`。用 `recent=id:author` 找插話者，讀取相關 Discord 訊息判斷 T 是重複追問還是新問題；新問題被擋才算誤擋。確認被跳過的訊息會進後續 context，但可能受 `context.messages` 上限影響。
 - 將 `YIELD_GATE_SHADOW` 改成 `false` 會同時啟用兩個閘門：匹配的批次不會送進模型，因此不會有回覆、typing 或 token 用量。跳過批次會在後續 context 補帶，但可能受 `context.messages` 上限影響。兩閘門共用此開關，不能分開啟用。
 - 驗證：`node scripts/test-discord-participation.mjs`、`node scripts/test-discord-bridge.mjs`、`node scripts/build-agent-preset-patches.mjs --check` 通過；`npm run test:discord` 為 31/31 scripts passed。
 

@@ -11,5 +11,8 @@ description: 控制台功能設定的 API 白名單、立即生效與 config.jso
 - 修正程式不會修復已寫入設定檔的 `0`；2026-11-13 測試伺服器曾因此失去自動 reaction，已手動恢復為 `0.15`。
 - 數字輸入留空時不要送 patch：`Number('')` 會得到 `0`，而表單使用 `novalidate`。控制台也應略過非有限數值。
 - 批次器設定若要在運行中更新，必須以 getter 讀取目前 `cfg.discord.batch`，不能只在啟動時複製數值。現有批次的 timer 不會因設定儲存而自動重排；後續批次操作才讀到新值。
+- `/api/providers/key` 比一般控制台 API 更嚴格：只接受 `Authorization: Bearer <token>`，不接受 `?token=` 或 `x-console-token`，且要求 `application/json`。
+- 此端點要在內部攔截 JSON 解析錯誤並回通用 400；`JSON.parse` 的錯誤訊息可能包含送入的金鑰片段，若交給外層 logger，會進記憶體 log ring。
+- 憑證查詢只回 `configured`、`writable`、`source`；可寫的 credential ref 必須由伺服器白名單對應。詳見 [[discord-ttft-fallback]]。
 
 相關：[[discord-console-settings]]、[[discord-deploy]]。

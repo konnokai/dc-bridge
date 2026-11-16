@@ -13,4 +13,4 @@ description: TTFT 超時取消慢回合：設定、串流偵測、取消與保�
 - 取消失敗只寫 log，不放 gate、不送誤導訊息。5 分鐘 `TURN_RELEASE_MS` 保險絲仍在。
 - 已部署；TTFT 行為無自動化測試（僅設定範圍測試 + live DSH 串流探針）。
 
-相關：[[discord-quiet-gate]]。
+相關：[[discord-quiet-gate]]、[[discord-ttft-fallback]]。

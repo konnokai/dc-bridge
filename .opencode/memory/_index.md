@@ -11,7 +11,7 @@
 - [[gh-read-remote-file]] — `gh api … --jq .content` 在 PowerShell 解 base64 的正確寫法
 - [[dc-bridge-tests]] — 測試套件結構、輸出重定向到檔案再讀、preset patch 重生
 - [[discord-deploy]] — `npm ci`、文件排除、部署完成標記、修復流程與 DSH 重啟範圍
-- [[discord-console-config]] — 控制台功能設定的 API 白名單、即時生效與 config.json 寫回規則
+- [[discord-console-config]] — 控制台欄位白名單、即時生效、config.json 寫回與 provider 憑證端點安全
 - [[discord-agent-gaps-plan]] — PLAN_AGENT_GAPS 執行慣例：熱點檔案、三條線、新增 MCP 工具 9 處 checklist、完成條件
 - [[discord-dream-safety]] — Dream agent 早期誤觸原始碼的未提交改動與清理提醒（2026-11-07）
 - [[discord-upstream-sync]] — 上游對齊基準（b145a83）、空合併清 behind、安全批次吸收、固定決策
@@ -32,10 +32,10 @@
 - [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying 與 REST member 補抓；互動次數接在記憶那一行（你回過他 N 回合，最後一次 X 前）
 - [[discord-group-consensus-memory]] — 提議中的「群共識」記憶類型缺口：管理員新增一句、可過期、每輪注入、擋貶低評價；feedback df_mw6f6fbe08b055；未實作（2026-11-07）
 - [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂；摘要 301 字上限、19 條別名回填、測試保護力
-- [[discord-chatty-channels]] — chattyChannels 主動參與、【參與度】提示與 followup；讓位／純媒體閘門收窄與 2026-11-14 部署狀態（仍影子模式）
+- [[discord-chatty-channels]] — chattyChannels 主動參與、followup；讓位／純媒體閘門影子狀態、觀察結果與伺服器 log 查詢方式
 - [[discord-codex-quota]] — Codex 額度查詢（app-server JSON-RPC）、生圖守門 15%/5%、快照、5 小時窗口重置 ping（gpt-6-luna test）
 - [[discord-commandcode-provider]] — Command Code provider switch：預設 provider/model、價目表別名、額度 API 與每月 $70 shortcut（2026-11-07）
-- [[discord-jev-decision-gate]] — Jev 決策閘門分析：模型細節、成本資料（10,958 回合）、結論不值得做、影子模式計畫、provider 切換驗證點（2026-11-07）
+- [[discord-jev-decision-gate]] — Jev 普通對話閘門成本結論，以及黑話候選分流、控制台門檻與 auto 區間驗證（2026-11-16）
 - [[discord-quiet-gate]] — 安靜期間 /send 閘門擋 send_message/send_sticker/create_poll
 - [[discord-video-subtitles]] — view_message 的 YouTube 連結影片字幕支援：yt-dlp、VTT 解析、章節、直連網址、縮排、白名單
 - [[discord-web-fetch]] — Google Docs/Slides/Sheets export、HTML 抽取、Content-Encoding 解壓與二進位 guard、normalizeWebFetchUrl 回 {url, expectText}
@@ -50,7 +50,9 @@
 - [[discord-session-reload]] — /reload-system-prompt 交接摘要系統：產生摘要、新會話帶入一次、/reset 清除、敏感閘門、排隊訊息保留
 - [[discord-skip-marker]] — `\//` 整則忽略訊息、bot 訊息例外與缺口
 - [[discord-ttft-timeout]] — TTFT 超時取消、串流 first-token、5 秒保底放行
+- [[discord-ttft-fallback]] — TTFT hedge 外掛、12 秒門檻、設定同步、DSH 限制與憑證 API
 - [[discord-slang-mcp]] — 黑話／頻道標籤 MCP、候選容量策略、備份保留與 DSH 日誌復原掃描
+- [[discord-slang-batch-actions]] — 控制台黑話／頻道風格候選批次確認拒絕，以及僅選本頁與伺服端狀態檢查
 - [[discord-agent-extras]] — 收回 reaction、常用表情統計、回訪排程（持久化、控制台、取消）、發言頻率與回饋的限制與行為
 - [[discord-auto-reactions]] — 橋接自動 reaction 的觸發、限制、設定開關，以及它和模型 add_reaction 的區別
 - [[discord-trigger-stats]] — 對話觸發統計計數、console 分頁、bot 查詢、/forget
