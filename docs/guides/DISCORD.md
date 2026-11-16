@@ -179,8 +179,8 @@ pm2 logs dc-bridge
 | `slang.learnerPreset` | 學習會話用的 preset，預設 `dc-learner`（沒有工具、短 prompt） |
 | `slang.timeoutMs` | 學習回合逾時，預設 90000 |
 | `slang.jev.mode` | Jev 自動分流黑話候選的模式，預設 `"off"`。`off`／`shadow`（只記機率）／`reject`（只自動拒絕）／`auto`（也自動確認）。要 Command Code 的 Provider API 額度與 key；沒有的 fork 保持 `off` |
-| `slang.jev.confirmAt` | `auto` 模式自動確認的機率門檻（0～1），預設 0.9；控制台不給改 |
-| `slang.jev.rejectBelow` | `reject`／`auto` 模式自動拒絕的機率門檻（0～1），預設 0.05；控制台不給改 |
+| `slang.jev.confirmAt` | `auto` 模式自動確認的機率門檻（0～1），預設 0.9 |
+| `slang.jev.rejectBelow` | `reject`／`auto` 模式自動拒絕的機率門檻（0～1），預設 0.05；`auto` 模式必須低於 `confirmAt`，否則啟動或存檔會被擋下 |
 | `trade.enabled` | 模擬股票開關，預設 `false`。開啟後才能查價、下單、看 `/portfolio` 與控制台「股盤」分頁；工具仍可能出現在模型清單，呼叫時會回「沒有開啟」 |
 | `trade.allowedGuilds` / `trade.allowedChannels` | 開放交易的伺服器／頻道 id；留空＝不額外限制。下單與排行榜都看這兩份名單 |
 | `trade.extraHolidays` | 額外休市日（`YYYY-MM-DD` 陣列），給颱風或臨時停市用；平日休市不會排隊下單或結算 |

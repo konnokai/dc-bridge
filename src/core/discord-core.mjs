@@ -111,8 +111,11 @@ export function normalizeDiscordConfig(raw) {
   const JEV_MODES = new Set(['off', 'shadow', 'reject', 'auto']);
   const jevMode = JEV_MODES.has(src.slang?.jev?.mode) ? src.slang.jev.mode : 'off';
   const jevConfirmAt = ratio(src.slang?.jev?.confirmAt, 0.9);
-  // 兩個門檻重疊時以 confirmAt 為上限：同一段機率不能同時被拒絕和確認。
-  const jevRejectBelow = Math.min(ratio(src.slang?.jev?.rejectBelow, 0.05), jevConfirmAt);
+  const jevRejectBelow = ratio(src.slang?.jev?.rejectBelow, 0.05);
+  // auto 模式沒有重疊的空間：門檻相等或顛倒等於每個候選都會被自動處理。
+  if (jevMode === 'auto' && jevConfirmAt <= jevRejectBelow) {
+    throw new Error('discord.slang.jev：auto 模式的 confirmAt 必須高於 rejectBelow，否則沒有留給人工的區間');
+  }
 
   return {
     token: typeof src.token === 'string' ? src.token.trim() : '',

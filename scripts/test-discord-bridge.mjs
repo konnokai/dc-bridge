@@ -281,8 +281,13 @@ console.log('## 1. 設定收斂');
   ok(jev.mode === 'auto' && jev.confirmAt === 0.8 && jev.rejectBelow === 0.1, 'Jev 門檻可設定');
   const badJev = normalizeDiscordConfig({ slang: { jev: { confirmAt: 5, rejectBelow: null } } }).slang.jev;
   ok(badJev.confirmAt === 0.9 && badJev.rejectBelow === 0.05, '超出 0～1 或非數字的門檻回預設');
-  const overlapJev = normalizeDiscordConfig({ slang: { jev: { confirmAt: 0.6, rejectBelow: 0.8 } } }).slang.jev;
-  ok(overlapJev.rejectBelow <= overlapJev.confirmAt, '拒絕門檻不會高於確認門檻');
+  const overlapJev = normalizeDiscordConfig({ slang: { jev: { mode: 'reject', confirmAt: 0.6, rejectBelow: 0.8 } } }).slang.jev;
+  ok(overlapJev.rejectBelow === 0.8, 'reject 模式不套 auto 的區間限制');
+  throws(
+    () => normalizeDiscordConfig({ slang: { jev: { mode: 'auto', confirmAt: 0.6, rejectBelow: 0.8 } } }),
+    /confirmAt/,
+    'auto 模式的確認門檻必須高於拒絕門檻'
+  );
   ok(normalizeDiscordConfig({ slang: { jev: { mode: 'bogus' } } }).slang.jev.mode === 'off', '不認得的模式回 off');
 
   ok(cfg.sandbox.enabled === false && cfg.sandbox.channels.length === 0, '沙箱預設關閉');

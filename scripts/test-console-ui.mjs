@@ -1461,7 +1461,7 @@ try {
         })
         .map((h) => h.firstChild.textContent));
       assert.deepEqual(unnamed, [], '每個功能區都有中文區名');
-      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 50, '50 個功能欄位都還在');
+      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 52, '52 個功能欄位都還在');
       assert.equal(await p.locator('#cf-slang-jev-mode').inputValue(), 'auto', 'Jev 模式要從設定帶入');
       assert.equal(await p.locator('#fsec-tts #cf-tts-channels').count(), 1, 'TTS 欄位歸在語音區');
       assert.equal(await p.locator('#fsec-videoLinks #cf-videoLinks-enabled').count(), 1, '影片連結自己一區');
@@ -1494,9 +1494,12 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：存功能設定不會把 Jev 模式改回 off', async () => {
+  if (!original) await test('Discord 控制台：存功能設定不會把 Jev 設定改掉', async () => {
     const posts = [];
-    const current = { allow: {}, deny: {}, ownerIds: [], media: {}, slang: { jev: { mode: 'auto' } } };
+    const current = {
+      allow: {}, deny: {}, ownerIds: [], media: {},
+      slang: { jev: { mode: 'auto', confirmAt: 0.8, rejectBelow: 0.1 } },
+    };
     const dc = await startConsole({
       port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
       handlers: {
@@ -1520,10 +1523,14 @@ try {
       p.setDefaultTimeout(8000);
       await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#settings`);
       await p.waitForFunction(() => document.querySelector('#cf-slang-jev-mode')?.value === 'auto');
+      assert.equal(await p.locator('#cf-slang-jev-confirmAt').inputValue(), '0.8', '確認門檻要從設定帶入');
+      assert.equal(await p.locator('#cf-slang-jev-rejectBelow').inputValue(), '0.1', '拒絕門檻要從設定帶入');
       const response = p.waitForResponse(r => new URL(r.url()).pathname === '/api/config' && r.request().method() === 'POST');
       await p.locator('#feature-form button[type="submit"]').click();
       await response;
       assert.equal(posts.at(-1).slang.jev.mode, 'auto', '沒改的 Jev 模式要原樣送回');
+      assert.equal(posts.at(-1).slang.jev.confirmAt, 0.8, '沒改的確認門檻要原樣送回');
+      assert.equal(posts.at(-1).slang.jev.rejectBelow, 0.1, '沒改的拒絕門檻要原樣送回');
     } finally {
       await dcContext.close();
       await dc.close();

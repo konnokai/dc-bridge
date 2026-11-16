@@ -1908,7 +1908,9 @@
     { path: 'slang.enabled', label: 'slang.enabled：黑話學習', kind: 'bool' },
     { path: 'slang.injectMax', label: 'slang.injectMax：帶幾條', kind: 'number', min: 1, max: 30, step: 1 },
     { path: 'slang.maxChars', label: 'slang.maxChars：注入上限（字）', kind: 'number', min: 200, max: 4000, step: 50 },
-    { path: 'slang.jev.mode', label: 'slang.jev.mode：Jev 自動分流（off／shadow／reject／auto；門檻改 config.json）', kind: 'select', options: ['off', 'shadow', 'reject', 'auto'] },
+    { path: 'slang.jev.mode', label: 'slang.jev.mode：Jev 自動分流（off／shadow／reject／auto）', kind: 'select', options: ['off', 'shadow', 'reject', 'auto'] },
+    { path: 'slang.jev.confirmAt', label: 'slang.jev.confirmAt：自動確認門檻（0～1）', kind: 'number', min: 0, max: 1, step: 0.01 },
+    { path: 'slang.jev.rejectBelow', label: 'slang.jev.rejectBelow：自動拒絕門檻（0～1；auto 模式必須低於 confirmAt）', kind: 'number', min: 0, max: 1, step: 0.01 },
   ];
   const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
   const setPath = (obj, path, value) => {

@@ -6805,8 +6805,7 @@ async function main() {
       followup: pick(cfg.discord.followup, patch?.followup, ['enabled']),
       slang: {
         ...pick(cfg.discord.slang, patch?.slang, ['enabled', 'injectMax', 'maxChars']),
-        // 控制台只改模式，門檻留在 config.json（跟 sandbox 的做法一樣）。
-        jev: pick(cfg.discord.slang.jev, patch?.slang?.jev, ['mode']),
+        jev: pick(cfg.discord.slang.jev, patch?.slang?.jev, ['mode', 'confirmAt', 'rejectBelow']),
       },
       videoLinks: pick(cfg.discord.videoLinks, patch?.videoLinks, ['enabled']),
       // 純量欄位只認正確型別：normalize 對 boolean 用 `!== false`，字串 "false" 會變成 true。
