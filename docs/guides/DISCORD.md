@@ -178,6 +178,9 @@ pm2 logs dc-bridge
 | `slang.maxCandidates` | 候選上限，預設 200；已確認與已拒絕不裁剪 |
 | `slang.learnerPreset` | 學習會話用的 preset，預設 `dc-learner`（沒有工具、短 prompt） |
 | `slang.timeoutMs` | 學習回合逾時，預設 90000 |
+| `slang.jev.mode` | Jev 自動分流黑話候選的模式，預設 `"off"`。`off`／`shadow`（只記機率）／`reject`（只自動拒絕）／`auto`（也自動確認）。要 Command Code 的 Provider API 額度與 key；沒有的 fork 保持 `off` |
+| `slang.jev.confirmAt` | `auto` 模式自動確認的機率門檻（0～1），預設 0.9；控制台不給改 |
+| `slang.jev.rejectBelow` | `reject`／`auto` 模式自動拒絕的機率門檻（0～1），預設 0.05；控制台不給改 |
 | `trade.enabled` | 模擬股票開關，預設 `false`。開啟後才能查價、下單、看 `/portfolio` 與控制台「股盤」分頁；工具仍可能出現在模型清單，呼叫時會回「沒有開啟」 |
 | `trade.allowedGuilds` / `trade.allowedChannels` | 開放交易的伺服器／頻道 id；留空＝不額外限制。下單與排行榜都看這兩份名單 |
 | `trade.extraHolidays` | 額外休市日（`YYYY-MM-DD` 陣列），給颱風或臨時停市用；平日休市不會排隊下單或結算 |
@@ -1141,8 +1144,12 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - **收哪些訊息**：`allow.guilds` / `allow.channels` 內 bot 讀得到的伺服器頻道都收，包含不給 `@everyone` 看的頻道、
   私密討論串、NSFW 頻道（很多伺服器把頻道只開給某個身分組，用 `@everyone` 判斷會什麼都收不到）。
   不收：私聊、bot 的訊息、`!`／`/` 開頭的指令、含本機路徑／憑證特徵的訊息。
-  因為每個詞都要管理員確認才會注入，私密頻道的內容不會自己流到別的頻道或別的伺服器。
-- **不會自動轉正**：候選只存在 `state/discord-slang.json`，控制台按「確認」才會注入。
+  因為預設每個詞都要管理員確認才會注入，私密頻道的內容不會自己流到別的頻道或別的伺服器；
+  `auto` 模式例外（見下面「Jev 自動分流」）。
+- **預設不會自動轉正**：候選只存在 `state/discord-slang.json`，控制台按「確認」才會注入；
+  只有 `slang.jev.mode` 開到 `auto` 時，Jev 才會替高機率的候選按確認（見下面「Jev 自動分流」）。
+- **批次確認**：控制台的黑話與頻道風格兩張表都有勾選欄，勾選後按「確認選取」或「拒絕選取」一次處理整批；
+  「全選本頁」只選這一頁還是候選的項目，換頁、換篩選或搜尋會清掉選取。批次只處理候選，其他狀態會跳過並回報筆數。
 - **全部伺服器共用**：網路用語不太分哪一服，A 服確認的詞 B 服也會用到。同一個詞不管在哪一服學到，
   都只存一筆、累加出現次數；詞條的 `guildId` 只記第一次在哪一服學到。
   改成共用之前各服各自學過的同一個詞會留著重複的幾筆，注入只帶出現次數最高的那筆，其餘可以在控制台刪掉。
@@ -1171,6 +1178,12 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 "slang": { "enabled": true }
 ```
 
+先看 Jev 的判斷（影子模式，不改狀態）：
+
+```json
+"slang": { "enabled": true, "jev": { "mode": "shadow" } }
+```
+
 控制台「黑話詞庫」卡片可以確認／拒絕／編輯／刪除，候選排在最前面；已拒絕的詞可以按「復原」改回已確認。詞庫檔在
 `state/discord-slang.json`（`state/` 已被 gitignore）；壞檔會備份成 `.corrupt-<timestamp>`
 再重建，成功載入後會留一份 `.bak`；只裁剪候選（預設 200），已確認與已拒絕不因容量刪除。
@@ -1194,6 +1207,29 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 
 > `dc-learner` 由 `node scripts/setup-dsh.mjs --discord` 安裝（跟 `dc-chat` 同一個 bundle）。
 > 如果 DSH 的 preset 清單沒有它，學習會記一行錯誤並跳過，聊天不受影響；重跑安裝再重啟 DSH 即可。
+
+### Jev 自動分流（選用）
+
+候選太多時，可以讓 Command Code 的 `typesafe/jev` 決策模型先看一遍，替你按掉一部分。
+它只回機率、不回文字，所以不會改意思，也不會產生新的詞。
+
+- **預設關閉**：`slang.jev.mode` 是 `"off"`，完全不會連外、不會讀憑證、不會寫 log。
+  這個功能吃 Command Code 的 Provider API 額度（每 M 輸入 token $0.04，輸出免費，算在同一個 credits 池），
+  沒有訂閱的 fork 保持 `off`。
+- **四段模式**：`shadow` 只把每個候選的機率寫進 `state/discord-slang-triage.jsonl`，不改任何狀態；
+  `reject` 加上「`p <= rejectBelow` 自動拒絕」；`auto` 再加上「`p >= confirmAt` 自動確認」。
+  建議照順序開，先跑一兩週影子模式，拿你實際按的確認／拒絕對照再往下開。
+- **只處理新的黑話候選**：`record_slang` 工具自己收的詞、以及開啟前就在排隊的候選不會補判。
+  頻道風格一律人工（風格會影響人格）。
+- **失敗一律放行**：逾時、HTTP 錯誤、回覆解析失敗、沒有 key 都只記一行日誌，候選維持原狀。
+- **key**：先看環境變數 `COMMANDCODE_API_KEY`，沒有就讀 DSH 憑證庫的同一把（跟額度查詢一樣）。
+- **送出去的內容**：候選的詞、意思、用法，加上最近 30 筆已確認與 20 筆已拒絕的詞和意思當例子，
+  送到 `api.commandcode.ai`。不送例句、不送來源訊息或使用者 id。
+  DSH 本來就用同一個 provider，沒有多一個第三方；Jev 沒有 ZDR。
+- **判斷標準寫在 prompt 裡**：成員暱稱、AI 人設描述、要看外部連結或特定作品才懂的、一般字典詞、
+  純語氣或風格描述都算「不該收」；需要這個群的語境才懂的梗才算「該收」。
+- 自動確認前一律再過一次敏感閘門（不管 `security.blockSensitive` 開不開），命中就不確認。
+- `auto` 會讓私密或 NSFW 頻道學到的詞不經人工就注入所有伺服器；不想要這個效果就停在 `reject`。
 
 ### 觸發對話統計
 

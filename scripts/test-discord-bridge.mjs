@@ -275,6 +275,15 @@ console.log('## 1. 設定收斂');
     && slang.injectMax === 30 && slang.maxChars === 200 && slang.maxCandidates === 10
     && !('maxConfirmed' in slang) && slang.timeoutMs === 15_000, '黑話數字欄位收斂');
   ok(slang.learnerPreset === 'dc-learner', '空的 learnerPreset 回預設');
+  ok(cfg.slang.jev.mode === 'off' && cfg.slang.jev.confirmAt === 0.9 && cfg.slang.jev.rejectBelow === 0.05,
+    'Jev 預設關閉');
+  const jev = normalizeDiscordConfig({ slang: { jev: { mode: 'auto', confirmAt: 0.8, rejectBelow: 0.1 } } }).slang.jev;
+  ok(jev.mode === 'auto' && jev.confirmAt === 0.8 && jev.rejectBelow === 0.1, 'Jev 門檻可設定');
+  const badJev = normalizeDiscordConfig({ slang: { jev: { confirmAt: 5, rejectBelow: null } } }).slang.jev;
+  ok(badJev.confirmAt === 0.9 && badJev.rejectBelow === 0.05, '超出 0～1 或非數字的門檻回預設');
+  const overlapJev = normalizeDiscordConfig({ slang: { jev: { confirmAt: 0.6, rejectBelow: 0.8 } } }).slang.jev;
+  ok(overlapJev.rejectBelow <= overlapJev.confirmAt, '拒絕門檻不會高於確認門檻');
+  ok(normalizeDiscordConfig({ slang: { jev: { mode: 'bogus' } } }).slang.jev.mode === 'off', '不認得的模式回 off');
 
   ok(cfg.sandbox.enabled === false && cfg.sandbox.channels.length === 0, '沙箱預設關閉');
   const sandbox = normalizeDiscordConfig({ sandbox: { enabled: true, channels: [CHANNEL], timeoutMs: 1 } }).sandbox;

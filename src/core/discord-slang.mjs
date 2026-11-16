@@ -204,10 +204,10 @@ function findEntry(store, id) {
  * 同一個詞（正規化後）不管在哪一服學到都只留一筆：`seen +1`、補空欄位、合併來源。
  * 頻道風格（`kind: 'style'`）改成同一個頻道、同一個標籤只留一筆。
  * 已 rejected 的詞不再復活（使用者已經明確拒絕過）。
- * @returns {{added: number, updated: number, skipped: number}}
+ * @returns {{added: number, updated: number, skipped: number, addedIds: string[]}}
  */
 export function upsertCandidates(store, { guildId = '', channelId = '', items = [], samples = [], now = Date.now() } = {}) {
-  const stats = { added: 0, updated: 0, skipped: 0 };
+  const stats = { added: 0, updated: 0, skipped: 0, addedIds: [] };
   const gid = clean(guildId, 24);
   const cid = clean(channelId, 24);
   store.entries ??= [];
@@ -259,7 +259,7 @@ export function upsertCandidates(store, { guildId = '', channelId = '', items = 
       continue;
     }
 
-    store.entries.push(normalizeSlangEntry({
+    const entry = normalizeSlangEntry({
       id: newId(),
       kind,
       guildId: gid,
@@ -273,7 +273,9 @@ export function upsertCandidates(store, { guildId = '', channelId = '', items = 
       sources,
       createdAt: stamp,
       updatedAt: stamp,
-    }));
+    });
+    store.entries.push(entry);
+    stats.addedIds.push(entry.id);
     stats.added += 1;
   }
   return stats;
@@ -401,6 +403,34 @@ export function rejectSlang(store, id, now = Date.now()) {
   entry.status = SLANG_STATUS.REJECTED;
   entry.updatedAt = iso(now);
   return entry;
+}
+
+/**
+ * 控制台批次確認／拒絕：只處理還是候選的詞條，其他狀態與不存在的 id 都跳過。
+ * 狀態檢查放在這裡，不靠控制台不顯示勾選框；呼叫端負責存檔一次就好。
+ */
+export function confirmSlangMany(store, ids, now = Date.now()) {
+  const result = { confirmed: 0, skipped: 0 };
+  for (const id of new Set(Array.isArray(ids) ? ids : [])) {
+    const entry = findEntry(store, id);
+    if (!entry || entry.status !== SLANG_STATUS.CANDIDATE) { result.skipped += 1; continue; }
+    entry.status = SLANG_STATUS.CONFIRMED;
+    entry.updatedAt = iso(now);
+    result.confirmed += 1;
+  }
+  return result;
+}
+
+export function rejectSlangMany(store, ids, now = Date.now()) {
+  const result = { rejected: 0, skipped: 0 };
+  for (const id of new Set(Array.isArray(ids) ? ids : [])) {
+    const entry = findEntry(store, id);
+    if (!entry || entry.status !== SLANG_STATUS.CANDIDATE) { result.skipped += 1; continue; }
+    entry.status = SLANG_STATUS.REJECTED;
+    entry.updatedAt = iso(now);
+    result.rejected += 1;
+  }
+  return result;
 }
 
 /** 編輯詞條內容（不改狀態）。 */

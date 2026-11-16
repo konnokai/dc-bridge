@@ -10,6 +10,7 @@ import {
   buildSlangHint,
   buildStyleHint,
   confirmSlang,
+  confirmSlangMany,
   createSlangStore,
   deleteSlang,
   loadSlangFile,
@@ -20,12 +21,21 @@ import {
   recordChannelTag,
   recordSlang,
   rejectSlang,
+  rejectSlangMany,
   saveSlangFile,
   slangStats,
   styleLabels,
   updateSlang,
   upsertCandidates,
 } from '../src/core/discord-slang.mjs';
+import {
+  JEV_ENDPOINT,
+  askJev,
+  buildSlangTriage,
+  parseJevProbabilities,
+  planTriage,
+  triageAction,
+} from '../src/core/jev.mjs';
 
 let failures = 0;
 function ok(cond, label) {
@@ -485,6 +495,107 @@ console.log('## 7. 模型自己查與收錄');
   const capped = upsertCandidates(store, { guildId: GUILD, channelId: CHANNEL, items: [{ kind: 'style', term: '第七條', meaning: '說明' }], now: NOW + 21 });
   ok(capped.skipped === 1, '學習抽到第 6 條風格也不收');
   ok(recordChannelTag(store, { guildId: GUILD, channelId: '777', tag: '回覆長度', description: '都寫長文', now: NOW + 22 })?.entry?.channelId === '777', '別的頻道不受 5 條上限影響');
+}
+
+console.log('## 8. 批次確認／拒絕');
+{
+  const store = createSlangStore();
+  const first = upsertCandidates(store, {
+    guildId: GUILD,
+    now: NOW,
+    items: [
+      { term: '批一', meaning: '意思一' },
+      { term: '批二', meaning: '意思二' },
+      { term: '批三', meaning: '意思三' },
+    ],
+  });
+  ok(first.addedIds.length === 3, '新增時回傳新詞的 id');
+  const again = upsertCandidates(store, { guildId: GUILD, now: NOW + 1, items: [{ term: '批一', meaning: '意思一' }] });
+  ok(again.addedIds.length === 0 && again.updated === 1, '重複出現不算新詞');
+  const [a, b, c] = store.entries;
+  confirmSlang(store, c.id, {}, NOW + 2);
+
+  const confirmed = confirmSlangMany(store, [a.id, b.id, c.id, 'missing', a.id]);
+  ok(confirmed.confirmed === 2 && confirmed.skipped === 2, '批次確認只處理候選，去重並跳過不存在／已確認');
+  ok(store.entries.filter((entry) => entry.status === SLANG_STATUS.CONFIRMED).length === 3, '批次確認改狀態');
+
+  upsertCandidates(store, { guildId: GUILD, now: NOW + 3, items: [{ term: '批四', meaning: '意思四' }] });
+  const d = store.entries.find((entry) => entry.term === '批四');
+  const rejected = rejectSlangMany(store, [d.id, a.id, 'missing']);
+  ok(rejected.rejected === 1 && rejected.skipped === 2, '批次拒絕只處理候選');
+  ok(d.status === SLANG_STATUS.REJECTED, '批次拒絕改狀態');
+}
+
+console.log('## 9. Jev 自動分流');
+{
+  const store = createSlangStore();
+  upsertCandidates(store, {
+    guildId: GUILD,
+    now: NOW,
+    items: [
+      { term: '已收詞', meaning: '已確認的例子', usage: '平常講' },
+      { term: '拒收詞', meaning: '成員暱稱' },
+      { term: '候選甲', meaning: '群內梗', usage: '起鬨時' },
+      { term: '候選乙', meaning: '另一個梗' },
+    ],
+  });
+  const confirmedEntry = store.entries.find((entry) => entry.term === '已收詞');
+  confirmedEntry.examples = ['這是群友的原話，不該送出去'];
+  confirmSlang(store, confirmedEntry.id, {}, NOW + 1);
+  rejectSlang(store, store.entries.find((entry) => entry.term === '拒收詞').id, NOW + 1);
+
+  const candidates = store.entries.filter((entry) => entry.status === SLANG_STATUS.CANDIDATE);
+  const triage = buildSlangTriage({ store, items: candidates });
+  ok(triage.state.includes('已收詞') && triage.state.includes('拒收詞'), 'state 帶已確認與已拒絕的例子');
+  ok(triage.state.includes('候選甲') && triage.state.includes('候選乙'), 'state 帶這次的候選');
+  ok(!triage.state.includes('群友的原話'), '不送例句原文');
+  ok(Object.keys(triage.questions).length === 2, '每個候選一個問題');
+  ok(triage.questions.c1.type === 'noul' && triage.questions.c1.instructions.includes('候選甲'), '問題指名候選');
+  ok(String(triage.questions.c1.criteria?.false).includes('暱稱'), '不該收的條件寫在 criteria');
+  ok(triage.ids.length === candidates.length && triage.ids.every((id, index) => id === candidates[index].id),
+    '問題順序對回候選 id');
+  const mixed = buildSlangTriage({ store, items: [{ id: 'bad', term: '', meaning: '' }, ...candidates] });
+  ok(mixed.ids.length === candidates.length && mixed.ids[0] === candidates[0].id,
+    '沒有詞或意思的項目不會佔到問題位置');
+
+  const plan = planTriage({
+    ids: ['a', 'b'],
+    probabilities: { c1: 0.95, c2: 0.02 },
+    conf: { mode: 'auto', confirmAt: 0.9, rejectBelow: 0.05 },
+  });
+  ok(plan[0].id === 'a' && plan[0].action === 'confirm' && plan[1].id === 'b' && plan[1].action === 'reject',
+    'planTriage 照 id 對機率與動作');
+  const noAnswer = planTriage({ ids: ['a'], probabilities: {}, conf: { mode: 'auto' } });
+  ok(noAnswer[0].p === null && noAnswer[0].action === 'pending', '缺機率就留給人工');
+
+  ok(triageAction(0.95, { mode: 'auto', confirmAt: 0.9, rejectBelow: 0.05 }) === 'confirm', 'auto：高機率自動確認');
+  ok(triageAction(0.02, { mode: 'auto', confirmAt: 0.9, rejectBelow: 0.05 }) === 'reject', 'auto：低機率自動拒絕');
+  ok(triageAction(0.5, { mode: 'auto', confirmAt: 0.9, rejectBelow: 0.05 }) === 'pending', 'auto：中間留給人工');
+  ok(triageAction(0.95, { mode: 'reject', confirmAt: 0.9, rejectBelow: 0.05 }) === 'pending', 'reject 模式不會自動確認');
+  ok(triageAction(0.02, { mode: 'shadow', confirmAt: 0.9, rejectBelow: 0.05 }) === 'pending', 'shadow 模式不改狀態');
+  ok(triageAction(NaN, { mode: 'auto', confirmAt: 0.9, rejectBelow: 0.05 }) === 'pending', '沒有機率就不動');
+
+  ok(parseJevProbabilities({ answers: { c1: { type: 'noul', noul: 0.42 } } }).c1 === 0.42, '解析回傳的機率');
+  let parseFailed = false;
+  try { parseJevProbabilities({}); } catch { parseFailed = true; }
+  ok(parseFailed, '沒有 answers 要拋錯，讓上層放行');
+
+  const calls = [];
+  const okFetch = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
+    return { ok: true, json: async () => ({ answers: { c1: { noul: 0.91 }, c2: { noul: 0.03 } } }) };
+  };
+  const probs = await askJev({ key: 'test-key', state: 'state', questions: triage.questions, fetchImpl: okFetch });
+  ok(probs.c1 === 0.91 && probs.c2 === 0.03, 'askJev 回每個問題的機率');
+  ok(calls[0].url === JEV_ENDPOINT && calls[0].body.model === 'typesafe/jev'
+    && calls[0].body.state === 'state' && calls[0].headers.authorization === 'Bearer test-key',
+    '打到 systemone 並帶 model／state／key');
+
+  let httpFailed = false;
+  try {
+    await askJev({ key: 'k', state: 's', questions: {}, fetchImpl: async () => ({ ok: false, status: 429 }) });
+  } catch { httpFailed = true; }
+  ok(httpFailed, 'HTTP 失敗要拋錯，讓上層 fail-open');
 }
 
 console.log(failures === 0 ? '\n✅ Discord 黑話詞庫離線回歸通過' : `\n❌ ${failures} 項失敗`);

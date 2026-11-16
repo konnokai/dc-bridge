@@ -618,7 +618,7 @@ try {
       assert.equal(await select.getAttribute('aria-label'), '頻道');
 
       const styleRows = p.locator('#style-rows tr');
-      const channelCells = () => p.locator('#style-rows tr td:first-child').allTextContents();
+      const channelCells = () => p.locator('#style-rows tr td:nth-child(2)').allTextContents();
       await p.locator('#style-pager button', { hasText: '下一頁' }).click();
       assert.match(await p.locator('#style-pager').textContent(), /第 2 \/ 2 頁/);
 
@@ -661,6 +661,60 @@ try {
       assert.equal(await select.inputValue(), 'all', '頻道已經沒有條目時退回全部頻道');
       assert.equal(await styleRows.count(), 20);
       assert.deepEqual(dcErrors, []);
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
+  if (!original) await test('Discord 控制台：黑話批次確認與拒絕', async () => {
+    const entries = [
+      { id: 'c1', kind: 'slang', term: '難繃', meaning: '受不了', usage: '', status: 'candidate', seen: 1 },
+      { id: 'c2', kind: 'slang', term: '破防', meaning: '心態崩', usage: '', status: 'candidate', seen: 1 },
+      { id: 'c3', kind: 'slang', term: '大肥魚', meaning: 'AI 暱稱', usage: '', status: 'confirmed', seen: 3 },
+    ];
+    const calls = [];
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries, learning: { enabled: true } }),
+        slangConfirmMany: (ids) => { calls.push({ action: 'confirm', ids }); return { confirmed: ids.length, skipped: 0 }; },
+        slangRejectMany: (ids) => { calls.push({ action: 'reject', ids }); return { rejected: ids.length, skipped: 0 }; },
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        logs: () => [],
+      },
+    });
+    const dcBase = `http://127.0.0.1:${dc.server.address().port}`;
+    const dcContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`${dcBase}/?token=t#slang`);
+      await p.waitForFunction(() => document.querySelectorAll('#slang-rows tr').length === 3);
+      assert.equal(await p.locator('#slang-rows input[type="checkbox"]').count(), 2, '只有候選有勾選框');
+      await p.locator('#slang-select-page').click();
+      assert.equal(await p.locator('#slang-rows input[type="checkbox"]:checked').count(), 2, '全選本頁勾選候選');
+
+      const confirmResp = p.waitForResponse(r => new URL(r.url()).pathname === '/api/slang/batch-confirm');
+      p.once('dialog', (dialog) => dialog.accept());
+      await p.locator('#slang-batch-confirm').click();
+      await confirmResp;
+      assert.deepEqual(calls.at(-1), { action: 'confirm', ids: ['c1', 'c2'] }, '批次確認只送候選 id');
+
+      await p.locator('#slang-select-page').click();
+      const rejectResp = p.waitForResponse(r => new URL(r.url()).pathname === '/api/slang/batch-reject');
+      p.once('dialog', (dialog) => dialog.accept());
+      await p.locator('#slang-batch-reject').click();
+      await rejectResp;
+      assert.deepEqual(calls.at(-1), { action: 'reject', ids: ['c1', 'c2'] }, '批次拒絕送同一批候選');
     } finally {
       await dcContext.close();
       await dc.close();
@@ -796,8 +850,8 @@ try {
       p.on('pageerror', error => dcErrors.push(error.message));
       await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#slang`);
       await p.waitForFunction(() => document.querySelectorAll('#slang-rows tr').length === 3);
-      const terms = () => p.locator('#slang-rows tr td:first-child').allTextContents();
-      const tags = () => p.locator('#style-rows tr td:nth-child(2)').allTextContents();
+      const terms = () => p.locator('#slang-rows tr td:nth-child(2)').allTextContents();
+      const tags = () => p.locator('#style-rows tr td:nth-child(3)').allTextContents();
 
       await p.fill('#slang-search', '心態');
       assert.deepEqual(await terms(), ['破防'], '搜得到意思');
@@ -895,7 +949,7 @@ try {
         p.waitForResponse(r => new URL(r.url()).pathname === '/api/slang'),
         p.locator('#refresh').click(),
       ]);
-      await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(2)').textContent.startsWith('很長'));
+      await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(3)').textContent.startsWith('很長'));
       const after = await metrics('slang-rows');
       assert.deepEqual(after, before, '內容變長後欄寬、列高與按鈕位置都不能變');
     } finally {
@@ -944,7 +998,7 @@ try {
       assert.deepEqual((await request).postDataJSON(), { id: 'r1' });
       await refreshed;
       assert.equal(confirmedId, 'r1');
-      await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(4)')?.textContent === '已確認');
+      await p.waitForFunction(() => document.querySelector('#slang-rows tr td:nth-child(5)')?.textContent === '已確認');
     } finally {
       await dcContext.close();
       await dc.close();
@@ -1372,6 +1426,7 @@ try {
       allow: {}, deny: {}, ownerIds: [], media: {},
       requireMentionInGuild: true, messageContentIntent: true,
       requireMentionInChannel: { '111111111111111111': false },
+      slang: { jev: { mode: 'auto' } },
     };
     const dc = await startConsole({
       port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
@@ -1407,6 +1462,7 @@ try {
         .map((h) => h.firstChild.textContent));
       assert.deepEqual(unnamed, [], '每個功能區都有中文區名');
       assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 50, '50 個功能欄位都還在');
+      assert.equal(await p.locator('#cf-slang-jev-mode').inputValue(), 'auto', 'Jev 模式要從設定帶入');
       assert.equal(await p.locator('#fsec-tts #cf-tts-channels').count(), 1, 'TTS 欄位歸在語音區');
       assert.equal(await p.locator('#fsec-videoLinks #cf-videoLinks-enabled').count(), 1, '影片連結自己一區');
       await p.locator('#tabbtn-overview').click();
@@ -1432,6 +1488,42 @@ try {
       await p.waitForFunction(() => document.querySelector('#config-msg').textContent.includes('已儲存'));
       assert.equal(posts.length, 2);
       assert(!('requireMentionInChannel' in posts[1]) && !('requireMentionInGuild' in posts[1]), '鎖住時兩個 mention 欄位都不送');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
+  if (!original) await test('Discord 控制台：存功能設定不會把 Jev 模式改回 off', async () => {
+    const posts = [];
+    const current = { allow: {}, deny: {}, ownerIds: [], media: {}, slang: { jev: { mode: 'auto' } } };
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        sessions: () => [],
+        config: () => current,
+        updateConfig: async (body) => { posts.push(body); return current; },
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1204, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#settings`);
+      await p.waitForFunction(() => document.querySelector('#cf-slang-jev-mode')?.value === 'auto');
+      const response = p.waitForResponse(r => new URL(r.url()).pathname === '/api/config' && r.request().method() === 'POST');
+      await p.locator('#feature-form button[type="submit"]').click();
+      await response;
+      assert.equal(posts.at(-1).slang.jev.mode, 'auto', '沒改的 Jev 模式要原樣送回');
     } finally {
       await dcContext.close();
       await dc.close();

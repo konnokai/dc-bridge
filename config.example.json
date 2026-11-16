@@ -133,7 +133,12 @@
       "maxChars": 1500,
       "maxCandidates": 200,
       "learnerPreset": "dc-learner",
-      "timeoutMs": 90000
+      "timeoutMs": 90000,
+      "jev": {
+        "mode": "off",
+        "confirmAt": 0.9,
+        "rejectBelow": 0.05
+      }
     },
     "trade": {
       "enabled": false,

@@ -1,7 +1,8 @@
 # Handoff：把 bridge 的模型呼叫換到 Command Code provider
 
 - 日期：2026-11-07
-- 狀態：**已決定只換 provider。** Jev 決策閘門**不做**（理由見下）。
+- 狀態：**已決定只換 provider。** Jev 決策**閘門**（判斷 bot 要不要說話）不做（理由見下）。
+  2026-11-16 起 Jev 另外用在黑話候選分流，見 `docs/guides/DISCORD.md`「Jev 自動分流」。
 - 範圍：Discord 路徑（`src/discord-bridge.js`）。QQ 端不用管，也不用保持相容。
 
 ## 一句話
@@ -93,11 +94,12 @@ DSH 已經裝好社群外掛 `@mars-sea/dsh-commandcode-provider` 並登入 Comm
 
 不要做的事：
 
-- 不要寫 Jev 或任何閘門。
+- ~~不要寫 Jev 或任何閘門。~~ 2026-11-16 起 Jev 只用在黑話候選分流（`src/core/jev.mjs`），
+  不是發言閘門；預設 `slang.jev.mode: "off"`，沒開就不連外。
 - 不要刪 `createGoQuota` 與相關測試。provider 換回 `opencode-go` 還用得到，列在 Found 就好。
 - 不要碰 `.agents/loops/dream.md`（它自己的 `opencode-go/beam-free`，跟 bridge 無關）。
-- 不要把 DSH 的 Command Code 憑證拿去做別的事。橋接只在查額度時讀 `COMMANDCODE_API_KEY`
-  打 `GET /alpha/billing/credits`（`createCommandCodeQuota`），模型呼叫本身還是走 DSH 外掛。
+- ~~不要把 DSH 的 Command Code 憑證拿去做別的事。~~ 2026-11-16 使用者同意 Jev 分流沿用同一把 key；
+  額度查詢仍打 `GET /alpha/billing/credits`（`createCommandCodeQuota`），模型呼叫本身還是走 DSH 外掛。
 
 ## 部署
 

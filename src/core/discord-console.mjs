@@ -69,7 +69,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangReject, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -362,6 +362,19 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
       if (url.pathname === '/api/slang' || url.pathname.startsWith('/api/slang/')) {
         if (req.method === 'GET' && url.pathname === '/api/slang') {
           sendJson(res, 200, handlers.slang());
+          return;
+        }
+        if (req.method === 'POST' && (url.pathname === '/api/slang/batch-confirm' || url.pathname === '/api/slang/batch-reject')) {
+          const body = await readJson(req);
+          const ids = [...new Set(Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [])].slice(0, 200);
+          if (!ids.length) {
+            sendJson(res, 400, { error: '缺少詞條 id' });
+            return;
+          }
+          const result = url.pathname.endsWith('-confirm')
+            ? handlers.slangConfirmMany(ids)
+            : handlers.slangRejectMany(ids);
+          sendJson(res, 200, { ok: true, ...result });
           return;
         }
         if (req.method === 'POST' && url.pathname.startsWith('/api/slang/')) {

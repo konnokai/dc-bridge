@@ -103,6 +103,17 @@ export function normalizeDiscordConfig(raw) {
     throw new Error('discord.tts.model 是 Base 模型但沒有 refAudio：Base 沒有預設聲音，每次呼叫會亂抽');
   }
 
+  // Jev 自動分流：預設關閉（fork 不一定有 Command Code 訂閱），四段模式見 docs/guides/DISCORD.md。
+  // 門檻只收 0～1 的數字：null／字串／超出範圍一律回預設，不能 clamp 成 0 或 1（auto 會全收或全拒）。
+  const ratio = (value, fallback) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : fallback);
+  const JEV_MODES = new Set(['off', 'shadow', 'reject', 'auto']);
+  const jevMode = JEV_MODES.has(src.slang?.jev?.mode) ? src.slang.jev.mode : 'off';
+  const jevConfirmAt = ratio(src.slang?.jev?.confirmAt, 0.9);
+  // 兩個門檻重疊時以 confirmAt 為上限：同一段機率不能同時被拒絕和確認。
+  const jevRejectBelow = Math.min(ratio(src.slang?.jev?.rejectBelow, 0.05), jevConfirmAt);
+
   return {
     token: typeof src.token === 'string' ? src.token.trim() : '',
     agentPreset: text(src.agentPreset, 'dc-chat'),
@@ -274,6 +285,11 @@ export function normalizeDiscordConfig(raw) {
       maxCandidates: clamp(src.slang?.maxCandidates, 200, 10, 2000),
       learnerPreset: text(src.slang?.learnerPreset, 'dc-learner'),
       timeoutMs: clamp(src.slang?.timeoutMs, 90_000, 15_000, 300_000),
+      jev: {
+        mode: jevMode,
+        confirmAt: jevConfirmAt,
+        rejectBelow: jevRejectBelow,
+      },
     },
   };
 }

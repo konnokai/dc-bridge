@@ -164,6 +164,7 @@ import {
   buildSlangHint,
   buildStyleHint,
   confirmSlang,
+  confirmSlangMany,
   deleteSlang,
   loadSlangFile,
   lookupSlang,
@@ -172,12 +173,14 @@ import {
   recordChannelTag,
   recordSlang,
   rejectSlang,
+  rejectSlangMany,
   saveSlangFile,
   slangStats,
   styleLabels,
   updateSlang,
   upsertCandidates,
 } from './core/discord-slang.mjs';
+import { askJev, buildSlangTriage, planTriage } from './core/jev.mjs';
 import {
   collectMediaAttachments,
   describeSkipped,
@@ -261,6 +264,7 @@ const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
 const CUSTOM_STATUS_FILE = path.join(STATE_DIR, 'discord-custom-status.json');
 const SLANG_FILE = path.join(STATE_DIR, 'discord-slang.json');
+const SLANG_TRIAGE_FILE = path.join(STATE_DIR, 'discord-slang-triage.jsonl');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const KNOWLEDGE_FILE = path.join(STATE_DIR, 'discord-knowledge.json');
 const FOLLOWUPS_FILE = path.join(STATE_DIR, 'discord-followups.json');
@@ -910,6 +914,76 @@ async function main() {
   }
 
   process.on('exit', () => { try { flushSlang(); } catch { /* 收尾失敗不影響結束 */ } });
+
+  /**
+   * Jev 自動分流：只處理這一次新學到的黑話候選。
+   * 失敗一律放行（候選維持原狀）；shadow 模式只寫 log，不改狀態。
+   */
+  async function triageSlang(addedIds, job) {
+    const conf = cfg.discord.slang.jev;
+    if (conf.mode === 'off') return;
+    const entries = (addedIds ?? [])
+      .map((id) => slangStore.entries.find((entry) => entry.id === id))
+      .filter((entry) => entry?.kind === 'slang' && entry.status === SLANG_STATUS.CANDIDATE);
+    if (!entries.length) return;
+    const key = process.env.COMMANDCODE_API_KEY?.trim() || readDshCredential('COMMANDCODE_API_KEY');
+    if (!key) {
+      log('黑話 Jev：沒有 Command Code key，跳過');
+      return;
+    }
+    const triage = buildSlangTriage({ store: slangStore, items: entries });
+    let probabilities;
+    try {
+      probabilities = await askJev({ key, state: triage.state, questions: triage.questions });
+    } catch (error) {
+      log(`黑話 Jev：${error?.message ?? error}`);
+      return;
+    }
+    // 等回應時管理員可能改過設定：重讀一次，關掉就不要動。
+    const latest = cfg.discord.slang.jev;
+    if (latest.mode === 'off') return;
+    let confirmed = 0;
+    let rejected = 0;
+    for (const plan of planTriage({ ids: triage.ids, probabilities, conf: latest })) {
+      // 等回應的期間管理員可能已經處理掉了：重新查一次，只動還是候選的。
+      const entry = slangStore.entries.find((item) => item.id === plan.id);
+      if (!entry || entry.status !== SLANG_STATUS.CANDIDATE) continue;
+      appendSlangTriage({
+        at: new Date().toISOString(),
+        id: entry.id,
+        channelId: job.channelId,
+        term: entry.term,
+        p: plan.p,
+        action: plan.action,
+        mode: latest.mode,
+      });
+      if (plan.action === 'reject') {
+        rejectSlang(slangStore, entry.id);
+        rejected += 1;
+      } else if (plan.action === 'confirm') {
+        // 已確認的詞會注入所有伺服器；自動確認前再過一次敏感閘門，命中就留給人工。
+        if (findSensitive(`${entry.term} ${entry.meaning} ${entry.usage ?? ''}`, agentSecrets())) {
+          log(`黑話 Jev：${entry.term} 命中敏感閘門，不自動確認`);
+          continue;
+        }
+        confirmSlang(slangStore, entry.id);
+        confirmed += 1;
+      }
+    }
+    if (confirmed || rejected) {
+      markSlangDirty();
+      log(`黑話 Jev：自動確認 ${confirmed}、自動拒絕 ${rejected}（${latest.mode}）`);
+    }
+  }
+
+  // shortcut: 分流紀錄不輪替，一天最多 40 次抽取 × 5 個詞，量很小。
+  function appendSlangTriage(row) {
+    try {
+      fs.appendFileSync(SLANG_TRIAGE_FILE, `${JSON.stringify(row)}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      log(`黑話 Jev 記錄失敗：${error?.message ?? error}`);
+    }
+  }
 
   const api = new NodeApiClient(cfg.dsh.baseUrl, DSH_TIMEOUT_MS, {
     token: cfg.dsh.authToken,
@@ -5682,6 +5756,10 @@ async function main() {
         } else {
           log(`黑話學習：這次沒有新詞（${job.channelId}）`);
         }
+        // 只判這次新增的詞；重複出現的詞不重判，免得 log 一直長、同一個詞反覆改狀態。
+        if (stats.addedIds.length) {
+          void triageSlang(stats.addedIds, job).catch((error) => log(`黑話 Jev：${error?.message ?? error}`));
+        }
       }
     } finally {
       slangRunning = false;
@@ -6725,7 +6803,11 @@ async function main() {
       },
       knowledge: pick(cfg.discord.knowledge, patch?.knowledge, ['enabled', 'maxChars', 'toolMaxChars']),
       followup: pick(cfg.discord.followup, patch?.followup, ['enabled']),
-      slang: pick(cfg.discord.slang, patch?.slang, ['enabled', 'injectMax', 'maxChars']),
+      slang: {
+        ...pick(cfg.discord.slang, patch?.slang, ['enabled', 'injectMax', 'maxChars']),
+        // 控制台只改模式，門檻留在 config.json（跟 sandbox 的做法一樣）。
+        jev: pick(cfg.discord.slang.jev, patch?.slang?.jev, ['mode']),
+      },
       videoLinks: pick(cfg.discord.videoLinks, patch?.videoLinks, ['enabled']),
       // 純量欄位只認正確型別：normalize 對 boolean 用 `!== false`，字串 "false" 會變成 true。
       typing: typeof patch?.typing === 'boolean' ? patch.typing : cfg.discord.typing,
@@ -7243,6 +7325,22 @@ async function main() {
             const entry = confirmSlang(slangStore, id);
             if (entry) saveSlangNow();
             return entry;
+          },
+          slangConfirmMany: (ids) => {
+            const result = confirmSlangMany(slangStore, ids);
+            if (result.confirmed) {
+              saveSlangNow();
+              log(`控制台：批次確認黑話 ${result.confirmed} 條，跳過 ${result.skipped} 條`);
+            }
+            return result;
+          },
+          slangRejectMany: (ids) => {
+            const result = rejectSlangMany(slangStore, ids);
+            if (result.rejected) {
+              saveSlangNow();
+              log(`控制台：批次拒絕黑話 ${result.rejected} 條，跳過 ${result.skipped} 條`);
+            }
+            return result;
           },
           slangReject: (id) => {
             const entry = rejectSlang(slangStore, id);
