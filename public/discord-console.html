@@ -2053,7 +2053,7 @@
     { path: 'typing', label: 'typing：顯示「正在輸入」', kind: 'bool' },
     { path: 'sendDelayMs', label: 'sendDelayMs：連續送出間隔（毫秒）', kind: 'number', min: 0, max: 5000, step: 50 },
     { path: 'maxMessageChars', label: 'maxMessageChars：單則訊息上限（字）', kind: 'number', min: 200, max: 2000, step: 50 },
-    { path: 'autoCompactTokens', label: 'autoCompactTokens：自動壓縮門檻（0＝關）', kind: 'number', min: 0, max: 1000000, step: 10000 },
+    { path: 'autoCompactTokens', label: 'autoCompactTokens：自動壓縮門檻（0＝關，其餘最小 40000）', kind: 'number', min: 0, max: 1000000, step: 10000 },
     { path: 'ttftTimeoutMs', label: 'ttftTimeoutMs：等第一個 token 的上限（毫秒，0＝關）', kind: 'number', min: 0, max: 120000, step: 5000 },
     { path: 'ackMessage', label: 'ackMessage：收到訊息時的回應（留空＝不回）', kind: 'text', wide: true },
     { path: 'media.enabled', label: 'media.enabled：收圖片與影片', kind: 'bool' },

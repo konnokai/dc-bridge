@@ -108,7 +108,7 @@ pm2 logs dc-bridge
 | `ackMessage` | 收到訊息後的立即回覆，預設空字串（關閉） |
 | `maxMessageChars` | 單則訊息上限，200 ~ 2000，預設 2000 |
 | `questionTimeoutMs` | 等提問／審批回答的時間，預設 300000（5 分鐘） |
-| `autoCompactTokens` | 一輪結束時 context（上一次請求的 totalTokens）超過這個數，橋接就透過 DSH 的 `commands/execute` 替會話執行 `/compact`，預設 80000；`0` = 關閉。同一會話 10 分鐘內最多執行一次 |
+| `autoCompactTokens` | 一輪結束時 context（上一次請求的 totalTokens）超過這個數，橋接就透過 DSH 的 `commands/execute` 替會話執行 `/compact`，預設 80000；`0` = 關閉（context 會一路長到模型窗口上限，才靠溢位復原壓一次）。這是唯一一層自動壓縮：preset 把 DSH 自己的自動壓縮關掉了 |
 | `ttftTimeoutMs` | 模型多久沒吐出第一個 token 就取消這一輪，預設 30000（5~120 秒）；`0` = 關閉。已經開始呼叫工具就不受這個限制。`hedge` 備援也用它當最後上限 |
 | `typing` | 送出「正在輸入」提示，預設 `true` |
 | `sendDelayMs` | 連續送出的間隔，預設 300 毫秒 |
@@ -1693,15 +1693,18 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   使用者設的標題會鎖住，DSH 不會再用模型生摘要標題，每個新會話也少一次模型請求。
   改名失敗只記日誌，不影響投遞。之前建的會話不會自動改名。
 - **上下文壓縮**：context 越長，首字回應越慢（實測 8k 約 2.5 秒、64k 約 14 秒、166k 約 22 秒；
-  prefix cache 有命中，慢在長 context 本身）。所以壓在約 8 萬：
-  - dc-chat preset 把 `compaction-basic` 設成 `thresholdRatio: 0.08`（100 萬窗口 × 0.08 ≈ 8 萬）、
-    `retainTokens: 10000`（壓完保留最近一段原文，其餘換成摘要）。不設 `retainTokens` 時預設保留約 16 萬，比門檻還大，壓了也不會變小。
-  - `retainTokens` 是 DSH 的估算值，中文聊天的實際 token 大約是 2.5 倍。曾設 30000：壓完實際還有 8.1 萬，
-    卡在門檻上面，每一輪都觸發一次「summary is not smaller」的失敗壓縮（每次多約 10 秒）。所以要留足空間。
-  - 橋接另外補一層：一輪結束時，`assistant/message` 的 `usage.totalTokens` 超過 `autoCompactTokens`（預設 80000），
+  prefix cache 有命中，慢在長 context 本身）。自動壓縮只有橋接一層，門檻是 `autoCompactTokens`（預設 80000，console 可改）：
+  - dc-chat 與 dc-chat-open preset 把 `compaction-basic` 設成 `thresholdRatio: 1`，DSH 的 pressure 壓縮等於關掉。
+    門檻是 `min(窗口 × ratio, 窗口 − maxTokens − 65536)`：100 萬窗口、maxTokens 131072 時約 80 萬，一般對話到不了。
+    換成小窗口模型時門檻會跟著降（例如 25.6 萬窗口約 15.8 萬），那時會和橋接的門檻互相搶。
+  - 不用 `auto: false` 關：那會連 context 溢位復原一起關掉。溢位復原不看 threshold，真的超過模型窗口時還是會壓一次再重試。
+  - `/compact`（橋接那層走這條）和溢位復原的保留量固定是 0：只留最後一則 surface node，其餘全部換成摘要。
+    `retainTokens: 10000` 只在 pressure 壓縮（接近門檻）和換模型壓縮時用到。
+  - tool-result pruner（`thresholdChars: 50000`）也只在 pressure 壓縮和溢位復原時跑，現在很少觸發。
+  - 橋接的壓縮：一輪結束時，`assistant/message` 的 `usage.totalTokens` 超過 `autoCompactTokens`，
     就先壓住下一批，透過 DSH 的 `commands/execute` 執行 `/compact`，壓完再放行。日誌會記「自動壓縮」那一行與 DSH 回的結果。
-    2026-10-27 改成 0.08 後，DSH 自己的自動壓縮有觸發（之前 0.2 時沒看到），這層是 DSH 沒壓時的備援。
-  - 兩種壓縮在頻道都會有提示（見「行為細節」的壓縮提示）。
+    壓縮失敗時下一個 turn/end 會再試；成功後 context 降到門檻以下，不會重送。
+  - 壓縮在頻道會有提示（見「行為細節」的壓縮提示）。
   - 人格規則在 system prompt，不會被壓縮掉；群友記憶與最近頻道訊息每批都會重新帶，壓掉的是較舊的聊天細節。
 
 ## 安全邊界

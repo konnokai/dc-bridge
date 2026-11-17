@@ -323,7 +323,6 @@ const SUMMARY_MIN_MESSAGES = 10; // 少於這個量不做每日摘要，省 toke
 const SUMMARY_MAX_MESSAGES = 100; // 每日摘要最多讀幾則（Discord 單次上限 100）
 const SUMMARY_TRANSCRIPT_CHARS = 6000; // 每日摘要的聊天記錄上限
 const SUMMARY_INTERVAL_MS = 30 * 60 * 1000; // 每 30 分鐘檢查一次今天要不要做摘要
-const AUTO_COMPACT_COOLDOWN_MS = 10 * 60 * 1000; // 同一會話兩次自動壓縮的最短間隔
 const SLANG_STATUS_TEXT = {
   [SLANG_STATUS.CANDIDATE]: '候選',
   [SLANG_STATUS.CONFIRMED]: '已確認',
@@ -1224,8 +1223,10 @@ async function main() {
   }
   // 回合 ↔ 批次對應：DSH 依投遞順序跑回合，所以投遞時排進佇列、回合開始時取出。
   // 用來決定這個回合要不要亮輸入提示、出錯時要不要在頻道說（沒人叫 bot 的那批不說）。
-  const pendingDirect = new Map(); // key -> boolean[]（已投遞、回合還沒開始）
+  const pendingDirect = new Map(); // key -> { direct, ticket }[]（已投遞、回合還沒開始）
   const turnDirect = new Map(); // key -> 目前這個回合的那批有沒有人叫 bot
+  // 收尾只放自己那一張票：保險絲可能在回合還在跑時就放掉閘門，下一批已經接手。
+  const turnTickets = new Map(); // key -> { turn, ticket }（目前這個回合的編號與閘門票）
   // 模型要對哪一則訊息按 ❌ 用：跟著批次排隊，回合開始時取出，避免拿到別批的訊息。
   const pendingDirectMessages = new Map(); // key -> {{userId,id}[]}[]（已投遞、回合還沒開始）
   const turnDirectMessages = new Map(); // key -> 目前這個回合直接叫 bot 的訊息
@@ -1552,6 +1553,7 @@ async function main() {
     }
     pendingDirect.delete(key);
     turnDirect.delete(key);
+    turnTickets.delete(key);
     pendingDirectMessages.delete(key);
     turnDirectMessages.delete(key);
     turnStartedAt.delete(key);
@@ -4363,10 +4365,8 @@ async function main() {
   }
 
   const contextTokens = new Map(); // sessionId -> 上一次請求的 totalTokens
-  const compactedAt = new Map(); // sessionId -> 上次自動壓縮的時間
 
-  async function autoCompact(key, sessionId) {
-    compactedAt.set(sessionId, Date.now());
+  async function autoCompact(key, sessionId, ticket) {
     log(`自動壓縮 ${key}（context ${contextTokens.get(sessionId)} token，門檻 ${cfg.discord.autoCompactTokens}）`);
     try {
       // 走 commands/execute 才會真的執行 /compact；直接 prompt 只會變成一則使用者訊息。
@@ -4377,17 +4377,16 @@ async function main() {
       }, AbortSignal.timeout(DSH_COMMAND_TIMEOUT_MS));
       const result = unwrap(accepted, 'commands.execute');
       const outcome = result?.result;
-      // 失敗多半是會話還有排隊工作；不寫冷卻，下一個 turn/end 再試。
-      if (outcome?.kind !== 'success') compactedAt.delete(sessionId);
       log(`自動壓縮結果 ${key}：${outcome?.kind === 'success'
         ? (outcome.text ?? '完成')
         : (outcome?.text ?? 'DSH 沒有 /compact 指令')}`);
     } catch (error) {
-      compactedAt.delete(sessionId);
       log(`自動壓縮失敗 ${key}：${error?.message ?? error}`);
     } finally {
       contextTokens.delete(sessionId);
-      turnGate.releaseNormal(key);
+      // 壓縮最多等 180 秒，5 分鐘保險絲可能已經放掉這一輪、下一批也出發了；只放自己那一張票。
+      // 沒有票時就不碰閘門：那代表這一輪本來就不屬於橋接排的批次。
+      if (ticket !== undefined) turnGate.releaseNormal(key, ticket);
     }
   }
 
@@ -4449,7 +4448,9 @@ async function main() {
         collectors.delete(sessionId);
         stopTyping(key);
         finishProgress(key);
-        turnGate.releaseNormal(key);
+        // 這一輪的票先取出來：遲到的 turn/end 走 abandoned 分支，不會再碰 gate。
+        turnGate.releaseNormal(key, turnTickets.get(key)?.ticket ?? turnGate.currentTicket(key));
+        turnTickets.delete(key);
         if (turnDirect.get(key) ?? defaultDirect(key)) {
           void sendLong(key, `⚠️ 模型這次想太久（超過 ${Math.round(timeoutMs / 1000)} 秒），先取消這一輪；可以再問一次。`).catch(() => {});
         }
@@ -4474,7 +4475,8 @@ async function main() {
 
     // 記住看過的最大 turn：/ask 用它排除提問前就存在的回合。
     const eventTurn = event.data?.turn;
-    if (typeof eventTurn === 'number' && eventTurn > (lastTurns.get(frame.sessionId) ?? 0)) {
+    const previousLastTurn = lastTurns.get(frame.sessionId) ?? 0;
+    if (typeof eventTurn === 'number' && eventTurn > previousLastTurn) {
       lastTurns.set(frame.sessionId, eventTurn);
     }
     if (typeof eventTurn === 'number') {
@@ -4555,7 +4557,8 @@ async function main() {
     }
     const usageTokens = event.type === 'assistant/message' ? event.data?.usage?.totalTokens : undefined;
     if (Number.isFinite(usageTokens)) contextTokens.set(frame.sessionId, usageTokens);
-    // 任何 turn/end 都放行下一批，包括沒對到 turn/start 的那種；不然頻道要卡到保險計時器。
+    // 只有對得到橋接自己那一批的 turn/end 才放行下一批；重連後補送的舊 turn/end 對不到，
+    // 放掉會讓剛投遞的批次提早出發。真的等不到還有 5 分鐘保險絲。
     // context 太大時先壓縮再放行：/compact 要會話閒著才跑得動。
     if (event.type === 'turn/end') {
       const abandoned = ttftAbandonedTurns.get(key);
@@ -4565,16 +4568,28 @@ async function main() {
         // 5 秒保底已經放行過這一輪；遲到的 turn/end 不能再放掉下一批的 gate。
         log(`略過遲到的 turn/end（${key}，turn ${event.data.turn}）`);
       } else {
-        const compact = shouldAutoCompact({
-          tokens: contextTokens.get(frame.sessionId),
-          threshold: cfg.discord.autoCompactTokens,
-          lastAt: compactedAt.get(frame.sessionId) ?? 0,
-          now: Date.now(),
-          cooldownMs: AUTO_COMPACT_COOLDOWN_MS,
-        });
-        if (compact) void autoCompact(key, frame.sessionId);
-        // /ask 拿著閘門時，公開路徑收到的 turn/end 一定是別的回合；不能因此放掉提問的閘門。
-        else if (!askTurns.has(frame.sessionId)) turnGate.releaseNormal(key);
+        const pending = turnTickets.get(key);
+        let ticket;
+        if (pending) {
+          if (eventTurn === undefined || pending.turn === eventTurn) ticket = pending.ticket;
+        } else if (eventTurn !== undefined && eventTurn > previousLastTurn) {
+          // turn/start 漏接，但這一輪是新的：用還壓在佇列裡、而且真的持有閘門的那批。
+          const head = pendingDirect.get(key)?.[0];
+          if (head && turnGate.owns(key, head.ticket)) ticket = head.ticket;
+        }
+        if (ticket === undefined) {
+          // 重連後補送的舊 turn/end、或不是橋接排的回合：閘門不是它的，不能放。
+          if (pending) log(`略過對不到批次的 turn/end（${key}，turn ${eventTurn}）`);
+        } else {
+          turnTickets.delete(key);
+          const compact = shouldAutoCompact({
+            tokens: contextTokens.get(frame.sessionId),
+            threshold: cfg.discord.autoCompactTokens,
+          });
+          if (compact) void autoCompact(key, frame.sessionId, ticket);
+          // /ask 拿著閘門時，公開路徑收到的 turn/end 一定是別的回合；不能因此放掉提問的閘門。
+          else if (!askTurns.has(frame.sessionId)) turnGate.releaseNormal(key, ticket);
+        }
       }
     }
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
@@ -4601,8 +4616,20 @@ async function main() {
       if (missedStart) collector.push({ type: 'turn/start', data: { turn } });
       collectors.set(frame.sessionId, collector);
       const queued = pendingDirect.get(key);
-      const hadQueued = Boolean(queued?.length);
-      turnDirect.set(key, hadQueued ? queued.shift() : defaultDirect(key));
+      // 漏接 turn/start 會留下一筆多出來的 entry；它已經不持閘門，丟掉才不會讓之後每一批都配錯。
+      let stale = 0;
+      while (queued?.length && !turnGate.owns(key, queued[0].ticket)) {
+        queued.shift();
+        stale += 1;
+      }
+      for (const queue of [pendingUsers.get(key), pendingDirectMessages.get(key), pendingLastMessages.get(key)]) {
+        if (stale > 0) queue?.splice(0, stale);
+      }
+      const batch = queued?.length ? queued.shift() : null;
+      const hadQueued = batch !== null;
+      turnDirect.set(key, batch ? batch.direct : defaultDirect(key));
+      if (batch?.ticket !== undefined) turnTickets.set(key, { turn, ticket: batch.ticket });
+      else turnTickets.delete(key);
       const queuedUsers = pendingUsers.get(key);
       turnUsers.set(key, queuedUsers?.length ? queuedUsers.shift() : []);
       const queuedMessages = pendingDirectMessages.get(key);
@@ -4772,6 +4799,7 @@ async function main() {
         // 回合 ↔ 批次的對應也不可信了；之後的回合退回 defaultDirect。
         pendingDirect.clear();
         turnDirect.clear();
+        turnTickets.clear();
         pendingUsers.clear();
         turnUsers.clear();
         pendingDirectMessages.clear();
@@ -4862,7 +4890,7 @@ async function main() {
       }
       const previous = promptChains.get(key) ?? Promise.resolve();
       const next = previous
-        .then(() => deliverPrompt(key, job))
+        .then(() => deliverPrompt(key, job, ticket))
         .then((turnQueued) => { if (!turnQueued) turnGate.release(key, ticket); })
         .catch(async (error) => {
           turnGate.release(key, ticket);
@@ -5247,7 +5275,7 @@ async function main() {
   }
 
   /** @returns 有沒有排出一個模型回合（沒有就不會有 turn/end，閘門要自己放行） */
-  async function deliverPrompt(key, job) {
+  async function deliverPrompt(key, job, ticket) {
     const { epoch } = job;
     if (epoch !== epochOf(key)) {
       log(`排隊期間會話已重置，丟棄 (${key})`);
@@ -5320,7 +5348,8 @@ async function main() {
     const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${schedule ? `${schedule}\n` : ''}${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
-    queued.push(job.direct);
+    const queuedBatch = { direct: job.direct, ticket };
+    queued.push(queuedBatch);
     pendingDirect.set(key, queued);
     const users = triggerUsers(job.entries);
     const queuedUsers = pendingUsers.get(key) ?? [];
@@ -5338,7 +5367,7 @@ async function main() {
     queuedLast.push(lastEntry);
     pendingLastMessages.set(key, queuedLast);
     const unqueue = () => {
-      const index = queued.lastIndexOf(job.direct);
+      const index = queued.lastIndexOf(queuedBatch);
       if (index >= 0) queued.splice(index, 1);
       const userIndex = queuedUsers.lastIndexOf(users);
       if (userIndex >= 0) queuedUsers.splice(userIndex, 1);
@@ -5363,6 +5392,13 @@ async function main() {
       stopTyping(key);
       const error = accepted.result?.error;
       throw new Error(`${error?.code ?? '未知錯誤'}${error?.message ? `：${error.message}` : ''}`);
+    }
+    if (accepted.result.value?.command) {
+      // DSH 把它當斜線命令吃掉，不會開回合；放掉這一筆，免得閘門等到 5 分鐘保險絲。
+      unqueue();
+      stopTyping(key);
+      log(`DSH 把批次當成斜線命令，沒有開回合 (${key})`);
+      return false;
     }
     // 還有「只當背景」的訊息沒被上下文涵蓋時不要標記，下一批會再重帶一次。
     // 純系統訊息（例如重啟後的【生圖完成】）沒有批次，也不能算這個會話已經帶過上下文。

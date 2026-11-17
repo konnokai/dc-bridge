@@ -925,7 +925,7 @@ try {
         })
         .map((h) => h.firstChild.textContent));
       assert.deepEqual(unnamed, [], '每個功能區都有中文區名');
-      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 52, '52 個功能欄位都還在');
+      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 55, '功能欄位沒有漏掉');
       assert.equal(await p.locator('#cf-slang-jev-mode').inputValue(), 'auto', 'Jev 模式要從設定帶入');
       assert.equal(await p.locator('#fsec-tts #cf-tts-channels').count(), 1, 'TTS 欄位歸在語音區');
       assert.equal(await p.locator('#fsec-videoLinks #cf-videoLinks-enabled').count(), 1, '影片連結自己一區');

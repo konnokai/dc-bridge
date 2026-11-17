@@ -393,11 +393,21 @@ export function createTurnGate({
     }
   }
 
+  /** 這張票是不是現在持有閘門的那一輪。 */
+  function owns(key, ticket) {
+    return ticket !== undefined && busy.get(key)?.ticket === ticket;
+  }
+
+  /** 現在持有閘門的票；沒有就 undefined。 */
+  function currentTicket(key) {
+    return busy.get(key)?.ticket;
+  }
+
   /** 公開回合的 turn/end 只能放行普通批次，不能放掉剛開始的指令回合。 */
-  function releaseNormal(key) {
+  function releaseNormal(key, ticket) {
     const entry = busy.get(key);
     if (!entry || entry.job?.ask) return;
-    release(key, entry.ticket);
+    release(key, ticket ?? entry.ticket);
   }
 
   const releaseAll = () => {
@@ -425,7 +435,7 @@ export function createTurnGate({
   /** 有沒有回合在跑或排隊；重載提示沒有現成會話時用來判斷要不要排。 */
   const hasPending = (key) => busy.has(key) || (pending.get(key)?.length ?? 0) > 0;
 
-  return { submit, release, releaseNormal, hold, resume, rebase, drop, releaseAll, isBusy, hasPending };
+  return { submit, release, releaseNormal, owns, currentTicket, hold, resume, rebase, drop, releaseAll, isBusy, hasPending };
 }
 
 /**

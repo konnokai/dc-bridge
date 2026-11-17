@@ -214,14 +214,14 @@ console.log('## 1. 設定收斂');
   ok(cfg.questionTimeoutMs === 300_000, '提問等待預設 5 分鐘');
   ok(cfg.autoCompactTokens === 80_000, '自動壓縮門檻預設 8 萬');
   ok(normalizeDiscordConfig({ autoCompactTokens: 0 }).autoCompactTokens === 0, 'autoCompactTokens: 0 = 關閉');
-  ok(normalizeDiscordConfig({ autoCompactTokens: 5 }).autoCompactTokens === 10_000, 'autoCompactTokens 太小拉到下限 1 萬');
+  ok(normalizeDiscordConfig({ autoCompactTokens: 5 }).autoCompactTokens === 40_000, 'autoCompactTokens 太小拉到下限 4 萬');
   {
-    const at = { threshold: 80_000, cooldownMs: 600_000, now: 1_000_000 };
-    ok(shouldAutoCompact({ ...at, tokens: 90_000, lastAt: 0 }), '超過門檻 → 壓縮');
-    ok(!shouldAutoCompact({ ...at, tokens: 70_000, lastAt: 0 }), '沒超過 → 不壓');
-    ok(!shouldAutoCompact({ ...at, tokens: 90_000, lastAt: 900_000 }), '10 分鐘內壓過 → 不再送');
-    ok(!shouldAutoCompact({ ...at, threshold: 0, tokens: 900_000, lastAt: 0 }), '門檻 0 → 關閉');
-    ok(!shouldAutoCompact({ ...at, tokens: undefined, lastAt: 0 }), '還沒有 usage → 不壓');
+    const at = { threshold: 80_000 };
+    ok(shouldAutoCompact({ ...at, tokens: 90_000 }), '超過門檻 → 壓縮');
+    ok(!shouldAutoCompact({ ...at, tokens: 70_000 }), '沒超過 → 不壓');
+    ok(!shouldAutoCompact({ ...at, tokens: 80_000 }), '等於門檻 → 不壓');
+    ok(!shouldAutoCompact({ ...at, threshold: 0, tokens: 900_000 }), '門檻 0 → 關閉');
+    ok(!shouldAutoCompact({ ...at, tokens: undefined }), '還沒有 usage → 不壓');
   }
   {
     const perms = (...flags) => new PermissionsBitField(flags);
@@ -3211,6 +3211,23 @@ console.log('## 7d3. 批次');
   ok(ids(delivered.at(-1).job) === '51', '重連 releaseAll 後，舊 ticket 不會放掉新回合');
   gate.release('g:5');
   ok(ids(delivered.at(-1).job) === '52', '新回合結束才放行（重連後）');
+
+  // 保險絲先放掉跑太久的那一輪、下一批接手之後，舊回合的收尾不能把新那批也放掉。
+  const oldTurnTicket = gate.submit('g:8', job([80]));
+  gate.release('g:8');
+  gate.submit('g:8', job([81]));
+  gate.releaseNormal('g:8', oldTurnTicket);
+  ok(gate.isBusy('g:8'), '舊回合的收尾 ticket 不會放掉接手的那批');
+  gate.release('g:8');
+  gate.submit('g:8', job([82]));
+  gate.releaseNormal('g:8');
+  ok(!gate.isBusy('g:8'), '沒帶 ticket 的收尾照舊放行');
+
+  const ownsTicket = gate.submit('g:9', job([90]));
+  ok(gate.owns('g:9', ownsTicket), '持有閘門的 ticket 認得出來');
+  ok(gate.currentTicket('g:9') === ownsTicket, 'currentTicket 回現在持有者的票');
+  gate.release('g:9');
+  ok(!gate.owns('g:9', ownsTicket), '放行後就不再持有');
 
   gate.submit('g:7', job([70]));
   gate.submit('g:7', { system: true, epoch: 0, entries: [], direct: false, text: '【生圖完成】' });

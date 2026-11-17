@@ -149,7 +149,8 @@ export function normalizeDiscordConfig(raw) {
     ackMessage: typeof src.ackMessage === 'string' ? src.ackMessage : '',
     maxMessageChars: clamp(src.maxMessageChars, DISCORD_MAX_CHARS, 200, DISCORD_MAX_CHARS),
     questionTimeoutMs: clamp(src.questionTimeoutMs, 5 * 60 * 1000, 10_000, 60 * 60 * 1000),
-    autoCompactTokens: src.autoCompactTokens === 0 ? 0 : clamp(src.autoCompactTokens, 80_000, 10_000, 1_000_000),
+    // 下限 4 萬：system prompt 加工具定義就三萬多 token，門檻再低就壓不下去，變成每輪都壓一次。
+    autoCompactTokens: src.autoCompactTokens === 0 ? 0 : clamp(src.autoCompactTokens, 80_000, 40_000, 1_000_000),
     // 模型多久沒吐出第一個 token 就取消這一輪；0 = 關閉。工具已經開始跑就不受這個限制。
     ttftTimeoutMs: src.ttftTimeoutMs === 0 ? 0 : clamp(src.ttftTimeoutMs, 30_000, 5_000, 120_000),
     typing: src.typing !== false,
@@ -669,11 +670,11 @@ export function isConversationAllowed(cfg, { guildId, channelId, parentId = null
 }
 
 /**
- * 一輪結束時要不要替會話執行 /compact。這是 DSH 自動壓縮沒觸發時的備援。
- * 冷卻時間防止壓完還是很大（例如保留的原文本來就長）時每輪都壓。
+ * 一輪結束時要不要替會話執行 /compact。DSH 自己的自動壓縮已在 preset 關掉，這是唯一一層。
+ * 壓縮失敗時下一個 turn/end 會再試。
  */
-export function shouldAutoCompact({ tokens, threshold, lastAt, now, cooldownMs }) {
-  return threshold > 0 && Number.isFinite(tokens) && tokens > threshold && now - lastAt >= cooldownMs;
+export function shouldAutoCompact({ tokens, threshold }) {
+  return threshold > 0 && Number.isFinite(tokens) && tokens > threshold;
 }
 
 const SLASH_COMMAND_RE = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/iu;
