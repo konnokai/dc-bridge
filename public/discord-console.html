@@ -181,6 +181,11 @@
     <div id="quota"></div>
   </section>
 
+  <section class="card" id="quota-2-card" hidden>
+    <h2><span id="quota-2-title">備援</span> 額度 <span id="quota-2-note" class="muted"></span></h2>
+    <div id="quota-2"></div>
+  </section>
+
   <section class="card" id="codex-quota-card">
     <h2>Codex 額度 <span id="codex-quota-note" class="muted"></span></h2>
     <div id="codex-quota"></div>
@@ -1093,16 +1098,25 @@
     return minutes + ' 分';
   }
 
-  function renderQuota(q) {
-    $('quota-card').hidden = !!q?.skipped;
-    if (q?.skipped) return;
-    $('quota-title').textContent = q?.provider === 'commandcode' ? 'Command Code' : 'OpenCode Go';
-    if (!q?.ok) {
-      $('quota-note').textContent = '';
-      $('quota').replaceChildren(el('div', { className: 'msg err' }, '查不到：' + (q?.error ?? '未知原因')));
+  function quotaProviderLabel(provider) {
+    if (provider === 'commandcode') return 'Command Code';
+    if (provider === 'opencode-go') return 'OpenCode Go';
+    return provider || '訂閱';
+  }
+
+  function renderQuotaInto(prefix, q) {
+    const card = $(prefix + '-card');
+    if (!card) return;
+    if (!q) { card.hidden = true; return; }
+    card.hidden = !!q.skipped;
+    if (q.skipped) return;
+    $(prefix + '-title').textContent = quotaProviderLabel(q.provider);
+    if (!q.ok) {
+      $(prefix + '-note').textContent = '';
+      $(prefix).replaceChildren(el('div', { className: 'msg err' }, '查不到：' + (q.error ?? '未知原因')));
       return;
     }
-    $('quota-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，60 秒更新一次）';
+    $(prefix + '-note').textContent = '（' + fmtAgo(q.fetchedAt) + '查的，60 秒更新一次）';
     const rows = [];
     for (const w of q.windows) {
       const percent = Math.max(0, Math.min(100, w.remainingPercent));
@@ -1126,7 +1140,13 @@
         ));
       }
     }
-    $('quota').replaceChildren(...rows);
+    $(prefix).replaceChildren(...rows);
+  }
+
+  // 主線一張；hedge 開啟且有備援時，`fallback` 再畫一張。
+  function renderQuota(q) {
+    renderQuotaInto('quota', q);
+    renderQuotaInto('quota-2', q?.fallback);
   }
 
   // ── Codex 額度 ───────────────────────────────────────────────────────────

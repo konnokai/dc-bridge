@@ -881,14 +881,26 @@ async function main() {
   const commandCodeQuota = createCommandCodeQuota({
     getKey: () => process.env.COMMANDCODE_API_KEY?.trim() || readDshCredential('COMMANDCODE_API_KEY'),
   });
-  /** 目前 provider 的訂閱額度；hedge 用主線 provider 的額度。 */
-  async function quotaInfo() {
-    const provider = cfg.dsh.provider === 'hedge' ? cfg.dsh.hedge.primaryProvider : cfg.dsh.provider;
+  /** 單一 provider 的訂閱額度；沒有查詢來源時回 skipped。 */
+  async function quotaFor(provider) {
     if (provider !== 'opencode-go' && provider !== 'commandcode') {
       return { ok: false, skipped: true, error: `provider 是 ${provider}，沒有對應的額度查詢` };
     }
     const result = provider === 'opencode-go' ? await goQuota.get() : await commandCodeQuota.get();
     return { ...result, provider };
+  }
+
+  /**
+   * 目前 provider 的訂閱額度；hedge 用主線 provider 的額度。
+   * withFallback 只給控制台用：hedge 開啟時多回一個 fallback，畫第二張卡。
+   */
+  async function quotaInfo({ withFallback = false } = {}) {
+    const primaryProvider = cfg.dsh.provider === 'hedge' ? cfg.dsh.hedge.primaryProvider : cfg.dsh.provider;
+    const primary = await quotaFor(primaryProvider);
+    if (!withFallback || cfg.dsh.provider !== 'hedge' || !cfg.dsh.hedge.enabled) return primary;
+    const fallbackProvider = cfg.dsh.hedge.fallbackProvider;
+    if (!fallbackProvider || fallbackProvider === primaryProvider) return primary;
+    return { ...primary, fallback: await quotaFor(fallbackProvider) };
   }
 
   // 生圖開關在 preset 的 dc-tool-restrict.config.allowImageGen；沒有開生圖就不查
@@ -7265,7 +7277,7 @@ async function main() {
           updateProviderKey,
           invite: inviteInfo,
           usage: usageInfo,
-          quota: quotaInfo,
+          quota: () => quotaInfo({ withFallback: true }),
           codexQuota: codexQuotaInfo,
           memory: () => ({
             enabled: cfg.discord.memory.enabled,
