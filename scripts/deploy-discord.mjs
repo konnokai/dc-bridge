@@ -56,21 +56,35 @@ function local(command, args, options = {}) {
   return result;
 }
 
+/** 跑檢查並把輸出收起來；成功不印，失敗只印最後 120 行。 */
+function capture(label, command, args, options = {}) {
+  const result = local(command, args, { maxBuffer: 32 * 1024 * 1024, ...options });
+  if (result.status !== 0) {
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trimEnd();
+    console.error(`\n✗ ${label} 失敗（exit ${result.status}）`);
+    if (output) console.error(output.split('\n').slice(-120).join('\n'));
+  }
+  return result;
+}
+
 function git(args) {
   const result = local('git', args);
   if (result.status !== 0) fail(`git ${args.join(' ')} 失敗：${result.stderr.trim()}`);
   return result.stdout.trim();
 }
 
-/** 在伺服器的專案目錄跑一段 bash。 */
-function remote(script) {
+/** 在伺服器的專案目錄跑一段 bash。失敗時只印 label 與遠端輸出，不印整段腳本。 */
+function remote(script, label = '') {
   const body = [
     `export PATH="${DEFAULTS.nodeBin}:$PATH"`,
     `cd ${remoteDir} || exit 90`,
     script,
   ].join('\n');
   const result = local('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', host, body]);
-  if (result.status !== 0) fail(`遠端指令失敗：\n${script}\n${(result.stderr || '').trim()}`);
+  if (result.status !== 0) {
+    const detail = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+    fail(`${label ? `${label}：` : ''}遠端指令失敗${detail ? `\n${detail}` : ''}`);
+  }
   return result;
 }
 
@@ -166,10 +180,12 @@ function main() {
   // 4. 本機先過
   if (!skipTests) {
     log('本機檢查：preset patch 與 Discord 測試');
-    const patch = local(process.execPath, [path.join(ROOT, 'scripts', 'build-agent-preset-patches.mjs'), '--check'], { stdio: 'inherit' });
-    if (patch.status !== 0) fail('build-agent-preset-patches --check 失敗');
-    const tests = local(process.execPath, [path.join(ROOT, 'scripts', 'test-discord-all.mjs')], { stdio: 'inherit' });
-    if (tests.status !== 0) fail('npm run test:discord 失敗');
+    if (capture('build-agent-preset-patches --check', process.execPath, [path.join(ROOT, 'scripts', 'build-agent-preset-patches.mjs'), '--check']).status !== 0) {
+      fail('build-agent-preset-patches --check 失敗');
+    }
+    if (capture('Discord 測試', process.execPath, [path.join(ROOT, 'scripts', 'test-discord-all.mjs')]).status !== 0) {
+      fail('npm run test:discord 失敗');
+    }
   } else {
     console.warn('  ! 跳過本機與遠端測試（--skip-tests）');
   }
@@ -193,11 +209,11 @@ function main() {
   // 6. 遠端再驗一次
   if (!skipTests) {
     log('遠端檢查：preset patch 與 Discord 測試');
-    remote('node scripts/build-agent-preset-patches.mjs --check');
-    const remoteTests = remote(
-      `for f in scripts/test-discord-*.mjs; do case "$f" in *test-discord-all*) continue;; esac; echo "Running $f"; node "$f" >/tmp/dc-test.log 2>&1 || { tail -30 /tmp/dc-test.log; exit 1; }; done`,
+    remote('node scripts/build-agent-preset-patches.mjs --check', '遠端 preset patch 檢查');
+    remote(
+      `for f in scripts/test-discord-*.mjs; do case "$f" in *test-discord-all*) continue;; esac; node "$f" >/tmp/dc-test.log 2>&1 || { echo "FAILED $f"; tail -30 /tmp/dc-test.log; exit 1; }; done`,
+      '遠端 Discord 測試',
     );
-    console.log(remoteTests.stdout.trim());
   }
 
   // 7. 同步 preset、重啟
