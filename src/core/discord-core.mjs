@@ -227,7 +227,7 @@ export function normalizeDiscordConfig(raw) {
       blockSensitive: src.security?.blockSensitive !== false,
     },
     queue: {
-      // DSH 連不上時的記憶體佇列（重啟會消失，跟 QQ 版一樣）。
+      // DSH 連不上時的記憶體佇列（重啟會消失）。
       max: clamp(src.queue?.max, 50, 1, 200),
       retryMs: clamp(src.queue?.retryMs, 10_000, 2000, 60_000),
     },
@@ -972,7 +972,7 @@ export function loadSessions(file) {
 export function saveSessions(file, sessions) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, sessions }, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, sessions }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -1012,7 +1012,7 @@ export function loadSessionPresets(file) {
 export function saveSessionPresets(file, presets) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, presets }, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, presets }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 

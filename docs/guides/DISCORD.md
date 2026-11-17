@@ -15,8 +15,8 @@ Discord 訊息 ──► src/discord-bridge.js ──► DSH Web API（127.0.0.1
 
 - Discord 側：`discord.js` 14（Gateway，`messageCreate`）。
 - DSH 側：直接使用 `src/dsh-client.js`（Cookie 鑄造、斜線 RPC、`/api/remote.mux` 事件流）。
-- 沒有一行 QQ / SnowLuma 程式碼參與。QQ 那套（`src/bridge.js` 等）留在原處，兩邊可並存，但**不要同時
-  對同一個 Discord 頻道跑兩個實例**（橋接有單一實例鎖，第二個會直接退出）。
+- QQ / SnowLuma 程式碼與測試已移除；這個 repo 只有 Discord 橋接。**不要同時對同一個 Discord
+  頻道跑兩個實例**（橋接有單一實例鎖，第二個會直接退出）。
 
 ## 前置條件
 
@@ -48,7 +48,7 @@ Copy-Item config.example.json config.json
 #    discord.ownerIds 填你自己的 Discord user id（開啟開發者模式 → 右鍵自己的名字 → 複製使用者 ID）。
 
 # 3) 安裝 DSH 端的 dc-chat preset（含政治開放版 dc-chat-open），然後重啟 DSH
-node scripts/setup-dsh.mjs --discord
+node scripts/setup-dsh.mjs
 
 # 4) 啟動橋接
 npm run start:discord
@@ -67,9 +67,10 @@ pm2 logs dc-bridge
 
 看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
 
-> `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-chat-open` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
-> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
-> profile 裡你自己加的其它 MCP。
+> `setup-dsh.mjs` 安裝 Discord 用的 `dc-chat` / `dc-chat-open` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
+> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。重跑時會清掉舊版 QQ
+> 遺留的 `mcp-snowluma` / `mcp-snowluma-host` 條目與 `qq-agent-presets` / `qq-mode-console` 連結；其他 profile 設定保留。
+> 舊 QQ bundle 如果是實體目錄，腳本只印警告、不會遞迴刪除。
 >
 > `mcp-prts` 是獨立的 Docker container（`ghcr.io/3akhp/prts-mcp:3.2.4`），DSH 連 `http://127.0.0.1:3011/mcp`。
 > compose 在 `/root/bot/nadeko-docker/docker-compose.yml`，資料在 `prts-data` volume（掛到 `/data`），restart policy 是 `unless-stopped`。
@@ -222,7 +223,7 @@ pm2 logs dc-bridge
   就不會再啟動備援。
 - `ttftTimeoutMs` 仍是最後上限：主線和備援都卡住時，橋接在 30 秒取消這一輪。
 
-`dsh` 段沿用 QQ 版的欄位（`baseUrl`、`provider`、`model`、`reasoningEffort`、`authToken`、`allowRemote`）。
+`dsh` 段使用這些欄位（`baseUrl`、`provider`、`model`、`reasoningEffort`、`authToken`、`allowRemote`）。
 預設是 `commandcode` / `deepseek/deepseek-v4.1-flash`（橋接的內建預設，走 DSH 的
 `@mars-sea/dsh-commandcode-provider` 外掛）。實際可用的 provider/model 以 DSH 的
 `session/modelCatalog` 為準——不在 `routableProviders` 裡的組合會讓每個回合在送出訊息前就失敗。
@@ -250,7 +251,7 @@ DSH 的 `llm-hedge` settings 命名空間。
 `dsh.hedge` 設定不合法時（例如 `afterMs` 太接近 `ttftTimeoutMs`），橋接啟動會停用備援、
 寫一行 log，並保留其他欄位讓控制台修正；不會讓橋接起不來。
 
-聯網搜尋走 `webSearch` 段（`setup-dsh.mjs --discord` 會把 `mcp-web-search-safe` 掛進 profile）：
+聯網搜尋走 `webSearch` 段（`setup-dsh.mjs` 會把 `mcp-web-search-safe` 掛進 profile）：
 
 | 欄位 | 說明 |
 | --- | --- |
@@ -497,7 +498,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - 這是**另一個 preset**，不是執行期開關：DSH 的 preset 在建立會話時決定，之後不能換
   （DSH 的 `agentPreset.select` 只允許在會話還沒跑過任何回合時使用）。所以頻道名單改完，
   已開著的會話要用 `/reset` 或 `/reload-system-prompt` 才會換人格；新會話自動照名單選。
-- 安裝或更新 `dsh/agent-presets/dc-chat-open/` 之後要跑 `node scripts/setup-dsh.mjs --discord`
+- 安裝或更新 `dsh/agent-presets/dc-chat-open/` 之後要跑 `node scripts/setup-dsh.mjs`
   並重啟 DSH，`agentPresets/list` 才看得到 `dc-chat-open`。橋接在第一次建立那個頻道的會話時才要清單，
   找不到會再重抓一次；還是找不到（或 preset 標記 `broken`）就 fail-closed、拒絕建立會話。
   頻道只會看到一句通用錯誤，preset 名稱與安裝細節只寫 log。
@@ -670,7 +671,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - **空狀態**：還沒有可歸屬的回合時會明講，不會顯示 NaN。
 
 價目表內建 DeepSeek 官方英文頁的美元價（美元 / 百萬 token；高峰為空閒的 2 倍，中國法定節假日除外）。
-要覆蓋時在 `config.json` 加 `pricing`（格式與 QQ 版相同，見 `docs/guides/TOKEN_USAGE_CONSOLE.md`），
+要覆蓋時在 `config.json` 加 `pricing`（格式見 `config.example.json` 的 `pricing` 段），
 改完重啟橋接。逐輪與基線的歷史金額是讀取時才折算，不用重算；
 被淘汰的 `evict` 彙總存的是淘汰當下的金額，改價目表不會重算那部分。
 2026-11 之前的人民幣舊帳本會在載入時把 `evict` 金額換成美元。
@@ -811,7 +812,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
    ```sh
    dsh plugin --profile web add github:zemul/dsh-generate-image
    ```
-   `node scripts/setup-dsh.mjs --discord` 會檢查 profile；沒裝就印一行警告，不會自動連網安裝。
+   `node scripts/setup-dsh.mjs` 會檢查 profile；沒裝就印一行警告，不會自動連網安裝。
 2. 本機 Codex CLI 已登入（`codex` 跑一次）。生圖走 Codex 額度，不用另外的 API key。
 
 流程：
@@ -1267,7 +1268,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   `【這個頻道的風格】- 標籤：描述`。同一個會話裡整塊內容沒變、又沒超過 30 分鐘就不重複帶。
 - 沒有另外的開關：跟著 `slang.enabled`。
 
-> `dc-learner` 由 `node scripts/setup-dsh.mjs --discord` 安裝（跟 `dc-chat` 同一個 bundle）。
+> `dc-learner` 由 `node scripts/setup-dsh.mjs` 安裝（跟 `dc-chat` 同一個 bundle）。
 > 如果 DSH 的 preset 清單沒有它，學習會記一行錯誤並跳過，聊天不受影響；重跑安裝再重啟 DSH 即可。
 
 ### Jev 自動分流（選用）
@@ -1504,7 +1505,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 `mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__slang__*` 來自 `src/mcp-slang.js`，
 `mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__prts__*` 來自 Docker container
 `ghcr.io/3akhp/prts-mcp:3.2.4`（HTTP MCP，`http://127.0.0.1:3011/mcp`）。五個 MCP 都由
-`node scripts/setup-dsh.mjs --discord` 寫進 DSH profile 的 `cordis.patch.yml`。
+`node scripts/setup-dsh.mjs` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
 前面都有一個 `#k7f3ab` 這種 6 字代號，引用裡的 `#編號` 是被引用那則的編號，`read_history` 的結果也有。
@@ -1545,7 +1546,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   有人叫 bot 的回合（★）若模型只輸出文字、沒呼叫任何會送到 Discord 的工具（發送、reaction、修改、收回），
   橋接會在同一個會話補一句提醒，請它用工具回話（每 10 分鐘最多一次；提醒自己的回合不會再觸發），
   免得群友以為被忽略。模型收到提醒後仍然可以不說話。
-  先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh --discord` 並重啟 DSH）。
+  先確認 DSH 有掛 `mcp-discord`、persona 是最新版（重跑 `setup-dsh` 並重啟 DSH）。
 
 工具端點是橋接自己開的 loopback HTTP：`127.0.0.1` 隨機埠，只有 `POST /hello`（MCP 報到）與
 `POST /sessionToken`（DSH 外掛換會話令牌；這個路徑不要求會話令牌，只要端點 secret）、
@@ -1740,9 +1741,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 | --- | --- |
 | 啟動就報 `Used disallowed intents` | Developer Portal 沒開 Message Content Intent。開了重啟，或把 `messageContentIntent` 設 `false` |
 | 頻道裡 @bot 沒反應 | bot 有 `Read Message History` / `Send Messages` 權限？頻道在 `allow.channels` 或伺服器在 `allow.guilds`？ |
-| 頻道回「人格還沒安裝好」 | 跑 `node scripts/setup-dsh.mjs --discord`，然後**重啟 DSH**；詳細 preset 錯誤看 bridge log |
+| 頻道回「人格還沒安裝好」 | 跑 `node scripts/setup-dsh.mjs`，然後**重啟 DSH**；詳細 preset 錯誤看 bridge log |
 | `DSH 鉴权不可用` | `~/.dsh/.credentials.yaml` 讀不到，或 DSH 不在本機。確認 `DSH_HOME` |
-| 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但這一輪沒有實際送出訊息」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
+| 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但這一輪沒有實際送出訊息」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs` 並**重啟 DSH** |
 | 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |
 | 叫它畫圖卻只回文字 | DSH profile 沒裝 `dsh-generate-image`，或 Codex CLI 沒登入。跑 `dsh plugin --profile web add github:zemul/dsh-generate-image`，終端機跑一次 `codex` 登入，再重啟 DSH |
 | 叫它畫動圖卻說不支援 | Codex 的 `features list` 沒有 `image_generation_animation`（0.167 為止的穩定版都沒有）。更新 Codex 後**重啟 DSH**；更新前先畫靜態圖。有 feature 但生圖失敗且訊息是 `GIF output is not enabled for this request`，代表帳號還沒開 GIF preview，等 OpenAI 開 |

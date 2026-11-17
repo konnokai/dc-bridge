@@ -9,7 +9,6 @@ const tests = [
   'test-audit-security.mjs',
   'test-audit-security-mcp.mjs',
   'test-md-to-plain.mjs',
-  'test-media-search.mjs',
   // DSH 連線層、事件流與會話佇列（inbox 投影）：Discord 橋接也用同一條鏈。
   'test-audit-protocol.mjs',
   'test-dsh-inbox-projection.mjs',
@@ -30,6 +29,8 @@ const tests = [
   'test-token-usage.mjs',
   // 控制台靜態契約（跑不了 Playwright 的環境下的替代回歸）。
   'test-console-static.mjs',
+  // 共用 Web Search / safe-fetch。
+  'test-web-search.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

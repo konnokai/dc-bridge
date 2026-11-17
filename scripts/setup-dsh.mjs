@@ -1,18 +1,15 @@
 #!/usr/bin/env node
-// setup-dsh.mjs — 在目标设备上安装桥接的 DSH 端配置
+// setup-dsh.mjs — 在目标设备上安装 Discord 桥接的 DSH 端配置
 //
-// 功能（QQ 版，默认）：
-//   1. 安装两套 agent preset：qq-chat、qq-chat-v2
-//      （DSH 0.1.7 机制：作为 qq-agent-presets bundle 的 patch 层插入
+//   1. 安装四个 agent preset：dc-chat、dc-chat-open、dc-learner、dc-trader
+//      （DSH 0.1.7 机制：作为 dc-agent-presets bundle 的 patch 层插入
 //        @deepseek-ai/dsh-agent-preset 行；~/.dsh/.agent-presets/ 目录已不再被读取）
 //   2. 在 DSH profile 的 cordis.patch.yml 中挂载 MCP server：
-//      QQ：mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
-//      Discord：mcp-web-search-safe / mcp-discord / mcp-slang / mcp-trade / mcp-prts
-//   3. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
+//      mcp-web-search-safe / mcp-discord / mcp-slang / mcp-trade / mcp-prts
+//   3. 在 profile package.json 中注册 bundle：dc-agent-presets、dsh-llm-hedge
 //
 // 用法：
-//   node scripts/setup-dsh.mjs [profile]              # QQ 版
-//   node scripts/setup-dsh.mjs --discord [profile]    # Discord 版：只装 dc-chat / dc-chat-open / dc-learner / dc-trader preset
+//   node scripts/setup-dsh.mjs [profile]
 //
 // 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
@@ -21,14 +18,11 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
-import { ALL_PRESETS, PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
+import { ALL_PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-// --discord：只装 Discord 那套（dc-chat / dc-chat-open / dc-learner / dc-trader preset + dc-agent-presets bundle），
-// 不碰 profile 里既有的 MCP，也不写 QQ 的 state/mode.json。
-const DISCORD_ONLY = process.argv.includes('--discord');
 const PROFILE = process.argv.slice(2).find((arg) => !arg.startsWith('--')) || 'web';
 
 // A profile is a directory name, never a path (same boundary as DSH itself).
@@ -85,10 +79,10 @@ function backupBeforeOverwrite(file, keep = 5) {
 // 0.1.7：注册表既不扫目录也不接受 preset 路径；preset 是一条普通 loader 行
 //        （@deepseek-ai/dsh-agent-preset，config.plugins 内联子行列表），
 //        由 bundle 的 patch 文件插入。因此这里做两件事：
-//          ① 把 qq-agent-presets bundle 注册进 profile（link: 依赖 + bundles + junction）；
+//          ① 把 dc-agent-presets / dsh-llm-hedge bundle 注册进 profile（link: 依赖 + bundles + junction）；
 //          ② 从仓库权威源（dsh/agent-presets/<preset>/）重新生成 patch 文件。
-//        旧目录不再写入、也不删除（见 reportLegacyPresetDir）。
-const BUNDLE_NAMES = DISCORD_ONLY ? ['dc-agent-presets', 'dsh-llm-hedge'] : ['qq-mode-console', 'qq-agent-presets'];
+const BUNDLE_NAMES = ['dc-agent-presets', 'dsh-llm-hedge'];
+const LEGACY_BUNDLE_NAMES = ['qq-agent-presets', 'qq-mode-console'];
 
 /** 从仓库源重新生成 bundle 里的 patch 文件（人格正文/工具面改了就必须重跑）。 */
 function regeneratePresetPatches() {
@@ -102,27 +96,6 @@ function regeneratePresetPatches() {
   }
 }
 
-/**
- * 旧机制的安装目录：0.1.7 起 DSH 完全不再读它。
- *
- * 这里**只报告、不删除**——里面可能是用户手改过的人设（仓库源文件救不回来）。
- * 顺带对比仓库源：一致说明没丢东西，不一致说明用户改的那份已不再生效，需要人工合并。
- */
-function reportLegacyPresetDir() {
-  const legacy = path.join(DSH_HOME, '.agent-presets');
-  if (!fs.existsSync(legacy)) return;
-  log(`注意：${legacy} 是 DSH 0.1.5 的 preset 安装目录，0.1.7 起不再被读取（保留未删，可自行备份后清理）`);
-  for (const name of PRESETS) {
-    const installed = path.join(legacy, name, 'agent.cordis.yml');
-    if (!fs.existsSync(installed)) continue;
-    const source = path.join(REPO_ROOT, 'dsh', 'agent-presets', name, 'agent.cordis.yml');
-    const same = fs.existsSync(source) && fs.readFileSync(installed, 'utf8') === fs.readFileSync(source, 'utf8');
-    log(same
-      ? `  · ${name}：旧目录副本与仓库源一致（无内容丢失）`
-      : `  ⚠️ ${name}：旧目录副本与仓库源**不一致**——那份手改内容不会再生效，请人工合并到 dsh/agent-presets/${name}/agent.cordis.yml`);
-  }
-}
-
 function yamlSingleQuote(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
 }
@@ -130,38 +103,33 @@ function yamlSingleQuote(s) {
 /**
  * 由桥接托管的 MCP 条目 id。
  *
- * Discord 装 web-search-safe（只读搜索）、mcp-discord（发讯息）、mcp-slang（黑话／频道标签）、
- * mcp-trade（模拟股票）与 mcp-prts（明日方舟 PRTS 资料，独立 Docker container 提供 HTTP MCP）；SnowLuma 的两个是
- * QQ 专用，装进 Discord profile 只会多出一堆连不上的工具。
+ * 装 web-search-safe（只读搜索）、mcp-discord（发讯息）、mcp-slang（黑话／频道标签）、
+ * mcp-trade（模拟股票）与 mcp-prts（明日方舟 PRTS 资料，独立 Docker container 提供 HTTP MCP）。
  */
-const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
 const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord', 'mcp-slang', 'mcp-trade', 'mcp-prts'];
-const managedMcpIds = () => (DISCORD_ONLY ? DISCORD_MCP_IDS : MANAGED_MCP_IDS);
+// 舊版 QQ 橋接留下的 MCP 條目：程式已刪除，重跑 setup 時要一併清掉，否則 DSH 重啟會載入失敗。
+const LEGACY_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host'];
+const managedMcpIds = () => DISCORD_MCP_IDS;
 
 function mcpEntries() {
   const node = process.execPath;
   const servers = {
-    ...(DISCORD_ONLY ? {
-      // 模型要自己決定什麼時候發訊息：工具打回橋接的 loopback 發送 API。
-      'mcp-discord': { serverName: 'discord', script: path.join(REPO_ROOT, 'src', 'mcp-discord.js') },
-      // 模型自己查詞、收黑話與頻道標籤；跟 mcp-discord 共用同一個 loopback 端點。
-      'mcp-slang': { serverName: 'slang', script: path.join(REPO_ROOT, 'src', 'mcp-slang.js') },
-      // 模擬股票：查價、下單、持股、排行榜；身分與交易規則都在橋接。
-      'mcp-trade': { serverName: 'trade', script: path.join(REPO_ROOT, 'src', 'mcp-trade.js') },
-      // 明日方舟 PRTS wiki／遊戲資料（唯讀）。獨立 Docker container 提供 HTTP MCP；
-      // 立繪工具（24 個）由 container 的 IMAGES_ENABLED=true 決定，這裡只寫 URL。
-      'mcp-prts': {
-        serverName: 'prts',
-        url: 'http://127.0.0.1:3011/mcp',
-      },
-    } : {
-      'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
-      'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
-    }),
+    // 模型要自己決定什麼時候發訊息：工具打回橋接的 loopback 發送 API。
+    'mcp-discord': { serverName: 'discord', script: path.join(REPO_ROOT, 'src', 'mcp-discord.js') },
+    // 模型自己查詞、收黑話與頻道標籤；跟 mcp-discord 共用同一個 loopback 端點。
+    'mcp-slang': { serverName: 'slang', script: path.join(REPO_ROOT, 'src', 'mcp-slang.js') },
+    // 模擬股票：查價、下單、持股、排行榜；身分與交易規則都在橋接。
+    'mcp-trade': { serverName: 'trade', script: path.join(REPO_ROOT, 'src', 'mcp-trade.js') },
+    // 明日方舟 PRTS wiki／遊戲資料（唯讀）。獨立 Docker container 提供 HTTP MCP；
+    // 立繪工具（24 個）由 container 的 IMAGES_ENABLED=true 決定，這裡只寫 URL。
+    'mcp-prts': {
+      serverName: 'prts',
+      url: 'http://127.0.0.1:3011/mcp',
+    },
     'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
   };
   const managed = managedMcpIds();
-  let out = '# === qq-bridge MCP BEGIN ===\n';
+  let out = '# === dc-bridge MCP BEGIN ===\n';
   out += '# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';
   for (const [id, s] of Object.entries(servers)) {
     if (!managed.includes(id)) continue;
@@ -183,10 +151,8 @@ function mcpEntries() {
         for (const [key, value] of Object.entries(s.env)) out += `          ${key}: ${yamlSingleQuote(value)}\n`;
       }
     }
-    // qq_wait_for_messages 最长可等 10 分钟；DSH 默认 60s 会提前掐断工具调用。
-    if (s.toolCallTimeoutMs) out += `        toolCallTimeoutMs: ${s.toolCallTimeoutMs}\n`;
   }
-  out += '# === qq-bridge MCP END ===\n';
+  out += '# === dc-bridge MCP END ===\n';
   return out;
 }
 
@@ -207,7 +173,7 @@ function prepareCordisPatch() {
   catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
   if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
   let removed = 0;
-  const managed = managedMcpIds();
+  const managed = [...managedMcpIds(), ...LEGACY_MCP_IDS];
   const kept = [];
   for (const operation of doc) {
     if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
@@ -300,13 +266,32 @@ function ensureDirLink(linkPath, targetDir, label) {
  *   ~/.dsh/plugins/<name>  → 仓库目录（人工可读的"安装位"）
  *   <profile>/node_modules/<name> → ~/.dsh/plugins/<name>（Node 解析路径）
  * 第二层必须自己建：preset 子行按 profile 目录解析裸说明符
- * （qq-agent-presets/qq-tool-restrict.mjs），缺了它 preset 会整条挂载失败。
+ * （dc-agent-presets/dc-tool-restrict.mjs），缺了它 preset 会整条挂载失败。
  */
 function ensureBundle(name) {
   const repoDir = path.join(REPO_ROOT, 'plugins', name);
   const linkDir = ensureDirLink(path.join(DSH_HOME, 'plugins', name), repoDir, `bundle ${name} link`);
   ensureDirLink(path.join(DSH_HOME, 'profiles', PROFILE, 'node_modules', name), linkDir, `bundle ${name} node_modules link`);
   return linkDir;
+}
+
+/** 移除舊 QQ bundle 在 ~/.dsh 與 profile node_modules 裡的連結；程式已刪，留著會讓 DSH 載入失敗。 */
+function removeLegacyBundleLinks() {
+  for (const name of LEGACY_BUNDLE_NAMES) {
+    for (const target of [
+      path.join(DSH_HOME, 'plugins', name),
+      path.join(DSH_HOME, 'profiles', PROFILE, 'node_modules', name),
+    ]) {
+      let stat = null;
+      try { stat = fs.lstatSync(target); } catch { continue; }
+      if (!stat.isSymbolicLink()) {
+        log(`⚠️ ${target} 是實體目錄，不是連結；保留不刪，請自行確認`);
+        continue;
+      }
+      fs.rmSync(target, { recursive: true, force: true });
+      log(`已移除舊 QQ bundle 連結：${target}`);
+    }
+  }
 }
 
 function patchProfilePackage(links) {
@@ -327,6 +312,8 @@ function patchProfilePackage(links) {
   pkg.dsh = pkg.dsh || {};
   pkg.dsh.profile = pkg.dsh.profile || {};
   if (!Array.isArray(pkg.dsh.profile.bundles)) pkg.dsh.profile.bundles = [];
+  pkg.dsh.profile.bundles = pkg.dsh.profile.bundles.filter((name) => !LEGACY_BUNDLE_NAMES.includes(name));
+  for (const name of LEGACY_BUNDLE_NAMES) delete pkg.dependencies[name];
   for (const [name, linkDir] of Object.entries(links)) {
     const linkVal = `link:${linkDir.replace(/\\/g, '/')}`;
     if (pkg.dependencies[name] !== linkVal) {
@@ -348,7 +335,6 @@ function patchProfilePackage(links) {
  * 所以至少要在安裝時講一聲。
  */
 function warnMissingImagePlugin() {
-  if (!DISCORD_ONLY) return;
   const pkgFile = path.join(DSH_HOME, 'profiles', PROFILE, 'package.json');
   let pkg = {};
   try { pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8')); } catch { return; }
@@ -359,26 +345,12 @@ function warnMissingImagePlugin() {
   log(`   安裝：dsh plugin --profile ${PROFILE} add github:zemul/dsh-generate-image`);
 }
 
-function ensureLocalModeFile() {
-  const stateDir = path.join(REPO_ROOT, 'state');
-  const modeFile = path.join(stateDir, 'mode.json');
-  if (fs.existsSync(modeFile)) {
-    log(`state/mode.json already exists; leave as-is (current mode may be user-configured)`);
-    return;
-  }
-  ensureDir(stateDir);
-  // DSH 0.1.5 起不再有 'router-standard' preset；留空表示「用 DSH 自己声明的默认 preset」，
-  // 由 bridge.js 的 resolvePresetName() 兜底（硬编码已下线的名字只会换来每次启动的误导性告警）。
-  fs.writeFileSync(modeFile, `${JSON.stringify({ mode: 'reserved2', closedAgentPreset: '' }, null, 2)}\n`, 'utf8');
-  log(`state/mode.json created with mode=reserved2 (fallback if DSH settings are not available)`);
-}
-
-// qq-mode-console / qq-agent-presets 以 link: 依赖注册进 profile package.json 后，DSH 首次启动
+// dc-agent-presets / dsh-llm-hedge 以 link: 依赖注册进 profile package.json 后，DSH 首次启动
 // 需要先安装一次才能解析这些 bundle（否则 cold start 报 "cannot resolve profile bundle"）。
 // dsh CLI 可用时自动执行。
 function autoInstallProfileBundles() {
-  if (process.env.QQ_BRIDGE_SKIP_DSH_INSTALL === '1') {
-    log('auto-install skipped: QQ_BRIDGE_SKIP_DSH_INSTALL=1');
+  if (process.env.DC_BRIDGE_SKIP_DSH_INSTALL === '1') {
+    log('auto-install skipped: DC_BRIDGE_SKIP_DSH_INSTALL=1');
     return;
   }
   const windows = process.platform === 'win32';
@@ -387,14 +359,14 @@ function autoInstallProfileBundles() {
   // environment expansion, with delayed expansion disabled to preserve '!'.
   const cmd = windows ? (process.env.ComSpec || 'cmd.exe') : 'dsh';
   const args = windows
-    ? ['/d', '/v:off', '/s', '/c', 'dsh.cmd plugin --profile "%QQ_BRIDGE_SETUP_PROFILE%" install']
+    ? ['/d', '/v:off', '/s', '/c', 'dsh.cmd plugin --profile "%DC_BRIDGE_SETUP_PROFILE%" install']
     : ['plugin', '--profile', PROFILE, 'install'];
   const r = spawnSync(cmd, args, {
     encoding: 'utf8',
     timeout: 120000,
     windowsHide: true,
     windowsVerbatimArguments: windows,
-    ...(windows ? { env: { ...process.env, QQ_BRIDGE_SETUP_PROFILE: PROFILE } } : {}),
+    ...(windows ? { env: { ...process.env, DC_BRIDGE_SETUP_PROFILE: PROFILE } } : {}),
   });
   if (r.error) {
     log(`auto-install failed to start/complete（${r.error.code || r.error.message}）。`);
@@ -409,19 +381,15 @@ function autoInstallProfileBundles() {
 }
 
 // Validate the existing YAML before changing any presets or configuration.
-// Discord-only 模式只挂 Discord 用的 MCP（web-search-safe／discord／slang／trade／prts）；SnowLuma 的两个 server 不装。
-// QQ 模式照旧挂三个。两种模式都会重写这段受管理的 MCP 区块。
-if (DISCORD_ONLY) log('--discord：只挂 Discord 用的 MCP（不装 SnowLuma）');
+// 只挂 Discord 用的 MCP（web-search-safe／discord／slang／trade／prts）。
+log('只挂 Discord 用的 MCP');
 const cordisPatch = prepareCordisPatch();
 patchCordis(cordisPatch);
 regeneratePresetPatches();
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
+removeLegacyBundleLinks();
 patchProfilePackage(links);
 warnMissingImagePlugin();
-if (!DISCORD_ONLY) reportLegacyPresetDir();
-if (!DISCORD_ONLY) ensureLocalModeFile();
 autoInstallProfileBundles();
-log(DISCORD_ONLY
-  ? 'Done. Restart DSH (or reload the profile) so the dc-chat / dc-chat-open / dc-learner / dc-trader presets take effect.'
-  : 'Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
+log('Done. Restart DSH (or reload the profile) so the dc-chat / dc-chat-open / dc-learner / dc-trader presets take effect.');

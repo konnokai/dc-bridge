@@ -42,27 +42,25 @@ const DEFAULT_RULES = {
     { name: '带凭据的 URL', pattern: 'https?://[^/\\s:@]+:[^/\\s:@]+@', flags: 'i' },
   ],
   // 这些文件本来就不该进公开仓库；出现即失败（无论内容）。
-  denyFiles: ['config.json', 'state/', 'audio/', '*.log', '*.bak', '*.bak-*', 'roles/*.md.bak*'],
+  denyFiles: ['config.json', 'state/', 'audio/', '*.log', '*.bak', '*.bak-*'],
   // 路径/整行匹配到这些就跳过（脱敏模板、示例、测试夹具、已声明含占位符的文档）。
   // 注意：这是**误报白名单**，不是"这些文件不用检查"——加入前先确认里面确实只有占位数据。
   allowPaths: [
     'scripts/privacy-', 'config.example.json', 'package-lock.json', 'src/sensitive.js',
     // 测试夹具/回归脚本：里面是刻意构造的假 ID 与假凭据
-    'scripts/test-', 'scripts/console-ui-', 'scripts/fixtures/', 'scripts/audit-bridge-harness.mjs',
-    'scripts/check-onebot-status.mjs', 'scripts/send-test-group.mjs', 'scripts/send-voice.mjs',
-    'scripts/setup-dsh.mjs', 'scripts/patch-', 'scripts/verify-', 'scripts/probe-',
+    'scripts/test-', 'scripts/fixtures/',
+    'scripts/setup-dsh.mjs', 'scripts/verify-', 'scripts/probe-',
     // ── 以下三项来自一次独立复核：在**全新克隆**里扫描会报 15 条命中，全部是误报，
     //    但它们此前只写在本地 privacy-rules.json（不入库）里，所以对外部验证者而言
     //    这道闸门永远是红的。把误报放进来，闸门才是可用的。
     //    逐条依据：docs/guides/PRIVACY.md 是**讲解脱敏规则**的文档，里面的
     //    `C:\Users\<名字>\…` / `https://user:pass@host` / `-----BEGIN … PRIVATE KEY-----`
-    //    就是它要举例的占位符；src/bridge.js:1706 是注释里的示例 `D:\...\audio\xxx.mp3`；
-    //    src/bridge.js 的 `accessToken:` 与 src/dsh-client.js 的 `secret =` 命中的都是
+    //    就是它要举例的占位符；src/dsh-client.js 的 `secret =` 命中的是
     //    **运行时从配置/凭据文件读取**的赋值，源码里没有任何凭据字面量。
-    //    ⚠️ 代价必须说清：allowPaths 是**按文件**粒度放行的，所以 bridge.js / dsh-client.js
+    //    ⚠️ 代价必须说清：allowPaths 是**按文件**粒度放行的，所以 dsh-client.js
     //    今后新增的真实泄漏不会被扫出来。要收紧，正确做法是给扫描器加
     //    「文件 + 规则名」粒度（或让凭据规则只认高熵字面量），而不是继续往这里加文件。
-    'docs/guides/PRIVACY.md', 'src/bridge.js', 'src/dsh-client.js',
+    'docs/guides/PRIVACY.md', 'src/dsh-client.js',
   ],
 };
 
@@ -106,8 +104,8 @@ function listFiles() {
   const MAX_FILE_BYTES = 8 * 1024 * 1024;
   const walk = (dir, rel, depth) => {
     if (depth > MAX_DEPTH) return;
-    // 真实存在的坑：本仓库里 `state/setup-dsh-test-home/plugins/qq-mode-console` 是一个
-    // **junction**，指回仓库自身 ⇒ 朴素遍历会无限递归。所以必须显式跳过所有 reparse point
+    // 真实存在的坑：`state/` 里可能留下指回仓库自身的 **junction**／符號連結
+    // ⇒ 朴素遍历会无限递归。所以必须显式跳过所有 reparse point
     // （junction / 符号链接）。Windows 上 Node 的 Dirent.isSymbolicLink() 对 junction 不可靠，
     // 因此这里直接看 lstat 的 ReparsePoint 属性，再用 realpath 去重兜底。
     let real;
@@ -190,9 +188,9 @@ function globToRe(glob) {
 }
 
 const rules = loadRules();
-if (process.env.QQ_BRIDGE_PRIVACY_DEBUG) console.error('[privacy-scan:debug] rules loaded');
+if (process.env.DC_BRIDGE_PRIVACY_DEBUG) console.error('[privacy-scan:debug] rules loaded');
 const listed = listFiles();
-if (process.env.QQ_BRIDGE_PRIVACY_DEBUG) console.error(`[privacy-scan:debug] listed ${listed.files.length} files via ${listed.via}`);
+if (process.env.DC_BRIDGE_PRIVACY_DEBUG) console.error(`[privacy-scan:debug] listed ${listed.files.length} files via ${listed.via}`);
 const files = listed.files;
 if (!files.length) {
   console.error('[privacy-scan] 没有拿到任何文件（目录遍历失败或仓库为空）');

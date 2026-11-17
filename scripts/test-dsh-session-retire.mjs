@@ -29,7 +29,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
 // 不同 profile 的 preset / 模型不同：Discord 伺服器是 dc-chat + commandcode。
-const PRESET = process.env.DSH_PRESET || 'qq-chat-v2';
+const PRESET = process.env.DSH_PRESET || 'dc-chat';
 const MODEL_PROVIDER = process.env.DSH_MODEL_PROVIDER || 'deepseek-official';
 const MODEL = process.env.DSH_MODEL || 'deepseek-flash';
 const EFFORT = process.env.DSH_EFFORT ?? 'max';

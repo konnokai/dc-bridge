@@ -1,98 +1,29 @@
-# 控制台离线预览与回归测试
+# Discord 控制台離線預覽與回歸
 
-这些脚本只读取控制台 HTML，使用内存中的演示数据模拟 API。不会加载项目入口、配置文件、真实 state，也不会连接 QQ 或 DSH。重启、清空、发送消息等按钮只改变内存或返回模拟结果。
+## 瀏覽器回歸
 
-## 启动预览
-
-在项目根目录执行：
-
-```sh
-npm run preview:console          # 等价于 node scripts/console-ui-fixture.mjs
+```bash
+npm run test:console-ui          # 等於 node scripts/test-console-ui.mjs
 ```
 
-浏览器访问 `http://127.0.0.1:4173`。写请求会打印到终端，也可以访问 `/__fixture/requests` 查看记录。服务只监听 loopback 地址。按 `Ctrl+C` 退出，演示数据随之丢弃。
+腳本需要 `playwright` 模組與 Chromium，兩者缺一就在啟動時直接中止，**不會**自動改用本機瀏覽器。先裝：
 
-可用选项：
-
-```sh
-node scripts/console-ui-fixture.mjs --port=4174
-node scripts/console-ui-fixture.mjs --original --port=4174
-node scripts/console-ui-fixture.mjs --html=path/to/console.html
-```
-
-`--original` 读取 `scripts/fixtures/console.before.html`（改造前的原版，随仓库保留），仅用于对照预览；正常预览读取 `public/console.html`。
-
-## 浏览器回归
-
-```sh
-npm run test:console-ui          # 等价于 node scripts/test-console-ui.mjs
-node scripts/test-console-ui.mjs --artifacts=docs/ui-verification
-```
-
-脚本需要 `playwright` 模块和 Chromium，两者缺一就在第 23~31 行直接中止，**不会**自动改用本机浏览器。先装：
-
-```sh
+```bash
 npm install --no-save playwright
 npx playwright install chromium
 ```
 
-已经有可用的 Chromium / Chrome / Edge 时，可以用环境变量指定：
+已經有可用的 Chromium／Chrome／Edge 時，可以用環境變數指定：
 
-- `PLAYWRIGHT_MODULE`：Playwright 模块目录（例如 `npm install --no-save playwright` 后指向 `node_modules/playwright`）。
-- `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`：Chromium / Chrome / Edge 可执行文件。
+- `PLAYWRIGHT_MODULE`：Playwright 模組目錄。
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`：Chromium／Chrome／Edge 執行檔。
 
-### 没有本机 Chrome 的环境（OpenChamber）
+測試自己起 `startConsole()` mock server，只連 `127.0.0.1` 的隨機埠；不會連真實 Discord、DSH 或正式 `state/`。
 
-OpenChamber 这台没有本机 Chrome / Edge，也没装 Playwright，`npm run test:console-ui` 会直接中止。这不是测试失败，别当成回归结果。目视检查改用 OpenChamber 的浏览器面板（`openchamber_web` 工具：`browser.open`、`browser.snapshot`、`browser.click`、`browser.close`），它跟专案在同一台机器，开得了 `127.0.0.1`：
+## 沒有本機 Chrome 的環境（OpenChamber）
 
-1. 起一个 preview server：
-   - QQ 控制台：`npm run preview:console`（`http://127.0.0.1:4173`）。
-   - Discord 控制台：没有现成 preview，照 `scripts/test-console-ui.mjs` 里 `startConsole({ host: '127.0.0.1', port: 4199, token: 't', htmlPath: 'public/discord-console.html', handlers: {...} })` 的写法起一个临时 server。handlers 要包含页面会打的每一个 `/api/*`，缺一个就 500。
-2. `browser.open` 开 `http://127.0.0.1:4199/?token=t#sessions`，`browser.snapshot` 读文字与可点元素，要互动就 `browser.click`；看完 `browser.close`。
-3. 这种检查是人工目视，不算回归。改前端后仍要跑 `scripts/test-console-static.mjs`（ID 唯一、JS 可解析）和 `npm run test:discord`。
+OpenChamber 這台沒有本機 Chrome／Edge，`npm run test:console-ui` 會直接中止。這不是測試失敗；目視檢查改用 `openchamber_web`：
 
-> 别用 `obscura` 那组 browser 工具：它会挡私有 IP，`127.0.0.1` 和区网地址都开不了。
-
-测试自行启动随机端口的 fixture，并在退出时关闭浏览器和服务。浏览器请求被限制到该 fixture 的 origin，外部请求会被阻止并使检查失败。
-
-覆盖范围：
-
-- 改造前 225 个元素 ID 保留，DOM ID 唯一。
-- 九个导航视图及切换后草稿保留，跨越实际的 3 秒状态轮询。
-- 模式及预设、角色创建与切换、静默模式、白名单、安全设置。
-- 二代配置上下两个保存按钮的完整 payload，时间单位、零值、工具开关、暂停及恢复。
-- 一代社交参数与会话阶段。
-- 黑话添加、搜索、标签切换、确认对话框与学习参数。
-- 测试消息、AI 提醒仅发送到 mock API。
-- 全部 24 次写请求与改造前的 API payload 基线逐项完全比较。
-- 手机 390px 与平板 768px 下九个视图没有页面级横向溢出。
-- 深色模式：切换生效、写入 `localStorage`、刷新后保持、`aria-pressed` 与 `color-scheme` 同步、正文对比度 ≥ 7:1、深色下 390 / 768px 无横向溢出。
-- 未做选择时跟随系统 `prefers-color-scheme`。
-- `prefers-reduced-motion: reduce` 下关闭背景动效、页面切换动画与过渡。
-- 人格管理全流程：新建 → 点列表载入编辑（内容回填、按钮切到「保存修改」）→ 保存修改 → 改名保存（先重命名再保存）→ 删除（确认框自动接受），每步都断言列表随之更新。
-- 仿真提示词：默认可查看且只读、解锁后可编辑、保存后回到只读并提示「需重启 DSH」。
-- 思考强度：档位来自 DSH 公布的能力（low/high/max）、默认 max、可切换保存，并断言页面明示会连带修改 DSH 全局默认。
-- Discord 版控制台（`public/discord-console.html`，用 `startConsole` 加 mock handler 起一个随机端口）：「频道风格」的频道下拉選單顯示 `#頻道名 · 伺服器名（筆數）`，名稱或伺服器還是撞才補 id，跟狀態過濾一起作用，換頻道回到第 1 頁，重新整理後保留選擇，頻道沒有條目時退回「全部頻道」。
-- Discord 對話表：次數、畫圖、最後觸發、第一次可點擊排序；同欄切換升冪/降冪，換欄預設降冪，排序後回第 1 頁，`aria-sort` 與箭頭同步，同值保留伺服器順序。
-- Discord 會話分頁的「回訪排程」卡片：列出排程與剩餘時間，取消按鈕會呼叫 `/api/followups/delete`。
-- Discord「記憶」分頁：群友記憶、頻道筆記、梗圖每頁 20 筆，可依名稱或 ID 篩選；按重新整理後頁碼不變，換頁後再篩選會回到第 1 頁，一頁放得下時不顯示分頁。
-- Discord 所有表格固定欄寬：換頁或內容變長時欄位與按鈕位置不變；375px 下各分頁的表格儲存格不溢出到隔壁欄。
-- 无 JavaScript 错误、未知 API 或外部网络请求。
-
-新增的控制台 API 都已在 `console-ui-fixture.mjs` 里 mock；**改动控制台时若加了新接口，必须同步补 mock**，否则本套件会在「未知 API」这一项失败。
-
-`--artifacts` 会保存检查结果 JSON、模拟写请求记录和桌面 / 手机截图（浅色与深色各一组），截图时会静止动画以保证可复现。默认不生成额外文件。
-
-## 基线说明
-
-`console-ui-legacy-ids.json` 保存改造前的 225 个元素 ID。`console-ui-contracts.json` 来自原控制台在相同 fixture 中执行相同操作后的 24 次写请求，包含二代配置的完整嵌套参数。
-
-只有后端契约经过明确调整时才更新基线。`scripts/fixtures/console.before.html` 是改造前的原版控制台（通常无需改动），重录时运行：
-
-```sh
-node scripts/test-console-ui.mjs --original --record-baseline
-```
-
-普通回归不依赖 `console.before.html`。不要用会连真实服务的脚本替代本脚本：本脚本只使用内存 fixture。
-
-此回归验证前端行为和提交契约，不能替代真实 QQ / DSH 集成测试。
+1. 照 `scripts/test-console-ui.mjs` 的 `startConsole({ host, port, token, htmlPath: 'public/discord-console.html', handlers: {...} })` 起一個臨時 server。handlers 要包含頁面會打的每一個 `/api/*`，缺一個就 500。
+2. `browser.open` 開 `http://127.0.0.1:<port>/?token=t#sessions`，`browser.snapshot` 讀文字與可點元素，要互動就 `browser.click`；看完 `browser.close`。
+3. 這種檢查是人工目視，不算回歸。改前端後仍要跑 `scripts/test-console-static.mjs`（ID 唯一、JS 可解析、設定欄位與表格契約）和 `npm run test:discord`。

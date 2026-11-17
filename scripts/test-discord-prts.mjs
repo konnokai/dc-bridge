@@ -1,5 +1,5 @@
 // PRTS 工具白名單：dc-chat／dc-chat-open 放行清單內的工具，dc-learner／dc-trader 在註冊期隱藏、執行期再擋一次。
-// 另外驗證 setup-dsh --discord 產生的 mcp-prts 條目（transport、URL）與冪等性。
+// 另外驗證 setup-dsh 產生的 mcp-prts 條目（transport、URL）與冪等性。
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -51,13 +51,36 @@ for (const name of ['dc-learner', 'dc-trader']) {
   assert.equal(typeof other.guard({ name: 'mcp__prts__operator_artwork' }), 'string', `${name} 執行期也要擋立繪`)
 }
 
-// setup --discord：連跑兩次只能有一條 mcp-prts，而且 transport／URL 都要對。
+// setup-dsh：連跑兩次只能有一條 mcp-prts，而且 transport／URL 都要對。
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-prts-setup-'))
+fs.mkdirSync(path.join(home, 'profiles', 'web'), { recursive: true })
+fs.writeFileSync(path.join(home, 'profiles', 'web', 'cordis.patch.yml'), `- insert:
+    - id: mcp-snowluma
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: snowluma
+- insert:
+    - id: mcp-snowluma-host
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: snowluma-host
+`, 'utf8')
+fs.writeFileSync(path.join(home, 'profiles', 'web', 'package.json'), JSON.stringify({
+  name: 'dsh-profile-web',
+  private: true,
+  dependencies: { 'qq-agent-presets': 'link:/old/qq-agent-presets' },
+  dsh: { profile: { bundles: ['qq-agent-presets', 'qq-mode-console'] } },
+}, null, 2), 'utf8')
+const legacyTarget = path.join(home, 'legacy-qq-agent-presets')
+fs.mkdirSync(legacyTarget, { recursive: true })
+fs.mkdirSync(path.join(home, 'plugins'), { recursive: true })
+fs.writeFileSync(path.join(legacyTarget, 'keep.txt'), 'keep', 'utf8')
+fs.symlinkSync(legacyTarget, path.join(home, 'plugins', 'qq-agent-presets'), process.platform === 'win32' ? 'junction' : 'dir')
 for (let i = 0; i < 2; i++) {
-  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/setup-dsh.mjs'), '--discord'], {
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts/setup-dsh.mjs')], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, DSH_HOME: home, QQ_BRIDGE_SKIP_DSH_INSTALL: '1', PATH: path.dirname(process.execPath) },
+    env: { ...process.env, DSH_HOME: home, DC_BRIDGE_SKIP_DSH_INSTALL: '1', PATH: path.dirname(process.execPath) },
     timeout: 60000,
   })
   assert.equal(result.status, 0, result.stderr || result.error?.message)
@@ -72,7 +95,14 @@ assert.equal(prts[0].config.command, undefined, 'HTTP 不寫 command')
 assert.equal(prts[0].config.args, undefined, 'HTTP 不寫 args')
 assert.equal(prts[0].config.env, undefined, 'env 在 container，不在 DSH')
 assert.equal(entries.find((entry) => entry.id === 'mcp-discord').config.command, process.execPath, '本機 MCP 仍用同一個 node')
+assert.equal(entries.some((entry) => entry.id === 'mcp-snowluma' || entry.id === 'mcp-snowluma-host'), false,
+  '舊 QQ MCP 條目要被清掉（程式已刪，留著 DSH 會載入失敗）')
+const profilePkg = JSON.parse(fs.readFileSync(path.join(home, 'profiles', 'web', 'package.json'), 'utf8'))
+assert.equal(profilePkg.dsh.profile.bundles.includes('qq-agent-presets'), false, '舊 QQ bundle 要從 profile 移除')
+assert.equal(profilePkg.dependencies['qq-agent-presets'], undefined, '舊 QQ bundle 依賴要移除')
+assert.equal(fs.existsSync(path.join(home, 'plugins', 'qq-agent-presets')), false, '舊 QQ bundle 連結要清掉')
+assert.equal(fs.existsSync(path.join(legacyTarget, 'keep.txt')), true, '只删連結，連結目標的實體目錄不能動')
 
 try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* 清不掉就算了，不影響斷言 */ }
 
-console.log('PRTS: dc-chat 放行清單、其他 preset 隱藏並拒絕；setup --discord 條目與冪等性正常')
+console.log('PRTS: dc-chat 放行清單、其他 preset 隱藏並拒絕；setup-dsh 條目與冪等性正常')

@@ -28,7 +28,7 @@ import {
   updateSlang,
   upsertCandidates,
 } from '../src/core/discord-slang.mjs';
-import { extractJsonArray } from '../src/slang-learner.js';
+import { extractJsonArray } from '../src/core/discord-json.mjs';
 import {
   JEV_ENDPOINT,
   askJev,

@@ -29,16 +29,16 @@ git log --format='=== %h %s%n%b' --stat <基準>..upstream/main
 依檔案的落點分三類：
 
 - **Discord 路徑**：`src/discord-bridge.js`、`src/core/discord-*.mjs`、`src/mcp-discord.js`、`src/mcp-slang.js`、`src/mcp-web-search-safe.js`、`src/web-search.js`、`src/safe-fetch.js`、`src/dsh-client.js`、`src/state-acl.mjs`、`scripts/test-discord-*.mjs`。
-- **QQ 專用**：`src/bridge.js`、`restart.bat`、`start.bat`、`src/mcp-snowluma-safe.js`、`src/mcp-host-server.js`、`src/snowluma-conn.js`、`src/send-voice-lib.js`、`plugins/qq-*`。Discord 入口沒走這些，預設不搬。
+- **QQ 專用**：`src/bridge.js`、`src/mcp-snowluma-safe.js`、`src/mcp-host-server.js`、`src/snowluma-conn.js`、`src/send-voice-lib.js`、`plugins/qq-*`。這些已從本 repo 移除，預設不搬。
 - **文件 / CI / 版本號**：通常不搬，除非它描述的行為我們也有。
 
 共用模組要先確認 Discord 是否真的 import，不要只看檔名：
 
-- `src/slang-learner.js`：Discord 只用 `extractJsonArray`；黑話與頻道風格在 `src/core/discord-slang.mjs`。
-- `src/sticker-lib.js`：Discord 沒有 import；表情與備注在 `src/core/discord-emoji.mjs`。
-- `src/voice-core.js`：Discord 只用 `resolveFfmpeg` / `probeAudio`；`safeJoinLibrary` 是 QQ 語音庫。
-- `src/role-card.js`：Discord 沒有 import，人格全文在 preset。
-- 其餘 `src/sensitive.js`、`src/preset-prompt.js`、`src/v2-wait.js` 是共用模組，改動要一起看。
+- `src/core/discord-json.mjs`：`extractJsonArray` 的落點（上游原本在 `src/slang-learner.js`）。
+- `src/core/discord-time.mjs`：`describeAge` 的落點（上游原本在 `src/model-view.js`）。
+- `src/voice-core.js`：Discord 只用 `resolveFfmpeg` / `probeAudio`。
+- 其餘 `src/sensitive.js`、`src/md-to-plain.js`、`src/token-ledger.js`、`src/state-acl.mjs` 是共用模組，改動要一起看。
+- `role-card.js`、`preset-prompt.js`、`v2-wait.js`、`sticker-lib.js`、`slang-learner.js` 已移除；不要從上游搬回來。
 
 ## 3. 判斷要不要搬
 

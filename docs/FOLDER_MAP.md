@@ -1,74 +1,72 @@
 # 目錄地圖
 
-> 只描述現況，不是改動指令。文件索引見 [README.md](README.md)。最後核對：2026-10-28。
+> 只描述現況，不是改動指令。文件索引見 [README.md](README.md)。
 
-## 一、兩條線
+## 一、入口
 
-| 線 | 狀態 | 入口 |
-| --- | --- | --- |
-| Discord | 主要產品，線上只跑這條 | `src/discord-bridge.js`（`npm start`） |
-| QQ（SnowLuma／OneBot） | 只作功能對照，不再部署 | `src/bridge.js`（`npm run start:qq`） |
+只有 Discord：`src/discord-bridge.js`（`npm start`）。QQ／SnowLuma／OneBot 的程式與測試已移除。
 
-Discord 不 import `src/bridge.js`。
+## 二、`src/`
 
-## 二、`src/` 分線
-
-### Discord 專用
+### 入口與 MCP
 
 | 檔案 | 作用 |
 | --- | --- |
 | `discord-bridge.js` | 入口：Gateway、批次、`agentHandlers`、控制台 |
+| `dsh-client.js` | DSH Web API 客戶端（Cookie 鑄造、RPC、事件流） |
 | `mcp-discord.js` | Discord 工具（發訊、看訊息、表情、投票） |
 | `mcp-slang.js` | 黑話工具 |
 | `mcp-trade.js` | 模擬股票工具（商品清單、查價、下單、持股、排行榜） |
-| `core/discord-core.mjs` | 設定正規化、長文切段、會話映射 |
-| `core/discord-agent.mjs` | token 解析、每輪額度、`send` 守衛 |
-| `core/discord-batch.mjs` | 批次器、回合佇列（含指令排隊與 hold/rebase）與 batch prompt 組裝 |
-| `core/discord-typing.mjs` | @ 模式的補句窗口（叫過 bot 後 60 秒，打字可延長，最多 2 分鐘） |
-| `core/discord-context.mjs` | 頻道上下文 |
-| `core/discord-activity.mjs` | 發言頻率 |
-| `core/discord-quiet.mjs` | 安靜模式 |
-| `core/discord-sandbox.mjs` | `run_script` 的 Docker 沙箱（參數、逾時、輸出上限、殘留清理） |
-| `core/discord-ignore.mjs` | 模型自己的不理名單（帶到期時間）與重複拒絕偵測 |
-| `core/discord-feedback.mjs` | 自己訊息收到的 reaction |
-| `core/discord-dev-feedback.mjs` | 模型送給開發者的功能申請與意見（控制台「回饋」分頁） |
-| `core/discord-followup.mjs` | 回訪排程（存 `state/discord-followups.json`，重啟後還在） |
-| `core/discord-notes.mjs` | 頻道筆記與每日摘要 |
-| `core/discord-memes.mjs` | 梗圖庫（所有伺服器共用）：索引與額度、ffmpeg 縮成長邊 ≤256px、【常用梗圖】注入文字 |
-| `core/discord-reload.mjs` | `/reload-system-prompt` 的交接摘要（暫存與 prompt 區塊） |
-| `core/discord-memory.mjs` | 群友記憶 |
-| `core/discord-slang.mjs` | 黑話收集與注入 |
-| `core/discord-emoji.mjs` | 表情目錄與使用次數 |
-| `core/discord-media.mjs` | 圖片與連結預覽、`send_image` 的本機生圖檔案解析 |
-| `core/prts-artwork.mjs` | PRTS 立繪解析：MediaWiki 網址、檔名驗證、preview／large 下載 |
-| `core/discord-gif.mjs` | GIPHY 搜尋（不落地、只留 https 的 giphy.com 媒體網址） |
-| `core/discord-security.mjs` | 白名單、敏感詞 |
-| `core/discord-usage.mjs` | 用量統計 |
-| `core/discord-codex-quota.mjs` | Codex 額度查詢與 5 小時窗口重置 ping |
-| `core/discord-trigger-stats.mjs` | 觸發統計 |
-| `core/discord-send-handler.mjs` | MCP `/send` 的送出統計（觸發與繪圖次數） |
-| `core/discord-image-jobs.mjs` | 背景生圖回報、取消、完成提示排進會話閘門、畫圖次數歸屬 |
-| `core/discord-voice-jobs.mjs` | 背景語音工作的建立、取用、狀態與逾時清理 |
-| `core/discord-console.mjs` | 控制台 API 的純邏輯 |
-| `core/discord-trade.mjs` | 模擬股票交易規則：費用、漲跌停、排隊、結算、損益、排行榜 |
-| `core/discord-trade-db.mjs` | 交易域 SQLite（`state/discord-trade.sqlite`） |
-| `core/quote-provider.mjs` | 台股盤後報價：TWSE／TPEx OpenAPI 與行事曆 |
-| `core/institutional-provider.mjs` | 三大法人買賣超日報：TWSE T86、TPEx OpenAPI |
-| `core/material-provider.mjs` | 每日重大訊息：TWSE t187ap04_L、TPEx mopsfin_t187ap04_O |
-| `core/trade-symbols.mjs` | 模擬股票商品主檔（ETF 規則與常用股票別名） |
-| `core/bot-trader.mjs` | Bot 交易員的排程判斷、prompt 與公告文字 |
+| `mcp-web-search-safe.js` | 只讀搜尋與抓取工具 |
+| `self-test.js` | DSH 連線自測 |
 
-### QQ 專用
-
-`bridge.js`（主程式，約 11.7k 行）、`snowluma-conn.js`、`mcp-snowluma-safe.js`、`mcp-host-server.js`、
-`preset-prompt.js`、`role-card.js`、`v2-wait.js`、`forward.js`、`sticker-lib.js`、`send-voice-lib.js`。
-
-### 共用
+### `src/core/`
 
 | 檔案 | 作用 |
 | --- | --- |
-| `dsh-client.js` | DSH Web API 客戶端（Cookie 鑄造、RPC、事件流） |
-| `model-view.js` | 把訊息壓成模型看到的樣子（欄位是 QQ 的） |
+| `discord-core.mjs` | 設定正規化、長文切段、會話映射 |
+| `discord-agent.mjs` | token 解析、每輪額度、`send` 守衛 |
+| `discord-batch.mjs` | 批次器、回合佇列（含指令排隊與 hold/rebase）與 batch prompt 組裝 |
+| `discord-typing.mjs` | @ 模式的補句窗口 |
+| `discord-context.mjs` | 頻道上下文 |
+| `discord-time.mjs` | 相對時間字串（3s／18m／2h／3d） |
+| `discord-activity.mjs` | 發言頻率 |
+| `discord-quiet.mjs` | 安靜模式 |
+| `discord-sandbox.mjs` | `run_script` 的 Docker 沙箱 |
+| `discord-ignore.mjs` | 模型自己的不理名單與重複拒絕偵測 |
+| `discord-feedback.mjs` | 自己訊息收到的 reaction |
+| `discord-dev-feedback.mjs` | 模型送給開發者的功能申請與意見 |
+| `discord-followup.mjs` | 回訪排程 |
+| `discord-notes.mjs` | 頻道筆記與每日摘要 |
+| `discord-memes.mjs` | 梗圖庫 |
+| `discord-reload.mjs` | `/reload-system-prompt` 的交接摘要 |
+| `discord-memory.mjs` | 群友記憶 |
+| `discord-slang.mjs` | 黑話收集與注入 |
+| `discord-json.mjs` | 從模型輸出抓 JSON 陣列 |
+| `discord-emoji.mjs` | 表情目錄與使用次數 |
+| `discord-media.mjs` | 圖片與連結預覽、`send_image` 的本機生圖檔案解析 |
+| `prts-artwork.mjs` | PRTS 立繪解析 |
+| `discord-gif.mjs` | GIPHY 搜尋 |
+| `discord-security.mjs` | 白名單、敏感詞 |
+| `discord-usage.mjs` | 用量統計 |
+| `discord-codex-quota.mjs` | Codex 額度查詢與重置 ping |
+| `discord-trigger-stats.mjs` | 觸發統計 |
+| `discord-send-handler.mjs` | MCP `/send` 的送出統計 |
+| `discord-image-jobs.mjs` | 背景生圖工作 |
+| `discord-voice-jobs.mjs` | 背景語音工作 |
+| `discord-console.mjs` | 控制台 API 的純邏輯 |
+| `discord-trade.mjs` | 模擬股票交易規則 |
+| `discord-trade-db.mjs` | 交易域 SQLite |
+| `quote-provider.mjs` | 台股盤後報價 |
+| `institutional-provider.mjs` | 三大法人買賣超日報 |
+| `material-provider.mjs` | 每日重大訊息 |
+| `trade-symbols.mjs` | 模擬股票商品主檔 |
+| `bot-trader.mjs` | Bot 交易員的排程判斷與 prompt |
+
+### 共用工具
+
+| 檔案 | 作用 |
+| --- | --- |
 | `md-to-plain.js` | Markdown → 純文字、長文切段、代理對安全截斷 |
 | `model-prices.js` | 價目表 |
 | `web-search.js` | 聯網搜尋 |
@@ -78,42 +76,30 @@ Discord 不 import `src/bridge.js`。
 | `sensitive.js` | 敏感詞 |
 | `media-normalize.js` | 圖片正規化 |
 | `token-ledger.js` | token 帳本 |
-| `slang-learner.js` | 黑話抽取 |
 | `state-acl.mjs` | `state/` 與 `config.json` 的權限 |
-| `voice-core.js` | 語音核心；repo 外的 `voice-tool/` 也用這一份 |
-| `self-test.js` | DSH 連線自測 |
+| `voice-core.js` | ffmpeg／ffprobe 共用工具 |
 
 ## 三、其他目錄
 
-| 路徑 | 內容 | 線 |
-| --- | --- | --- |
-| `dsh/agent-presets/` | preset 的權威源：`dc-chat`、`dc-chat-open`（政治開放版）、`dc-learner`、`dc-trader`、`qq-chat`、`qq-chat-v2` | 兩條 |
-| `plugins/` | DSH 插件：`dc-agent-presets`（Discord 的 patch、工具守衛與畫圖路徑鎖）、`qq-agent-presets`、`qq-mode-console` | 兩條 |
-| `public/` | `discord-console.html`（Discord 控制台，預設 3110）、`console.html`（QQ 控制台，3100） | 兩條 |
-| `roles/` | 人格卡（QQ 控制台用） | QQ |
-| `assets/` | 圖片等資源；`ai-chan-sheets/` 是 11 個 AI 娘的三視圖與設定圖（畫圖參考，外部作品，授權見該目錄 README） | — |
-| `docs/` | 全部文件，見 [README.md](README.md) | 兩條 |
-| `state/` | 執行時資料（會話映射、會話 preset 映射、筆記、回訪排程、開發回饋、帳本、鎖、`discord-images/` 生圖輸出、`discord-image-jobs.json` 生圖工作、`discord-codex-reset.json` 重置 ping 狀態、`discord-codex-quota.json` 生圖額度快照、`discord-custom-status.json` 自訂狀態）。`.gitignore` 排除，**不要刪** | 兩條 |
-| `config.json` | 真實設定，不入庫；模板是 `config.example.json` | 兩條 |
+| 路徑 | 內容 |
+| --- | --- |
+| `dsh/agent-presets/` | preset 的權威源：`dc-chat`、`dc-chat-open`、`dc-learner`、`dc-trader` |
+| `plugins/` | DSH 插件：`dc-agent-presets`、`dsh-llm-hedge` |
+| `public/` | `discord-console.html`（控制台，預設 3110） |
+| `assets/` | 圖片等資源；`ai-chan-sheets/` 是 AI 娘三視圖與設定圖 |
+| `docs/` | 全部文件，見 [README.md](README.md) |
+| `state/` | 執行時資料（會話映射、會話 preset 映射、筆記、回訪、回饋、帳本、鎖、生圖與股票資料）。`.gitignore` 排除，**不要刪** |
+| `config.json` | 真實設定，不入庫；模板是 `config.example.json` |
 
 ## 四、`scripts/` 命名
 
 | 前綴 | 用途 |
 | --- | --- |
 | `test-*.mjs` | 自動化測試。`test-audit.mjs` 的 `tests[]` 是總清單 |
-| `test-discord-*.mjs` | Discord 測試；`npm run test:discord` 會跑全部，新增檔案會被自動納入 |
+| `test-discord-*.mjs` | Discord 測試；`npm run test:discord` 會跑全部 |
 | `deploy-discord.mjs` | 部署到測試伺服器（見 [AGENTS.md](../AGENTS.md)） |
-| `setup-dsh.mjs` | 把 preset 與 MCP 寫進目標設備的 DSH；`--discord` 只裝 Discord 那套 |
-| `build-agent-preset-patches.mjs` | 從 `dsh/agent-presets/` 產生 `plugins/*/presets/*.patch.yml`。改 preset 後要重跑，`--check` 確認同步 |
+| `setup-dsh.mjs` | 把 preset 與 MCP 寫進目標設備的 DSH |
+| `build-agent-preset-patches.mjs` | 從 `dsh/agent-presets/` 產生 `plugins/dc-agent-presets/presets/*.patch.yml` |
 | `build-discord-emojis.mjs` | 建表情目錄 |
-| `probe-*.mjs` | 問 DSH／SnowLuma「實際支援什麼」的探針，按需重跑 |
-| `verify-*.mjs` | 一致性檢查（DSH 適配、人格設定） |
-| `send-*.mjs` | 真的會發訊息的手動小工具 |
-| `patch-snowluma-sdk.mjs` | `postinstall` 依賴，不能刪 |
-| `harden-state-acl.mjs` / `diagnose-acl.mjs` | Windows ACL 工具。專案不在 Windows 上跑，只在需要檢查舊機器時用 |
-| `voice-tool-locator.mjs` | 找 repo 外的 `voice-tool/`，不在就跳過 |
-
-## 五、repo 外的 `voice-tool/`
-
-語音工具在 repo 上一層（`../voice-tool/`）：`voice-cli.mjs`、`voice-gui.mjs`、`public/voice.html`。
-它直接引用本 repo 的 `src/voice-core.js` 與 `src/snowluma-conn.js`，所以這兩個檔案不能搬。
+| `probe-*.mjs` | 問 DSH「實際支援什麼」的探針，按需重跑 |
+| `harden-state-acl.mjs` / `diagnose-acl.mjs` | Windows ACL 工具 |

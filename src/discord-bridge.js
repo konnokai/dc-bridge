@@ -5,8 +5,6 @@
 // 協定層直接用 src/dsh-client.js（Cookie 鑄造、斜線 RPC、remote.mux 事件流），
 // 准入與分條等純邏輯在 src/core/discord-core.mjs。
 //
-// 為什麼不重用 src/bridge.js：那是 QQ 專用單體（一萬兩千行，QQ 發送寫死在 main() 裡）。
-// 拆平台介面的成本高於重寫一個只做 chat 的入口，而且上游 DSH 協議還在動。
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -479,7 +477,7 @@ function loadConfig() {
 
 /** 單一實例：兩個橋接搶同一個 bot token 會各自建會話、各自回覆。 */
 function acquireLock() {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   let pid = null;
   try {
     pid = Number.parseInt(fs.readFileSync(LOCK_FILE, 'utf8').trim(), 10);
@@ -1292,7 +1290,7 @@ async function main() {
     if (!found) {
       // 照文件跑完 setup＋重啟 DSH 之後，橋接手上的清單可能還是舊的：重抓一次再決定。
       if (!refresh) return requirePreset(name, { refresh: true });
-      const error = new Error(`preset "${wanted}" 不在 DSH 可用清單（${presetList.map((preset) => preset.id).join(', ') || '空'}）。請執行 node scripts/setup-dsh.mjs --discord，然後重啟 DSH`);
+      const error = new Error(`preset "${wanted}" 不在 DSH 可用清單（${presetList.map((preset) => preset.id).join(', ') || '空'}）。請執行 node scripts/setup-dsh.mjs，然後重啟 DSH`);
       error.code = 'preset-missing';
       throw error;
     }
@@ -3753,7 +3751,7 @@ async function main() {
       } catch (error) {
         throw toolError(String(error?.message ?? error), Number(error?.statusCode) || 502);
       }
-      const out = await runInMediaQueue(() => normalizeMeme(source.buffer, { ffmpegPath: cfg.discord.media.ffmpegPath ?? null }));
+      const out = await runInMediaQueue(() => normalizeMeme(source.buffer));
       if (!out.ok) throw toolError(`存不了：${out.error}`, 400);
       const added = addMeme(memeStore, {
         ...fields,

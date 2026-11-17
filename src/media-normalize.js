@@ -1,4 +1,4 @@
-// 媒体归一化：把「QQ 给我们的原始图片」压成「DSH 与模型真能吃下的形状」。
+// 媒體正規化：把 Discord 附件、連結預覽與生圖壓成「DSH 與模型真的吃得下的形狀」。
 //
 // ── 为什么需要这一层（2026-10-18 审计结论，见 docs/audits/AUDIT_2026-10-18_MEDIA_AND_WATERMARK.md）
 //
@@ -8,8 +8,8 @@
 //        base64 ≥ 4,474,880 字符（原始字节 ≥ 3.20 MiB）→ RangeError: Maximum call stack size exceeded
 //    而 DSH 把这个异常原样降级成 `[image unavailable: image/gif; Maximum call stack size exceeded; …]`
 //    —— 模型只看到一行错误，图一个字节都没进上下文。
-//    桥接侧的抓取上限（socialV2.media.maxBytes，默认 8 MiB）远在这条线之上，
-//    于是「3.2–8 MiB 的图」就成了「桥接认为合法、DSH 必然拒绝」的死区。
+//    桥接侧的抓取上限（discord.media.maxBytes，默认 20 MiB）远在这条线之上，
+//    于是「3.2–20 MiB 的图」就成了「桥接认为合法、DSH 必然拒绝」的死区。
 //
 // ② 动图变单帧：DSH 的 canPassThroughNormalization() 显式排除 image/gif，
 //    一律交给 sharp 归一化，而 sharp 默认只解 page 0 —— 一张 48 帧、4.8 MB 的动图，
@@ -18,9 +18,8 @@
 //
 // ── 本模块的取舍
 //
-// · **只动喂给模型的那一份**。收集表情（add_custom_face）必须用原始字节，
-//   所以归一化只接在 fetchMediaData / resolveMediaList / sticker-image 这些「给模型看」的出口，
-//   不去改 fetchOneBotImage / fetchFaceMedia 的返回值。
+// · **只動餵給模型的那一份**：正規化只接在 Discord 的媒體出口（附件、連結預覽、生圖），
+//   不改原始下載位元組。
 // · **动图抽帧拼图**而不是发多张图：一条消息 5 张图 = 5 次 DSH admission + 5 份 token，
 //   而 3×2 拼图信息密度更高、只算一张图（实测 4.83 MB / 200 帧 → 92 KB / 269 ms）。
 // · **能不动就不动**：小图（≤ maxModelBytes 且长边够小）原样放行，零延迟。
@@ -348,7 +347,7 @@ function runFfmpeg(ffmpeg, args, { timeoutMs = MEDIA_DEFAULTS.timeoutMs } = {}) 
     child.on('error', (error) => settle({
       ok: false,
       error: error?.code === 'ENOENT'
-        ? '找不到 ffmpeg（设置 FFMPEG_PATH 或 config.json 的 socialV2.voice.ffmpegPath）'
+        ? '找不到 ffmpeg（設定 FFMPEG_PATH）'
         : `ffmpeg 不可用：${error?.message ?? error}`
     }));
     child.on('close', (code) => settle(code === 0 ? { ok: true } : {
@@ -362,7 +361,7 @@ function runFfmpeg(ffmpeg, args, { timeoutMs = MEDIA_DEFAULTS.timeoutMs } = {}) 
 function makeTempWorkspace(tmpDir) {
   const base = tmpDir ? path.resolve(tmpDir) : os.tmpdir();
   fs.mkdirSync(base, { recursive: true });
-  return fs.mkdtempSync(path.join(base, 'qqb-media-'));
+  return fs.mkdtempSync(path.join(base, 'dcb-media-'));
 }
 
 function cleanupWorkspace(dir) {

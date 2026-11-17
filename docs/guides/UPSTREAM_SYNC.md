@@ -1,6 +1,7 @@
 # 上游對比基準
 
 上游是 `upstream`（qq-bridge）。這份文件記錄「已經對到哪個 commit、哪些判斷過了」。
+QQ／SnowLuma／OneBot 的程式已從本 repo 移除；現在只有共用模組（DSH client、web search、safe-fetch 等）還值得比對。
 下次要比對，先看這裡，只跑基準之後的新 commit，不要整包重跑。
 
 ## 目前基準
@@ -18,11 +19,12 @@ git log --oneline b80fa51..upstream/main
 ## 怎麼判斷一個 commit 要不要搬
 
 1. 先讀 commit message 與 body，不要一開始就 diff。
-2. 確認缺陷在 Discord 路徑上也存在。`src/bridge.js` 是 QQ 版，Discord 入口
-   （`src/discord-bridge.js`）沒有用它；`src/mcp-discord.js` 與 `src/core/discord-*.mjs`
-   才是實際路徑。
+2. 確認缺陷在 Discord 路徑上也存在。QQ 入口 `src/bridge.js` 已移除；Discord 入口是
+   `src/discord-bridge.js`，`src/mcp-discord.js` 與 `src/core/discord-*.mjs` 才是實際路徑。
 3. 共用模組要一起看：`src/sensitive.js`、`src/safe-fetch.js`、`src/mcp-web-search-safe.js`、
-   `src/role-card.js`、`src/preset-prompt.js`、`src/v2-wait.js`。
+   `src/md-to-plain.js`、`src/token-ledger.js`、`src/state-acl.mjs`。
+   `describeAge` 現在在 `src/core/discord-time.mjs`（上游原本在 `model-view.js`），
+   `extractJsonArray` 在 `src/core/discord-json.mjs`（上游原本在 `slang-learner.js`）。
 4. 確認 Discord 是不是已經有等價機制（令牌對模型不可見、按 key 分鏈、按頻道隔離）。
 5. 判斷不用搬的，把理由補進下面，下次不要重問。
 

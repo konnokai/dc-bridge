@@ -2,13 +2,10 @@
 //
 // 為什麼要有 restrict（而不只靠 guard）：
 //   guard 只能拒絕「執行」，工具名還是會出現在模型的 schema 裡，模型會一直想調它。
-//   本機執行／檔案類工具必須在註冊期就從清單隱藏（同 QQ 版的鐵律 L7）。
+//   本機執行／檔案類工具必須在註冊期就從清單隱藏。
 //
-// ⚠️ 這份是 Discord 的獨立副本，不能 import 另一包（兩個 bundle 各自安裝）。
-//    QQ 名單在 plugins/qq-agent-presets/qq-tool-restrict.mjs；2026-11-17 起兩邊分開對賬：
-//    Discord = DSH 0.2.2-rc.3、QQ = 0.2.1。回退 Discord 到 0.2.1 時，靠
-//    LEGACY_0_2_1_TOOL_NAMES 保留的 3 個名字繼續擋。scripts/test-discord-bridge.mjs
-//    會檢查關鍵名字還在不在。
+// ⚠️ 名單對賬對象是 DSH 0.2.2-rc.3。回退到 0.2.1 時，靠 LEGACY_0_2_1_TOOL_NAMES
+//    保留的 3 個名字繼續擋；scripts/test-discord-bridge.mjs 會檢查關鍵名字還在不在。
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

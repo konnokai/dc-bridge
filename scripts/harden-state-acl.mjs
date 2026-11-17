@@ -7,11 +7,11 @@
 //
 // 设计原则（必须是"零 bug 风险"的那种实用主义）：
 //   1) 失败即降级：拿不到权限就打印一条可复制的命令然后**以 0 退出**，绝不阻断桥接启动。
-//   2) 不消费参数：桥接进程是 `node src/bridge.js`，这里绝不能碰 process.argv 的语义。
+//   2) 不消费参数：桥接进程是 `node src/discord-bridge.js`，这里绝不能碰 process.argv 的语义。
 //   3) 输出给人看：中文、直白、给出下一步。
 //
 // ⚠️ 具体的 icacls 逻辑**不在本文件**，而是与桥接进程共用 `src/state-acl.mjs`。
-// 这套逻辑曾经在这里和 src/bridge.js 里各写一份，两份带着同一个 bug：
+// 這套邏輯曾經在兩個地方各寫一份，兩份帶著同一個 bug：
 // `icacls DIR /inheritance:r /grant:r "u:(OI)(CI)F" /T` 会把子文件 DACL 清空
 // （(OI)(CI) 是目录专用标志，套到文件上失败，而 /inheritance:r 已经摘掉了继承 ACE），
 // 加上回读自检被 Low 完整性标签行的 (I) 误判，导致**每次启动都重跑一次这个破坏性命令**。
@@ -37,9 +37,8 @@ const isElevatedRun = process.argv.includes('--elevated');
 function say(msg) { if (!quiet) console.log(msg); }
 function sayAlways(msg) { console.log(msg); }
 
-// state/ 之外的凭据文件：config.json 里是真实的 SnowLuma OneBot accessToken ——
-// 拿到它等于拿到 QQ 账号的收发控制权。它跟 state/ 一样在仓库树里，继承来的 ACE 同样
-// 对 BUILTIN\Users 可读，所以一并收紧。
+// state/ 之外的凭据文件：config.json 里有 Discord token、控制台 token 與供應商憑證。
+// 它跟 state/ 一样在仓库树里，继承来的 ACE 同样对 BUILTIN\Users 可读，所以一并收紧。
 const SECRET_FILES = ['config.json']
   .map((name) => path.join(ROOT, name))
   .filter((file) => fs.existsSync(file));
@@ -91,7 +90,7 @@ function hardenSecretFiles() {
 hardenSecretFiles();
 
 if (!fs.existsSync(STATE_DIR)) {
-  say(`[harden-acl] state/ 还不存在（首次启动时桥接会创建并自行收紧）：${STATE_DIR}`);
+  say(`[harden-acl] state/ 还不存在（先啟動橋接或手動建立，再跑這支）：${STATE_DIR}`);
   process.exit(0);
 }
 
@@ -100,7 +99,7 @@ if (isHardened(STATE_DIR)) {
   process.exit(0);
 }
 
-sayAlways('[harden-acl] state/ 权限未收紧：其中的控制台令牌、SnowLuma 令牌、各会话令牌与 QQ 聊天记录，本机任何已登录用户都可能读到。');
+sayAlways('[harden-acl] state/ 权限未收紧：其中的控制台令牌、Discord token、各會話令牌與頻道資料，本機任何已登入使用者都可能讀到。');
 sayAlways(`[harden-acl] 正在尝试收紧：${STATE_DIR}`);
 
 let result = hardenDir(STATE_DIR);

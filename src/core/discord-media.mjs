@@ -6,7 +6,7 @@
 //   2. 太大／解析度太高的圖先在本地縮小再送出；縮不動就明確回報，
 //      不送注定被 DSH 丟掉的位元組。
 //
-// 縮圖重用 QQ 版的 normalizeImageForModel（ffmpeg）：它已經處理過 DSH 的
+// 縮圖用 normalizeImageForModel（ffmpeg）：它已經處理過 DSH 的
 // base64 上限、長邊、動圖抽帧拼圖，是這個 repo 唯一的圖片正規化實作。
 import fs from 'node:fs';
 import path from 'node:path';

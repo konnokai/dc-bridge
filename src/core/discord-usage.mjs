@@ -1,4 +1,4 @@
-// Token 用量：把 DSH 會話事件餵進 QQ 版就在用的帳本（src/token-ledger.js）。
+// Token 用量：把 DSH 會話事件餵進共用帳本（src/token-ledger.js）。
 //
 // 為什麼重用而不是在 Discord 版重寫：帳本的難點全在「權威累計＋冪等折疊＋峰谷計價」，
 // 第二份實作只會多一組會漂移的語義。這裡只補 Discord 專屬的兩件事：

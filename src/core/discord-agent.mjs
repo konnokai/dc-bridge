@@ -515,7 +515,7 @@ export async function startAgentApi({ file, handlers, log = () => {} }) {
           return;
         }
         // 沒有 x-agent-token 一律拒絕。不要寫成「有帶才驗」：那會讓漏帶令牌的呼叫
-        // 直接升級成別的權限（QQ 版踩過這個 confused deputy，見 bridge.js 的註解）。
+        // 直接升級成別的權限。
         if (!tokenEquals(req.headers['x-agent-token'], token)) {
           sendJson(res, 401, { error: '未授權' });
           return;

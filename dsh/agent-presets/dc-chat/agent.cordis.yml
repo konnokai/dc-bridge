@@ -1,8 +1,7 @@
 # The `dc-chat` agent preset：Discord 聊天機器人（最低權限面）。
 #
-# 人設與語氣移植自 qq-chat-v2（大肥魚／鯨魚娘），但工具面換成 Discord 版：
-# 這台沒有 snowluma，qq_* 工具不存在；說話與頻道動作改用 mcp__discord__*（橋接的
-# mcp-discord），所以「文字不會自動送出」的規則跟 QQ 版一致。
+# 人設與語氣是這個 repo 自己的；工具面只掛 Discord 版：
+# 說話與頻道動作改用 mcp__discord__*（橋接的 mcp-discord），所以「文字不會自動送出」。
 #
 # 安全設計（硬邊界）：
 # - 不掛載任何本機工具：無 bash/pwsh、無檔案讀寫、無子代理/工作流。

@@ -1,7 +1,5 @@
-// DSH 工具名抽取：**唯一实现**，供
-//   · `scripts/scan-dsh-tool-names.mjs`（人工/升级时对账，打印清单）
-//   · `scripts/verify-dsh-021-adaptation.mjs`（适配验证）
-// 共同使用。
+// DSH 工具名抽取：**唯一实现**，供 `scripts/scan-dsh-tool-names.mjs`
+// （人工/升级时对账，打印清单）使用。
 //
 // 为什么要抽成模块：这两处过去各有一份实现，而测试那份是**模糊**的
 // （`\bname:\s*['"]x['"]` 全文件乱扫 + 只认少数包名前缀 + 只读包根目录的

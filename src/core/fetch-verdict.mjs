@@ -4,7 +4,7 @@
 // 直接把 Cloudflare 驗證頁的 HTML 當正文交出去，模型就會拿驗證頁的文字拼答案；
 // 這裡把「被擋住」「其他錯誤」和「正常內容」分開，讓工具回 isError 而不是一大段 HTML。
 // 只做純判斷，測試用假回應，不打真網站。
-// 訊息用簡體：這個 MCP 是 Discord 與 QQ 共用的，檔案其他字串也是簡體。
+// 訊息用簡體：這個 MCP 檔案其他字串也是簡體。
 import { extractHtmlPreview, isHtml } from './web-content.mjs';
 
 // Cloudflare 的 JavaScript Detections 會把 challenge-platform 的 script 塞進**正常頁面**，

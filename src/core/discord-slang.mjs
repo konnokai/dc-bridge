@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { extractJsonArray } from '../slang-learner.js';
+import { extractJsonArray } from './discord-json.mjs';
 import { truncateText } from '../md-to-plain.js';
 
 export const SLANG_VERSION = 1;
@@ -608,7 +608,7 @@ ${lines.join('\n')}
 
 /**
  * 解析學習會話的輸出。模型常會多寫一句解釋或包程式碼圍欄，
- * 所以用 QQ 版驗證過的括號配平抽取器，而不是貪婪 regex。
+ * 所以用括號配平抽取器，而不是貪婪 regex。
  */
 export function parseExtractionJson(text, { max = 5 } = {}) {
   const list = extractJsonArray(text);

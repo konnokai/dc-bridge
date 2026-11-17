@@ -1,5 +1,5 @@
 // DSH 工具名清单扫描器：从**已安装的 DSH 包/插件**里抽取真实注册的工具名，
-// 与指定守卫的 restrict 名单对账（默认 QQ，可用 --guard 指 Discord）。
+// 与指定守卫的 restrict 名单对账（默认 dc-tool-restrict）。
 //
 // 为什么要有这个脚本（而不是把清单抄死在注释里）
 // ----------------------------------------------
@@ -14,7 +14,7 @@
 // 本脚本是**只读**的：不改任何文件。
 //
 // 用法：
-//   node scripts/scan-dsh-tool-names.mjs            # 对账并打印全部候选（QQ）
+//   node scripts/scan-dsh-tool-names.mjs            # 对账并打印全部候选
 //   node scripts/scan-dsh-tool-names.mjs --missing  # 只打印值得补进守卫的名字
 //   node scripts/scan-dsh-tool-names.mjs --guard plugins/dc-agent-presets/dc-tool-restrict.mjs
 import path from 'node:path';
@@ -34,7 +34,7 @@ if (guardArg >= 0 && (guardValue === undefined || guardValue.startsWith('--'))) 
 }
 const guardPath = guardValue
   ? path.resolve(ROOT, guardValue)
-  : path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs');
+  : path.join(ROOT, 'plugins', 'dc-agent-presets', 'dc-tool-restrict.mjs');
 const guard = await import(pathToFileURL(guardPath).href);
 if (!Array.isArray(guard.RESTRICTED_TOOL_NAMES) || guard.RESTRICTED_TOOL_NAMES.length === 0) {
   console.error(`❌ ${path.relative(ROOT, guardPath)} 没有导出 RESTRICTED_TOOL_NAMES`);

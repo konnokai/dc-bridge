@@ -3,10 +3,6 @@
 //
 // 允許在 config 指定 host（例如 LAN IP 或 0.0.0.0）方便從別台開，但那就等於把
 // 管理介面放到網路上：token 是唯一的門，啟動時會印警告。沒有 CORS，只服務同源請求。
-//
-// 刻意不重用 QQ 版控制台：那頁綁了 102 個 QQ 專用端點（模式、角色、黑話、表情包、
-// 語音、令牌帳本），Discord 版沒有那些概念。這裡的 HTML 是獨立一頁，介面只打
-// 下面這幾個 JSON 端點。
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';

@@ -28,7 +28,6 @@ import {
   sniffImage,
   sniffVideo
 } from '../src/media-normalize.js';
-import { bridgeHarness } from './audit-bridge-harness.mjs';
 
 let failures = 0;
 let skipped = 0;
@@ -405,38 +404,6 @@ await test('抽帧失败（ffmpeg 超时/不可用）也不崩：退回首帧 + 
   assert.equal(out.ok, true);
   assert.equal(out.buffer, GIF_2, '压不动时小图按原样提供（不阻断对话）');
   assert.match(out.note, /只提供首帧/);
-});
-
-// ── 5. 桥接集成：出图出口会归一化，收藏表情仍拿原始字节 ────────────────────
-await test('桥接 fetchMediaData 走归一化，且拿得到 mimeType/data', async () => {
-  const h = await bridgeHarness();
-  try {
-    const out = await h.fetchMediaData([{ kind: 'image', file: 'fixture.png' }]);
-    assert.equal(out.length, 1);
-    assert.equal(out[0].mimeType, 'image/png');
-    assert.ok(out[0].data && out[0].data.length > 0);
-  } finally { await h.close(); }
-});
-
-await test('桥接 resolveMediaList（一代内联）同样出图', async () => {
-  const h = await bridgeHarness();
-  try {
-    const parts = await h.resolveMediaList([{ kind: 'image', file: 'fixture.png' }]);
-    const image = parts.find((p) => p.type === 'image');
-    assert.ok(image, '应当产出一个 image part');
-    assert.equal(image.mediaType, 'image/png');
-  } finally { await h.close(); }
-});
-
-await test('fetchOneBotImage 仍返回**原始字节**（收藏表情不能被降采样/拼图）', async () => {
-  const h = await bridgeHarness();
-  try {
-    const raw = await h.fetchOneBotImage({ kind: 'image', file: 'fixture.png' });
-    assert.ok(raw?.buffer);
-    // FakeBot.getImage 回的 1×1 PNG 原样返回：字节完全一致即证明没经过归一化重编码
-    assert.equal(raw.buffer.length, FAKE_GATEWAY_PNG.length);
-    assert.deepEqual(raw.buffer, FAKE_GATEWAY_PNG);
-  } finally { await h.close(); }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

@@ -2,11 +2,8 @@
 
 把 Discord 頻道接進本機 DSH：頻道訊息變成 agent 的 prompt，回覆、提問與工具審批回到同一個頻道。
 
-- **Discord 是主要產品**：入口 `src/discord-bridge.js`（`npm start`）。
-- **QQ（SnowLuma／OneBot）只作功能對照**：入口 `src/bridge.js`（`npm run start:qq`），不再部署。
-  說明見 [docs/guides/QQ.md](docs/guides/QQ.md)。
-- 兩條線不共用入口：Discord 不 import `src/bridge.js`，只有 `dsh-client.js` 與純函式是同一份。
-  哪個檔案屬於哪條線見 [docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)。
+- 入口只有 `src/discord-bridge.js`（`npm start`）。QQ／SnowLuma／OneBot 的程式與測試已移除。
+- 檔案與目錄說明見 [docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)。
 
 ## 快速開始
 
@@ -15,7 +12,7 @@
 ```bash
 npm install
 cp config.example.json config.json     # 填 discord.token 與 discord.ownerIds
-node scripts/setup-dsh.mjs --discord   # 安裝 dc-chat / dc-chat-open / dc-learner / dc-trader preset 與五個 MCP（含 PRTS）
+node scripts/setup-dsh.mjs             # 安裝 dc-chat / dc-chat-open / dc-learner / dc-trader preset 與五個 MCP（含 PRTS）
 npm start                              # 只啟動 Discord 橋接
 ```
 
@@ -31,8 +28,6 @@ npm start                              # 只啟動 Discord 橋接
 | [docs/guides/DISCORD.md](docs/guides/DISCORD.md) | Discord 版設定、指令、控制台、各項功能 |
 | [docs/guides/DSH_SETUP.md](docs/guides/DSH_SETUP.md) | DSH 端安裝與 preset |
 | [docs/guides/SECURITY_BASELINE.md](docs/guides/SECURITY_BASELINE.md) | 安全基線與威脅模型 |
-| [docs/guides/QQ.md](docs/guides/QQ.md) | QQ 版說明（只作對照） |
-| [RULES.md](RULES.md) | QQ 版的權限邊界 |
 
 ## 部署
 

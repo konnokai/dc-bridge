@@ -1,5 +1,5 @@
 // 模拟 DSH 的 dsh-mcp-client：以 stdio 拉起桥接的 MCP server，握手并列出工具，
-// 验证各个 MCP server 在新版 DSH 环境下仍能被正常接入（不需要 SnowLuma 在线）。
+// 驗證各個 MCP server 在新版 DSH 環境下仍能被正常接入。
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -9,8 +9,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const NODE = process.execPath;
 
 const SERVERS = [
-  { serverName: 'snowluma', script: 'src/mcp-snowluma-safe.js' },
-  { serverName: 'snowluma-host', script: 'src/mcp-host-server.js' },
   { serverName: 'web-search-safe', script: 'src/mcp-web-search-safe.js' },
   { serverName: 'discord', script: 'src/mcp-discord.js' },
   { serverName: 'slang', script: 'src/mcp-slang.js' },

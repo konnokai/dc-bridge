@@ -1,5 +1,7 @@
 # DSH 0.2.2 適配記錄（dc-bridge）
 
+> 這份保留當時的測試與 QQ 結果。QQ 程式與測試已移除，`verify:adaptation` 不再提供；現在的離線回歸是 `npm run test:audit` 與 `npm run test:discord`。
+
 > 適配目標：`@deepseek-ai/dsh` **0.2.2-rc.3**（上一版 0.2.1-rc.2）。
 > 實測日期：2026-11-17；機器：Discord 測試伺服器 `192.168.98.21`。
 

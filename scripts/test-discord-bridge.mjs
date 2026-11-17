@@ -130,7 +130,7 @@ import { createUrgentTyping } from '../src/core/discord-typing.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { COMMAND_CODE_API_BASE, createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, GO_USAGE_URL, GOAT_MONTHLY_CREDITS, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
-import { describeAge } from '../src/model-view.js';
+import { describeAge } from '../src/core/discord-time.mjs';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
 let failures = 0;
@@ -662,8 +662,8 @@ console.log('## 7. dc-chat preset 與守衛');
 
   const persona = plugins.find((p) => p.id === 'persona')?.config?.prefix ?? '';
   ok(persona.length > 500, `persona 有實質內容（${persona.length} 字）`);
-  ok(/Discord/.test(persona), 'persona 是 Discord 版，不是 QQ 版');
-  ok(!/qq_send|mcp__snowluma/.test(persona), 'persona 不引用 QQ 工具');
+  ok(/Discord/.test(persona), 'persona 是 Discord 版');
+  ok(!/qq_send/.test(persona), 'persona 不引用已移除的 QQ 工具');
   ok(/generate_image/.test(persona) && /send_image/.test(persona), 'persona 教模型用 generate_image 畫圖、send_image 送圖');
   ok(/search_gifs/.test(persona) && /網址原樣送出/.test(persona), 'persona 教模型用 search_gifs 找 GIF，挑一個再送');
   ok(/inputImage` 填 `"self"/.test(persona), 'persona 教模型畫自己時帶入設定圖');
@@ -757,7 +757,7 @@ console.log('## 7. dc-chat preset 與守衛');
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }
   ok(true, `白名單放行無害模型側工具、只讀搜尋、${DISCORD_TOOL_NAMES.length} 個 Discord 工具與 ${SLANG_TOOL_NAMES.length} 個黑話工具`);
-  for (const name of ['bash', 'write', 'mcp__snowluma__qq_send_message', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
+  for (const name of ['bash', 'write', 'mcp__other__x', 'mcp__discord__ban_member', '', null, 123]) {
     ok(typeof guard({ name }) === 'string', `拒絕 ${JSON.stringify(name)}`);
   }
   ok(restricted.includes('generate_image'), '預設在註冊期隱藏 generate_image');

@@ -25,9 +25,6 @@ config.json
 /scripts/debug-whitelist.mjs
 /scripts/diag-archive.mjs
 /scripts/fix-probe-workspace-title.mjs
-/scripts/patch-qq-chat-v2-collect-memory.mjs
-/scripts/patch-qq-chat-v2-presleep.mjs
-/scripts/patch-qq-chat-v2-stickers.mjs
 /scripts/patch-web-mcp-timeout.mjs
 
 

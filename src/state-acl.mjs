@@ -1,7 +1,7 @@
 // state/ 目录 ACL 收紧的**唯一实现**。
 //
-// 为什么单独成模块：这套逻辑原本在桥接进程（`src/bridge.js` 的 hardenStateDirAcl）和
-// 安装脚本（`scripts/harden-state-acl.mjs`）里各写了一份，两份带着**同一个** bug：
+// 為什麼單獨成模組：這套邏輯原本在橋接與安裝腳本（`scripts/harden-state-acl.mjs`）
+// 各寫一份，兩份帶著**同一個** bug：
 //
 //   icacls DIR /inheritance:r /grant:r "u:(OI)(CI)F" /grant:r ... /T /C
 //
