@@ -15,7 +15,9 @@
 橋接不消費即時 projection 幀，只讀開場 snapshot 與一元 `session/projections`，
 所以執行期不用改；只有 `scripts/probe-020-protocol.mjs` 的輸出要跟著改。
 
-工具面多了 8 個危險名字，守衛名單已補。QQ 名單另外標記 6 個只在 0.2.1 存在的舊名字。
+工具面多了 8 個危險名字，守衛名單已補。0.2.1 才有的 `spawn_teammate`、
+`schedule_update`、`schedule_delete` 留在名單裡給回退用；0.1.7／0.2.0 的
+`dsh_snapshot` / `dsh_rollback` / `incident_resolved` 已從兩份名單移除。
 
 ## 2. 實測
 
@@ -28,20 +30,22 @@
 | `session/projections` | ✅ values 含 `inbox` / `tokenUsage` / `contextPressure` |
 | projection 幀 | ✅ `changes` 有值，`key=undefined`（舊腳本會誤判） |
 | `test:dsh-inbox` | ✅ 12/12 |
-| `scan:tool-names --guard plugins/dc-agent-presets/dc-tool-restrict.mjs` | ✅ 0 假名、0 漏網 |
-| `verify:adaptation` | 53 通過 / 12 失敗；失敗全是 QQ profile 專屬（`qq-chat-v2`、`qq-mode-console`、`deepseek-flash`），不是回歸 |
+| `node scripts/scan-dsh-tool-names.mjs --guard plugins/dc-agent-presets/dc-tool-restrict.mjs` | ✅ 0 假名、0 漏網 |
+| `verify:adaptation` | 55 通過 / 11 失敗；失敗都是 QQ profile 專屬（`qq-chat-v2`、`qq-mode-console`、`deepseek-flash`），不是回歸 |
 | `hedge` provider | ✅ `session/modelCatalog` 有 `hedge`；還沒在 0.2.2 上跑強制 failover |
 
 ## 3. 程式碼改動
 
 - `plugins/dc-agent-presets/dc-tool-restrict.mjs`：補 `apply_patch`、`office_*`、
-  `schedule_edit` / `schedule_view`、`user_terminal_*`；移除 0.2.2 已不註冊的
-  `spawn_teammate`、`dsh_snapshot` / `dsh_rollback` / `incident_resolved`、
-  `schedule_update` / `schedule_delete`；導出 `RESTRICTED_TOOL_NAMES`。
+  `schedule_edit` / `schedule_view`、`user_terminal_*`；保留 0.2.1 的
+  `spawn_teammate`、`schedule_update` / `schedule_delete` 供回退；導出
+  `RESTRICTED_TOOL_NAMES` 與 `LEGACY_0_2_1_TOOL_NAMES`。
 - `plugins/qq-agent-presets/qq-tool-restrict.mjs`：補同一批新名字；新增
-  `LEGACY_0_2_1_TOOL_NAMES`，保留 0.2.1 的舊名字。
+  `LEGACY_0_2_1_TOOL_NAMES`；移除 0.1.7／0.2.0 的 `dsh_snapshot` / `dsh_rollback` /
+  `incident_resolved`。
 - `scripts/scan-dsh-tool-names.mjs`：新增 `--guard <path>`，可掃 Discord 名單；
-  legacy 名字排除在「拼錯假名」之外。
+  legacy 名字排除在「拼錯假名」之外；`--guard` 沒給路徑或模組沒匯出清單時直接報錯。
+- `scripts/verify-dsh-021-adaptation.mjs`：加上 0.2.2 的 8 個名字與 legacy 排除。
 - `scripts/probe-020-protocol.mjs`：preset 可用參數或 `DSH_PRESET` 指定；
   projection 幀改讀 `changes`。
 - `scripts/test-dsh-session-retire.mjs`：preset / provider / model / effort 可用環境變數

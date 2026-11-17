@@ -68,7 +68,6 @@ const LOCAL_EXECUTION_TOOLS = [
   'send_message', 'interrupt_agent', 'list_agents',
   'workflow', 'ralph',
   'cordis_inspect_list', 'cordis_inspect_query',
-  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
   'job_list', 'job_output', 'job_kill', 'skill', 'present',
   'get_goal', 'create_goal', 'update_goal',
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
@@ -83,6 +82,10 @@ const LOCAL_EXECUTION_TOOLS = [
   'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
   'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
   'plugin_market', 'create_worktree', 'wait_agent',
+  // 0.2.2 新增对账（2026-11-17）：apply_patch / office_* / schedule_edit|view /
+  // user_terminal_*；0.2.1 旧名字由 LEGACY_0_2_1_TOOL_NAMES 标记，仍在守卫里。
+  'apply_patch', 'office_convert', 'office_recalculate', 'office_render',
+  'schedule_edit', 'schedule_view', 'user_terminal_list', 'user_terminal_read',
   // 按需安装的可选组合包才注册的名字：0.2.1 起默认不存在，但一旦装上就要挡，
   // 所以仍在名单里；对账时按「可选项」处理（见下方 OPTIONAL_BUNDLE_TOOLS）。
   'subagent_codex', 'subagent_claude_code',

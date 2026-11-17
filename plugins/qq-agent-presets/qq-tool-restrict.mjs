@@ -64,15 +64,16 @@ export const inject = ['tools']
  *   dsh-tool-goal                      → get_goal / create_goal / update_goal
  *   dsh-tool-cordis                    → cordis_inspect_list / cordis_inspect_query
  *                                        （读宿主运行期状态；0.1.7 已无装载类工具名）
- *   dsh-plugin-guard（web profile bundle）→ dsh_snapshot / dsh_rollback / incident_resolved
- *                                        （读写 package.json/lockfile/patch 并 **spawn pnpm**）
+ *   dsh-plugin-guard（web profile bundle，仅 0.1.7）→ dsh_snapshot / dsh_rollback /
+ *                                        incident_resolved（0.2.1 起已移除，不再进名单）
  *   dsh-mode-boost（已装插件，当前未进 bundles）→ dev_mode_set / _status / _subagent
  *                                        （dev_mode_subagent 会派生 agent）
  *
- * ⚠️ 硬证据：2026-08-29 的一次 **qq-chat-v2 仿真会话**记录下来的工具清单里，
+ * ⚠️ 硬证据（0.1.7 时代）：2026-08-29 的一次 **qq-chat-v2 仿真会话**记录下来的工具清单里，
  * 除了 MCP 工具就只有 `ask_user_question`、`todo_write`、`dev_mode_*`、
  * `dsh_rollback`、`dsh_snapshot`、`incident_resolved`。也就是说
  * **`dsh_snapshot`/`dsh_rollback` 真的进过仿真会话的 schema**——本名单初版漏了它们。
+ * 0.2.1 起这三个名字已不存在，所以从 restrict 名单移除；留着只会静默失败。
  *
  * 2026-09-29 针对 DSH 0.2.0-rc.2 重新对账（同样不是逐个打补丁，而是拿安装包重扫）。
  * 对账工具：`node scripts/scan-dsh-tool-names.mjs`（可重复运行；它从已安装的
@@ -132,8 +133,6 @@ const LOCAL_EXECUTION_TOOLS = [
   'workflow', 'ralph',
   // 插件/cordis 运行期检查：能读宿主状态（0.1.7 起只有这两个名字）
   'cordis_inspect_list', 'cordis_inspect_query',
-  // 本机文件 + 进程：plugin-guard 会改写配置并 spawn pnpm
-  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
   // 会话/交付/任务面
   // 注意：`todo_write` 与 `ask_user_question` **故意不在**此名单——它们是下面
   // SAFE_EXACT 允许的无害模型侧工具，两边不能自相矛盾。
@@ -191,7 +190,6 @@ export const OPTIONAL_BUNDLE_TOOL_NAMES = Object.freeze([
  * 扫描器把这一组排除在「拼错假名」之外，不把版本差当成拼写错误。
  */
 export const LEGACY_0_2_1_TOOL_NAMES = Object.freeze([
-  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
   'spawn_teammate', 'schedule_update', 'schedule_delete',
 ])
 

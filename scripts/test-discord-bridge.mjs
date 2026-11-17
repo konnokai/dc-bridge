@@ -654,6 +654,11 @@ console.log('## 7. dc-chat preset 與守衛');
   mod.apply({ tools: { restrict: ({ deny }) => restricted.push(...deny), guard: (fn) => { guard = fn; } } });
   ok(restricted.includes('pwsh') && restricted.includes('read') && restricted.includes('plugin_manager'),
     'restrict 名單含 shell／檔案／外掛裝載');
+  for (const name of ['apply_patch', 'office_convert', 'office_recalculate', 'office_render', 'schedule_edit', 'schedule_view', 'user_terminal_list', 'user_terminal_read']) {
+    ok(restricted.includes(name), `restrict 名單含 0.2.2 新工具 ${name}`);
+  }
+  ok((mod.LEGACY_0_2_1_TOOL_NAMES ?? []).every((name) => restricted.includes(name)),
+    '0.2.1 舊工具保留在 restrict 名單，回退時仍會隱藏');
   for (const name of ['ask_user_question', 'todo_write', 'mcp__web-search-safe__web_search', ...DISCORD_TOOL_NAMES, ...SLANG_TOOL_NAMES]) {
     assert.equal(guard({ name }), undefined, `白名單放行 ${name}`);
   }

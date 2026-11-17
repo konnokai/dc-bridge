@@ -15,6 +15,9 @@
 //   2. **行为**：`stopSessionWork` 真的返回（不抛），并且把排队的消息清掉。
 //
 // 用法：node scripts/test-dsh-session-retire.mjs
+//   Discord 伺服器：DSH_PRESET=dc-chat DSH_MODEL_PROVIDER=commandcode \
+//     DSH_MODEL=deepseek/deepseek-v4.1-flash DSH_EFFORT=high node scripts/test-dsh-session-retire.mjs
+//   DSH_EFFORT='' = 不送 reasoningEffort。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

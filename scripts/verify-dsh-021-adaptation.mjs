@@ -150,13 +150,27 @@ const GUARD_021_NAMES = [
   // 装载权 / 写盘起进程 / team 家族
   'plugin_market', 'create_worktree', 'wait_agent',
 ];
+/** 0.2.2 对账新增的名字（2026-11-17，见守卫长注释里 0.2.2 那段）。 */
+const GUARD_022_NAMES = [
+  // dsh-tool-fs：一次改多档
+  'apply_patch',
+  // dsh-tool-office：解析 Office 并写回
+  'office_convert', 'office_recalculate', 'office_render',
+  // dsh-tool-schedule：0.2.1 的 schedule_update/delete 改名
+  'schedule_edit', 'schedule_view',
+  // dsh-terminal-panel：读使用者终端
+  'user_terminal_list', 'user_terminal_read',
+];
 const guardMod = await import(pathToFileURL(canonicalGuardPath).href);
 const guardNames = new Set(guardMod.RESTRICTED_TOOL_NAMES ?? []);
 const optionalNames = new Set(guardMod.OPTIONAL_BUNDLE_TOOL_NAMES ?? []);
+const legacyNames = new Set(guardMod.LEGACY_0_2_1_TOOL_NAMES ?? []);
 const missingFromGuard = GUARD_020_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.0 新增的危险工具名', missingFromGuard.length === 0, missingFromGuard.join(', ') || `${guardNames.size} 个名字`);
 const missingFromGuard021 = GUARD_021_NAMES.filter((n) => !guardNames.has(n));
 check('守卫已覆盖 0.2.1 新增的危险工具名', missingFromGuard021.length === 0, missingFromGuard021.join(', ') || `${GUARD_021_NAMES.length} 个名字`);
+const missingFromGuard022 = GUARD_022_NAMES.filter((n) => !guardNames.has(n));
+check('守卫已覆盖 0.2.2 新增的危险工具名', missingFromGuard022.length === 0, missingFromGuard022.join(', ') || `${GUARD_022_NAMES.length} 个名字`);
 
 // 守卫名单里的每个名字都必须是 DSH 真实注册的工具：`tools.restrict()` 对未知名字会抛错，
 // 而守卫逐个 try/catch 只打日志 ⇒ 拼错的名字 = 静默 no-op。
@@ -168,7 +182,7 @@ if (scanned.names.size === 0) {
   skip('守卫名单与 DSH 真实工具名对账', '未扫到任何 DSH 包（DSH 未安装？）');
 } else {
   const fabricated = [...guardNames]
-    .filter((n) => !n.startsWith('dev_') && !optionalNames.has(n) && !scanned.names.has(n));
+    .filter((n) => !n.startsWith('dev_') && !optionalNames.has(n) && !legacyNames.has(n) && !scanned.names.has(n));
   check('守卫名单无拼错的假名（restrict 不会静默失效）', fabricated.length === 0, fabricated.join(', ') || `扫过 ${scanned.packages.length} 个包`);
 }
 

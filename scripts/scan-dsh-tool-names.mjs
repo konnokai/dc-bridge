@@ -27,11 +27,20 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const { names, packages } = collectDshToolNames();
 const guardArg = process.argv.indexOf('--guard');
-const guardPath = guardArg >= 0 && process.argv[guardArg + 1]
-  ? path.resolve(ROOT, process.argv[guardArg + 1])
+const guardValue = guardArg >= 0 ? process.argv[guardArg + 1] : undefined;
+if (guardArg >= 0 && (guardValue === undefined || guardValue.startsWith('--'))) {
+  console.error('❌ --guard 需要一个模块路径');
+  process.exit(2);
+}
+const guardPath = guardValue
+  ? path.resolve(ROOT, guardValue)
   : path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs');
 const guard = await import(pathToFileURL(guardPath).href);
-const guarded = new Set(guard.RESTRICTED_TOOL_NAMES ?? guard.DANGEROUS ?? []);
+if (!Array.isArray(guard.RESTRICTED_TOOL_NAMES) || guard.RESTRICTED_TOOL_NAMES.length === 0) {
+  console.error(`❌ ${path.relative(ROOT, guardPath)} 没有导出 RESTRICTED_TOOL_NAMES`);
+  process.exit(2);
+}
+const guarded = new Set(guard.RESTRICTED_TOOL_NAMES);
 // 0.2.1 起 Codex / Claude Code 改为按需安装的可选插件：这组名字默认扫不到，
 // 不能算「拼错假名」（装上组合包后它们就回来了）。旧版本才注册的名字同理。
 const optional = new Set([

@@ -108,7 +108,7 @@ await test('执行期 guard 照旧：QQ MCP 放行、dev_* 与本地工具拒绝
   for (const name of ['mcp__snowluma__qq_send_message', 'mcp__snowluma-host__snowluma_status', 'mcp__web-search-safe__web_search', 'ask_user_question', 'todo_write']) {
     assert.equal(guard({ name }), undefined, `${name} 应放行`);
   }
-  for (const name of ['dev_inject_plugin', 'dev_plugin_status', 'pwsh', 'read', 'write', 'dsh_snapshot', 'skill']) {
+  for (const name of ['dev_inject_plugin', 'dev_plugin_status', 'pwsh', 'read', 'write', 'apply_patch', 'skill']) {
     assert.match(String(guard({ name })), /不在 QQ 桥接白名单内/, `${name} 必须拒绝`);
   }
   assert.match(String(guard({ name: '' })), /工具名无效/);

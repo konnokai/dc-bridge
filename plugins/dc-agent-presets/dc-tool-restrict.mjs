@@ -4,10 +4,11 @@
 //   guard 只能拒絕「執行」，工具名還是會出現在模型的 schema 裡，模型會一直想調它。
 //   本機執行／檔案類工具必須在註冊期就從清單隱藏（同 QQ 版的鐵律 L7）。
 //
-// ⚠️ 下面的 DANGEROUS 名單與 plugins/qq-agent-presets/qq-tool-restrict.mjs 同步
-//    （那份是逐個對賬 DSH 0.2.1 實際工具名的權威清單）。DSH 升級後新增危險工具時，
-//    兩邊都要補；scripts/test-discord-bridge.mjs 會檢查關鍵名字還在不在。
-//    兩個 bundle 各自獨立安裝，所以這裡只能是複本，不能 import 另一包。
+// ⚠️ 這份是 Discord 的獨立副本，不能 import 另一包（兩個 bundle 各自安裝）。
+//    QQ 名單在 plugins/qq-agent-presets/qq-tool-restrict.mjs；2026-11-17 起兩邊分開對賬：
+//    Discord = DSH 0.2.2-rc.3、QQ = 0.2.1。回退 Discord 到 0.2.1 時，靠
+//    LEGACY_0_2_1_TOOL_NAMES 保留的 3 個名字繼續擋。scripts/test-discord-bridge.mjs
+//    會檢查關鍵名字還在不在。
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +35,8 @@ const DANGEROUS = [
   'subagent', 'subagent_fork', 'list_subagent_models',
   'send_message', 'interrupt_agent', 'list_agents', 'wait_agent',
   'workflow', 'ralph',
+  // 0.2.1 才註冊、0.2.2 已移除；保留給回退（見 LEGACY_0_2_1_TOOL_NAMES）。
+  'spawn_teammate',
   'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'subagent_codex', 'subagent_claude_code',
   // 宿主狀態與插件裝載權（＝任意程式碼執行）
@@ -48,6 +51,7 @@ const DANGEROUS = [
   'job_list', 'job_output', 'job_kill', 'skill', 'present',
   'get_goal', 'create_goal', 'update_goal',
   'schedule_create', 'schedule_list', 'schedule_edit', 'schedule_view',
+  'schedule_update', 'schedule_delete',
   'create_worktree',
   // 開發注入器（執行期才註冊；restrict 失敗由下面的 guard 兜底）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
@@ -65,6 +69,11 @@ export const RESTRICTED_TOOL_NAMES = Object.freeze([...DANGEROUS])
 export const OPTIONAL_BUNDLE_TOOL_NAMES = Object.freeze([
   'subagent_codex',
   'subagent_claude_code',
+])
+
+// 0.2.1 才註冊、0.2.2 已移除；回退到 0.2.1 時仍要擋。
+export const LEGACY_0_2_1_TOOL_NAMES = Object.freeze([
+  'spawn_teammate', 'schedule_update', 'schedule_delete',
 ])
 
 // 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）、mcp-discord（發訊息與頻道動作）、
