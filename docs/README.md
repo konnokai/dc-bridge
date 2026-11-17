@@ -10,6 +10,7 @@
 | [guides/DISCORD.md](guides/DISCORD.md) | **Discord 版唯一說明**：安裝、設定、權限、指令、控制台、花費、記憶、筆記、回訪、黑話 | ✅ |
 | [guides/DSH_SETUP.md](guides/DSH_SETUP.md) | 把 preset 與 MCP 掛到 DSH：`setup-dsh.mjs` 與 `--discord` 的差別 | ✅ |
 | [guides/DSH_021_ADAPTATION.md](guides/DSH_021_ADAPTATION.md) | DSH 0.2.1 適配：`{{cwd}}` 被刪導致每回合 error、`working_directory` 進全域層 | ✅ 升級 DSH 前先看 |
+| [guides/DSH_022_ADAPTATION.md](guides/DSH_022_ADAPTATION.md) | DSH 0.2.2 適配：projection 幀改 `changes`、工具名補洞、實測與回退 | ✅ 升級 DSH 前先看 |
 | [guides/DSH_020_ADAPTATION.md](guides/DSH_020_ADAPTATION.md) | DSH 0.2.0 適配：逐條改動與「判定不用改」的部分 | ✅ |
 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) | 安全基線與威脅模型、發布前檢查、改動檢查單 | ✅ 動安全相關程式前必讀 |
 | [guides/PRIVACY.md](guides/PRIVACY.md) | 資料會送到哪裡、哪些檔案含個資、`privacy-scan` 怎麼用 | ✅ |

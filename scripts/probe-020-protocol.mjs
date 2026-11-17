@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { discoverDshSessionCookie } from '../src/dsh-client.js';
 
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
+const PRESET = process.argv[2] || process.env.DSH_PRESET || 'qq-chat-v2';
 const cookie = discoverDshSessionCookie(BASE);
 if (!cookie) { console.error('❌ 无法铸造会话 Cookie（读不到 browser-session 密钥）'); process.exit(2); }
 
@@ -106,7 +107,7 @@ console.log(`\n[setup] workspace=${wsId ?? '(失败)'}`);
 
 let sessionId = null;
 if (wsId) {
-  const sc = await rpc('session/create', { request: { workspaceId: wsId, agentPreset: 'qq-chat-v2' } });
+  const sc = await rpc('session/create', { request: { workspaceId: wsId, agentPreset: PRESET } });
   if (!ok(sc)) console.log(`[setup] session/create 失败: ${sc?.error?.code}: ${sc?.error?.message}`);
   else {
     sessionId = sc.value.sessionId;
@@ -156,9 +157,12 @@ for (const f of eventFrames.slice(0, 3)) console.log('  ' + shape(f));
 console.log('\n=== control 投影帧（prompt/cancel 触发的增量） ===');
 console.log(`帧数: ${controlProjections.length}`);
 for (const f of controlProjections.slice(0, 4)) {
-  console.log(`  type=${f?.type} sessionId=${String(f?.sessionId).slice(0, 20)} key=${f?.key} seq=${f?.seq}`);
-  if (f?.key === 'inbox') console.log('    inbox value: ' + shape(f.value));
-  if (f?.value && typeof f.value === 'object' && f.key === undefined) console.log('    ' + shape(f));
+  const changed = (f?.changes ?? []).map((change) => change.key).join(',');
+  console.log(`  type=${f?.type} sessionId=${String(f?.sessionId).slice(0, 20)} seq=${f?.seq} changes=${changed}`);
+  for (const change of f?.changes ?? []) {
+    if (change.key === 'inbox') console.log('    inbox value: ' + shape(change.val));
+  }
+  if (!Array.isArray(f?.changes)) console.log('    ' + shape(f));
 }
 
 // ── 清理 ────────────────────────────────────────────────────────────────────

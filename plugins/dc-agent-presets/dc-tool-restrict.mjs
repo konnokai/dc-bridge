@@ -16,24 +16,29 @@ export const name = 'dc-tool-restrict'
 
 export const inject = ['tools']
 
+// 2026-11-17 針對 DSH 0.2.2-rc.3 重新對賬：
+//   移除 spawn_teammate、dsh_snapshot / dsh_rollback / incident_resolved、
+//   schedule_update / schedule_delete（0.2.2 已不註冊）；
+//   補上 apply_patch、office_*、schedule_edit / schedule_view、user_terminal_*。
 const DANGEROUS = [
   // shell / 終端
   'pwsh', 'bash',
   'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
+  'user_terminal_list', 'user_terminal_read',
   // 檔案讀寫與檢索
-  'read', 'read_image', 'write', 'edit', 'str_replace_editor', 'glob', 'grep',
+  'read', 'read_image', 'write', 'edit', 'str_replace_editor', 'apply_patch', 'glob', 'grep',
+  'office_convert', 'office_recalculate', 'office_render',
   // 自帶執行環境
   'load_workspace_dependencies',
   // 派生 agent / 工作流 / 團隊
   'subagent', 'subagent_fork', 'list_subagent_models',
   'send_message', 'interrupt_agent', 'list_agents', 'wait_agent',
   'workflow', 'ralph',
-  'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
+  'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'subagent_codex', 'subagent_claude_code',
   // 宿主狀態與插件裝載權（＝任意程式碼執行）
   'cordis_inspect_list', 'cordis_inspect_query',
   'plugin_manager', 'plugin_market',
-  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
   // 工作目錄／跨會話歷史
   'working_directory',
   'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
@@ -42,7 +47,7 @@ const DANGEROUS = [
   // 任務／排程／交付面
   'job_list', 'job_output', 'job_kill', 'skill', 'present',
   'get_goal', 'create_goal', 'update_goal',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  'schedule_create', 'schedule_list', 'schedule_edit', 'schedule_view',
   'create_worktree',
   // 開發注入器（執行期才註冊；restrict 失敗由下面的 guard 兜底）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
@@ -52,6 +57,15 @@ const DANGEROUS = [
   'dev_stage_add', 'dev_stage_call', 'dev_stage_demote', 'dev_stage_list',
   'dev_stage_promote', 'dev_uninject_plugin',
 ]
+
+// 供 scripts/scan-dsh-tool-names.mjs 對賬；名字的清單只有這一份。
+export const RESTRICTED_TOOL_NAMES = Object.freeze([...DANGEROUS])
+
+// 按需安裝的組合包才會註冊；預設掃不到，不能算拼錯假名。
+export const OPTIONAL_BUNDLE_TOOL_NAMES = Object.freeze([
+  'subagent_codex',
+  'subagent_claude_code',
+])
 
 // 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）、mcp-discord（發訊息與頻道動作）、
 // mcp-slang（自己查詞、收黑話與頻道標籤）與 mcp-prts（只讀 PRTS 資料）；新增 MCP 時把命名空間前綴或精確工具名加在這裡，

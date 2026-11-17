@@ -25,6 +25,11 @@ import { NodeApiClient, unwrap, discoverDshLaunchToken } from '../src/dsh-client
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
+// 不同 profile 的 preset / 模型不同：Discord 伺服器是 dc-chat + commandcode。
+const PRESET = process.env.DSH_PRESET || 'qq-chat-v2';
+const MODEL_PROVIDER = process.env.DSH_MODEL_PROVIDER || 'deepseek-official';
+const MODEL = process.env.DSH_MODEL || 'deepseek-flash';
+const EFFORT = process.env.DSH_EFFORT ?? 'max';
 
 let pass = 0, fail = 0;
 const results = [];
@@ -95,12 +100,12 @@ try {
   }
 
   // ── 2. 建一个真实会话 ─────────────────────────────────────────────────────
-  const created = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: 'qq-chat-v2' }), 'session.create');
+  const created = unwrap(await api.sessions.create({ cwd: probeDir, agentPreset: PRESET }), 'session.create');
   sessionId = created.sessionId;
-  check('session/create 挂 preset qq-chat-v2 成功', typeof sessionId === 'string' && sessionId.length > 0, sessionId);
-  unwrap(await api.sessions.selectModel({
-    sessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max'
-  }), 'session.selectModel');
+  check(`session/create 挂 preset ${PRESET} 成功`, typeof sessionId === 'string' && sessionId.length > 0, sessionId);
+  const selection = { sessionId, provider: MODEL_PROVIDER, model: MODEL };
+  if (EFFORT) selection.reasoningEffort = EFFORT;
+  unwrap(await api.sessions.selectModel(selection), 'session.selectModel');
 
   // ── 3. 主路径：session/projections 一元 RPC ───────────────────────────────
   let projections = null;

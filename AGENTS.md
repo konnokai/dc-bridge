@@ -233,4 +233,4 @@ for line in open('/tmp/session.jsonl'):
 | pm2 名稱 | 內容 | 工作目錄 |
 | --- | --- | --- |
 | `dc-bridge` | `src/discord-bridge.js` | `/home/jun/dc-bridge` |
-| `dsh` | `npx -y @deepseek-ai/dsh@0.2.1-rc.2 web --no-open --port 2815 ...`（版本鎖在 `/home/jun/dsh/run.sh`） | `/home/jun/dsh` |
+| `dsh` | `npx -y @deepseek-ai/dsh@0.2.2-rc.3 web --no-open --port 2815 ...`（版本鎖在 `/home/jun/dsh/run.sh`） | `/home/jun/dsh` |

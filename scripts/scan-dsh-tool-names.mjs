@@ -1,5 +1,5 @@
 // DSH 工具名清单扫描器：从**已安装的 DSH 包/插件**里抽取真实注册的工具名，
-// 与 QQ 守卫的 restrict 名单对账。
+// 与指定守卫的 restrict 名单对账（默认 QQ，可用 --guard 指 Discord）。
 //
 // 为什么要有这个脚本（而不是把清单抄死在注释里）
 // ----------------------------------------------
@@ -14,8 +14,9 @@
 // 本脚本是**只读**的：不改任何文件。
 //
 // 用法：
-//   node scripts/scan-dsh-tool-names.mjs            # 对账并打印全部候选
+//   node scripts/scan-dsh-tool-names.mjs            # 对账并打印全部候选（QQ）
 //   node scripts/scan-dsh-tool-names.mjs --missing  # 只打印值得补进守卫的名字
+//   node scripts/scan-dsh-tool-names.mjs --guard plugins/dc-agent-presets/dc-tool-restrict.mjs
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -25,18 +26,25 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const { names, packages } = collectDshToolNames();
-const guardPath = path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs');
+const guardArg = process.argv.indexOf('--guard');
+const guardPath = guardArg >= 0 && process.argv[guardArg + 1]
+  ? path.resolve(ROOT, process.argv[guardArg + 1])
+  : path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs');
 const guard = await import(pathToFileURL(guardPath).href);
-const guarded = new Set(guard.RESTRICTED_TOOL_NAMES);
+const guarded = new Set(guard.RESTRICTED_TOOL_NAMES ?? guard.DANGEROUS ?? []);
 // 0.2.1 起 Codex / Claude Code 改为按需安装的可选插件：这组名字默认扫不到，
-// 不能算「拼错假名」（装上组合包后它们就回来了）。
-const optional = new Set(guard.OPTIONAL_BUNDLE_TOOL_NAMES ?? []);
+// 不能算「拼错假名」（装上组合包后它们就回来了）。旧版本才注册的名字同理。
+const optional = new Set([
+  ...(guard.OPTIONAL_BUNDLE_TOOL_NAMES ?? []),
+  ...(guard.LEGACY_0_2_1_TOOL_NAMES ?? []),
+]);
 
 const sorted = [...names.keys()].sort();
 const onlyFlag = process.argv.includes('--missing');
 
 console.log(`DSH 包目录：${dshPackagesDir()}`);
-console.log(`扫描包数：${packages.length}；抽到工具名候选：${sorted.length}\n`);
+console.log(`扫描包数：${packages.length}；抽到工具名候选：${sorted.length}`);
+console.log(`守卫：${path.relative(ROOT, guardPath)}\n`);
 
 /** ① 守卫名单里的名字必须真实存在，否则 restrict 抛错被吞、限制静默失效。 */
 const fabricated = [...guarded]
@@ -44,7 +52,7 @@ const fabricated = [...guarded]
 console.log('=== ① 守卫名单里、但安装包中找不到的名字（restrict 会抛错并静默失效） ===');
 console.log(fabricated.length ? fabricated.map((n) => `  ${n}`).join('\n') : '  (无)');
 if (optional.size) {
-  console.log(`  （另：${[...optional].join(', ')} 属于按需安装的可选组合包，默认扫不到但仍在名单里）`);
+  console.log(`  （另：${[...optional].join(', ')} 属于按需安装或旧版本才有的名字，默认扫不到但仍在名单里）`);
 }
 
 /** ② 安装包里有、守卫没覆盖的危险语义名字（可能是新版本新增的能力）。 */

@@ -55,7 +55,7 @@ DSH 已經裝好社群外掛 `@mars-sea/dsh-commandcode-provider` 並登入 Comm
 來源：<https://github.com/Mars-Sea/dsh-commandcode-provider>（MIT，`gh` 看過）。
 
 - provider id 是 `commandcode`；model id 格式 `deepseek/deepseek-v4.1-flash`。
-- 支援的 dsh：`>=0.2.1-rc.2 <0.2.2-0` 與 `>=0.2.2-alpha.2 <0.2.3-0`。伺服器跑 `0.2.1-rc.2`，在範圍內。
+- 支援的 dsh：`>=0.2.1-rc.2 <0.2.2-0` 與 `>=0.2.2-alpha.2 <0.2.3-0`。伺服器跑 `0.2.2-rc.3`，在範圍內。
 - Node 要 `>=24.9`。伺服器 node 是 v26，沒問題。
 - API key 存在 DSH 憑證庫；也可用 `COMMANDCODE_API_KEY` 或 `~/.commandcode/auth.json`。
 - 圖片只有 Vision 模型能收；README 說新圖片會讓 CLI 傳輸的 prompt cache 退回，

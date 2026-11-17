@@ -159,6 +159,11 @@ const LOCAL_EXECUTION_TOOLS = [
   'plugin_market', 'create_worktree',
   //   ⑤ team 家族同族补齐
   'wait_agent',
+  // 0.2.2 新增對賬（2026-11-17）：
+  //   apply_patch 一次改多檔；office_* 解析 Office；schedule_edit/view 取代舊的
+  //   schedule_update/delete；user_terminal_* 讀使用者終端。
+  'apply_patch', 'office_convert', 'office_recalculate', 'office_render',
+  'schedule_edit', 'schedule_view', 'user_terminal_list', 'user_terminal_read',
   // 已装但当前未进 bundles 的插件（一旦加回就是新口子）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
 ]
@@ -177,6 +182,17 @@ const LOCAL_EXECUTION_TOOLS = [
 export const OPTIONAL_BUNDLE_TOOL_NAMES = Object.freeze([
   'subagent_codex',
   'subagent_claude_code',
+])
+
+/**
+ * 0.2.1 才注册、0.2.2 已移除的全局工具名。
+ *
+ * 保留在 restrict 名单里，让仍在 0.2.1 的 QQ 部署继续挡住它们；
+ * 扫描器把这一组排除在「拼错假名」之外，不把版本差当成拼写错误。
+ */
+export const LEGACY_0_2_1_TOOL_NAMES = Object.freeze([
+  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
+  'spawn_teammate', 'schedule_update', 'schedule_delete',
 ])
 
 const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
