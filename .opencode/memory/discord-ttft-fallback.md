@@ -1,6 +1,6 @@
 ---
 name: discord-ttft-fallback
-description: TTFT hedge 的量測、DSH 外掛設計、設定同步與憑證 API
+description: TTFT hedge 的量測、DSH 外掛設計、設定同步、憑證 API 與啟用後額度卡
 ---
 
 ## 量測基準（2026-11-16）
@@ -30,9 +30,11 @@ description: TTFT hedge 的量測、DSH 外掛設計、設定同步與憑證 API
 - 此需求涉及 `OPENCODE_GO_API_KEY` 與 `COMMANDCODE_API_KEY`；只記名稱，不記實際值。
 - 以橋接既有 `api.callUnary(...)` 呼叫上述 API。控制台配置仍須遵守伺服器端欄位白名單，見 [[discord-console-config]]。
 
-## 驗證狀態（2026-11-16）
+## 驗證狀態（更新至 2026-11-17）
 
-- 測試伺服器以 `afterMs=50` 實測備援勝出並完成回覆；測後恢復 `enabled=false`、`afterMs=12000`。
-- 當時只更新了測試伺服器的 DSH 外掛；橋接與控制台改動尚未部署。部署後需在「供應商」卡片儲存一次，才會把橋接 provider 切到 `hedge`。
+- 2026-11-16 曾以 `afterMs=50` 實測備援勝出並完成回覆，測後恢復 `enabled=false`、`afterMs=12000`。
+- 2026-11-17 部署 DSH `0.2.2-rc.3` 與 hedge 支援後，伺服器設定切為 `provider=hedge`、`enabled=true`、`afterMs=12000`；當時主線是 Command Code，備援是 OpenCode Go。強制主線失敗後的 failover 尚未實測。
+- Hedge 啟用時，`GET /api/quota` 回主線額度及 `fallback` 額度；控制台顯示兩張卡，`/status` 仍只顯示主線。2026-11-17 已用 API 回應與 OpenChamber 畫面確認兩張卡均正常。
+- 2026-11-17 修正與部署為 `928dc69`；該次部署執行了 `npm run setup:discord`。DSH 外掛 ready 不代表 hedge 已啟用。部署流程見 [[discord-deploy]]。
 
 相關：[[discord-ttft-timeout]]、[[discord-console-config]]、[[dc-bridge-tests]]。

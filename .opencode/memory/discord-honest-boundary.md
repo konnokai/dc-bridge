@@ -11,8 +11,8 @@ raw 歷史裡 #g83knb 有請求與模型自己的 reply_to，但壓縮摘要（s
 ## 根因
 
 1. 直接原因：模型把「有人要求貓娘語氣」pattern-match 到當下正在互動的 ★ 發言者，沒有先確認作者。
-2. 遠因：DSH 自動壓縮把「誰說的」弄丟；`dsh-compaction-basic` 只支援 `retainRatio`／`retainTokens`，
-   **不能自訂摘要指令**，所以修法只能放在 persona，不能靠 compaction 套件。
+2. 遠因：壓縮摘要把「誰說的」弄丟；`dsh-compaction-basic` 只支援 `retainRatio`／`retainTokens`，
+   **不能自訂摘要指令**，所以修法只能放在 persona，不能靠 compaction 套件。2026-11-17 起 `dc-chat` preset 把日常 pressure 門檻設為 `1`，改由 Bridge 執行 `/compact`；手動壓縮與 overflow 復原仍會產生摘要，見 [[discord-auto-compaction]]。
 3. 機車模式在不符合條件的情況下打開（對方沒有講離譜的話）。
 4. persona 舊規則「認錯要快」讓模型先認錯，掩蓋了真正的歸屬錯誤；實際 seq 3410 是硬拗、seq 3423 認錯且歸屬講對，規則有生效。
 
@@ -53,6 +53,6 @@ raw 歷史裡 #g83knb 有請求與模型自己的 reply_to，但壓縮摘要（s
 ## 已知取捨
 
 - prompt 規則只會降低出錯機率，不能保證不出錯；真正的修法在壓縮摘要，但 compaction 套件不支援自訂指令。
-- 不要調高 `retainTokens`（檔案註解：調高會造成延遲，也會一直壓縮失敗）。
+- 舊 pressure 設定下不要任意調高 `retainTokens`：保留量接近或超過門檻時，可能壓縮失敗。Bridge 的 `/compact` 不讀這個值；目前路徑差異見 [[discord-auto-compaction]]。
 
 相關：[[discord-persona]]、[[discord-batch-debounce]]、[[discord-history-quota]]。

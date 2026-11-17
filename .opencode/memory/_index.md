@@ -10,11 +10,14 @@
 
 - [[gh-read-remote-file]] — `gh api … --jq .content` 在 PowerShell 解 base64 的正確寫法
 - [[dc-bridge-tests]] — 測試套件結構、輸出重定向到檔案再讀、preset patch 重生
+- [[discord-turn-gate]] — createTurnGate 的 ticket、DSH turn 配對、漏接 turn/start 補救與重連舊事件防護
 - [[discord-deploy]] — `npm ci`、文件排除、部署完成標記、修復流程與 DSH 重啟範圍
+- [[discord-dsh-setup]] — setup-dsh 清理舊 bundle 時的共用 profile 副作用與實體目錄保護
 - [[discord-console-config]] — 控制台欄位白名單、即時生效、config.json 寫回與 provider 憑證端點安全
 - [[discord-agent-gaps-plan]] — PLAN_AGENT_GAPS 執行慣例：熱點檔案、三條線、新增 MCP 工具 9 處 checklist、完成條件
 - [[discord-dream-safety]] — Dream agent 早期誤觸原始碼的未提交改動與清理提醒（2026-11-07）
 - [[discord-upstream-sync]] — 上游對齊基準（b145a83）、空合併清 behind、安全批次吸收、固定決策
+- [[discord-hindsight-evaluation]] — Hindsight 不取代現有記憶的評估、長期歸檔限制與 oMLX／Qdrant 現況（2026-11-17）
 
 ## Discord 橋接
 
@@ -24,12 +27,13 @@
 - [[discord-ignore-user]] — 模型自己的暫時不理名單（ignore_user）與重複拒絕改按 ❌；state/discord-ignore.json、1~1440 分鐘、200 人上限、跨伺服器共用
 - [[discord-followup-batching]] — 送出前攔補句：urgent 8 秒、take/takeFollowups、hold 同 step、測試 20 項
 - [[discord-dsh-slash-commands]] — DSH 0.2.1-rc.2 的 CLI/Web registry、`commands/execute` 與 Discord `/compact` 路由
+- [[discord-dsh-022-upgrade]] — DSH 0.2.2-rc.3 相容性、危險工具守衛、升級驗證限制
 - [[discord-message-preview]] — component embed、embed.author、完整 URL、component media、敏感 embed
 - [[discord-view-message]] — view_message 找修復 bot、連結路徑比對、bot 訊息可見性、每日摘要、跨頻道直讀（2026-11-07）
 - [[discord-media-handling]] — 語音訊息分類、行程級媒體佇列（2 個 ffmpeg）、view_message 預算、影片抽格時間戳、PNG sBIT 全丟與 alpha 鋪白底策略、連結預覽圖（embedImages）
 - [[discord-meme-plan]] — 自製表情包（meme）功能：規格、工具設計、opus 審查與修正；2026-11-11 全域共用設計、部署及驗證
 - [[discord-mention-names]] — mention 轉名字、回覆標記、id 不外洩
-- [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying 與 REST member 補抓；互動次數接在記憶那一行（你回過他 N 回合，最後一次 X 前）
+- [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying、互動次數與衍生側寫生命週期
 - [[discord-group-consensus-memory]] — 提議中的「群共識」記憶類型缺口：管理員新增一句、可過期、每輪注入、擋貶低評價；feedback df_mw6f6fbe08b055；未實作（2026-11-07）
 - [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂；摘要 301 字上限、19 條別名回填、測試保護力
 - [[discord-chatty-channels]] — chattyChannels 主動參與、followup；讓位／純媒體閘門影子狀態、觀察結果與伺服器 log 查詢方式
@@ -45,20 +49,24 @@
 - [[discord-console-detail-modal]] — 控制台通用放大彈窗（detail-modal）：CSS [hidden] 陷阱、梗圖 token 守衛、訂單整列點擊、帳號名稱快取
 - [[discord-console-settings]] — Discord 控制台功能設定依設定路徑分區；桌機左右欄、窄螢幕上下排與共用儲存
 - [[discord-emoji-catalog]] — 離開伺服器時清理自訂表情目錄，以及暫時不可用與刪除失敗的處理
+- [[discord-emoji-hints]] — prompt 表情提示「前 5＋每日輪替 3 個冷門表情」、打錯 reaction 名稱候選與實測使用分布
 - [[discord-console-tabs]] — 控制台 sticky 分頁列只允許水平捲動；`overflow-x: auto` 需搭配 `overflow-y: hidden`
 - [[discord-console-memory-pagination]] — 記憶分頁：群友記憶／頻道筆記／梗圖 20 筆分頁與名稱、ID 搜尋
 - [[discord-session-reload]] — /reload-system-prompt 交接摘要系統：產生摘要、新會話帶入一次、/reset 清除、敏感閘門、排隊訊息保留
 - [[discord-skip-marker]] — `\//` 整則忽略訊息、bot 訊息例外與缺口
 - [[discord-ttft-timeout]] — TTFT 超時取消、串流 first-token、5 秒保底放行
-- [[discord-ttft-fallback]] — TTFT hedge 外掛、12 秒門檻、設定同步、DSH 限制與憑證 API
+- [[discord-ttft-fallback]] — TTFT hedge 外掛、12 秒門檻、設定同步、DSH 限制、憑證 API 與啟用後雙額度卡片
 - [[discord-slang-mcp]] — 黑話／頻道標籤 MCP、候選容量策略、備份保留與 DSH 日誌復原掃描
 - [[discord-slang-batch-actions]] — 控制台黑話／頻道風格候選批次確認拒絕，以及僅選本頁與伺服端狀態檢查
 - [[discord-agent-extras]] — 收回 reaction、常用表情統計、回訪排程（持久化、控制台、取消）、發言頻率與回饋的限制與行為
 - [[discord-auto-reactions]] — 橋接自動 reaction 的觸發、限制、設定開關，以及它和模型 add_reaction 的區別
 - [[discord-trigger-stats]] — 對話觸發統計計數、console 分頁、bot 查詢、/forget
-- [[discord-history-quota]] — read_history／search_history 每回合 3 次配額與長距限制
+- [[discord-history-quota]] — read_history／search_history／recall_history 每回合 3 次共用配額、長距限制與 2026-11-17 使用量測
+- [[discord-history-archive]] — Qdrant 歷史歸檔：360 天、recall_history、控制台瀏覽／搜尋／刪除、游標與權限風險（2026-11-17）
 - [[discord-honest-boundary]] — 幻覺歸屬根因、compaction 摘要丟失發言者、persona 誠實邊界、debounce maxWait 15 秒、COMPACT_NOTICE 白飯梗
+- [[discord-auto-compaction]] — Bridge `autoCompactTokens` 與 DSH pressure 門檻的差異、`thresholdRatio: 1` 限制及 `/compact` 保留行為
 - [[discord-persona]] — 鯨魚娘 persona 重構與長距摘要限制
+- [[discord-open-politics-preset]] — `openPoliticsChannels`、`dc-chat-open` 安全差異、會話實際 preset 顯示與安裝錯誤處理（2026-11-17）
 - [[discord-usage-pricing]] — 花費看板改用美元價目、evict cur 換算、2027 假日、部署備份
 - [[discord-image-jobs]] — 背景生圖工作追蹤、取消語意、狀態查詢限制、GIF 拒絕、send_image 送圖、畫圖外掛路徑鎖、scoped 守衛、Codex permission profile（/mnt）、AttachFiles 權限
 - [[discord-voice-tts]] — 語音背景工作、Base 模型參考音設定驗證與繁轉簡
