@@ -332,7 +332,7 @@ tool(
 
 tool(
   'search_emojis',
-  '查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。【常用表情】和【本伺服器表情】沒有合適的、或想先看某個表情長怎樣才查；query 給情緒詞（例如「無語」）或表情名稱。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
+  '查能用的自訂表情（在訊息裡寫 :名稱:、或給 add_reaction）。想換一個【常用表情】沒有的、或想先看某個表情長怎樣時查；query 給情緒詞（例如「無語」）或表情名稱。貼圖不在這裡，用 search_stickers。query 留空就列出這個伺服器的。',
   {
     token: sessionToken,
     query: z.string().optional().describe('想表達的情緒或內容，短一點，例如「笑」「無語」「貓」'),
@@ -367,7 +367,7 @@ tool(
 
 tool(
   'read_history',
-  '讀這個頻道的訊息：預設從最新往前讀；知道是哪一天就給 date，從那個時間往後讀。只能讀目前這個頻道；date 和 before 只能給一個。和 search_history 合計一輪最多 3 次。',
+  '讀這個頻道的訊息：預設從最新往前讀；知道是哪一天就給 date，從那個時間往後讀。只能讀目前這個頻道；date 和 before 只能給一個。和 search_history、recall_history 合計一輪最多 3 次。',
   {
     token: sessionToken,
     before: messageRef('從哪一則往前讀（不能跟 date 一起給）').optional(),
@@ -380,7 +380,7 @@ tool(
 
 tool(
   'search_history',
-  '在這個頻道找訊息：query 的每個詞都要出現，範圍是整個頻道的歷史；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。date 只找那個時間之後的。和 read_history 合計一輪最多 3 次。',
+  '在這個頻道找訊息：query 的每個詞都要出現，範圍是整個頻道的歷史；from 給某人說過的一則 #編號，只找他的。兩個至少給一個。date 只找那個時間之後的。和 read_history、recall_history 合計一輪最多 3 次。',
   {
     token: sessionToken,
     query: z.string().optional().describe('關鍵字，用空白分開，每個都要出現'),
@@ -389,6 +389,19 @@ tool(
     limit: z.number().int().min(1).max(20).optional().describe('最多回幾則，預設 10，最多 20'),
   },
   '/search',
+  (result) => String(result.text ?? ''),
+  60_000,
+);
+
+tool(
+  'recall_history',
+  '用「意思」找這個頻道很久以前的訊息：不記得實際用詞、只記得大概在講什麼時用（例如「之前有人抱怨過那個活動嗎」）。關鍵字明確就改用 search_history。回傳最像的幾則，附 #編號與時間，可以再用 view_message 看完整內容。和 read_history、search_history 合計一輪最多 3 次。',
+  {
+    token: sessionToken,
+    query: z.string().describe('用一句話描述你要找什麼，不用給關鍵字'),
+    limit: z.number().int().min(1).max(20).optional().describe('最多回幾則，預設 8，最多 20'),
+  },
+  '/recall',
   (result) => String(result.text ?? ''),
   60_000,
 );

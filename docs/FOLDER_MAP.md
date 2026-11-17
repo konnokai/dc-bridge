@@ -40,7 +40,9 @@
 | `discord-notes.mjs` | 頻道筆記與每日摘要 |
 | `discord-memes.mjs` | 梗圖庫 |
 | `discord-reload.mjs` | `/reload-system-prompt` 的交接摘要 |
-| `discord-memory.mjs` | 群友記憶 |
+| `discord-memory.mjs` | 群友記憶與側寫 |
+| `discord-profiles.mjs` | 群友側寫的 prompt 與輸出解析 |
+| `discord-history-archive.mjs` | 歷史歸檔（Qdrant + embedding） |
 | `discord-slang.mjs` | 黑話收集與注入 |
 | `discord-json.mjs` | 從模型輸出抓 JSON 陣列 |
 | `discord-emoji.mjs` | 表情目錄與使用次數 |

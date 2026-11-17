@@ -153,6 +153,7 @@ pm2 logs dc-bridge
 | `memory.enabled` | 群友記憶開關，預設 `false`（要在 `config.json` 明確打開） |
 | `memory.maxFacts` | 每個人最多記幾條，滿了丟最舊的，預設 20（5~50） |
 | `memory.maxChars` | 注入區塊的字數上限，預設 800（200~3000） |
+| `memory.profiles` | 每天用背景會話把每個人的事實歸納成一句側寫，預設 `false`（多一次模型呼叫） |
 | `memes.enabled` | 梗圖庫開關，預設 `true`（見「梗圖庫」）；設 `false` 就不能存、不能用 `meme:` 送 |
 | `memes.max` | 每批 prompt 帶的梗圖數，預設 8（0~20） |
 | `notes.enabled` | 頻道筆記開關，預設 `false`（會保存頻道文字；每天摘要會另外花 token） |
@@ -163,6 +164,14 @@ pm2 logs dc-bridge
 | `knowledge.enabled` | 群知識開關，預設 `false`（會保存頻道文字並注入 prompt） |
 | `knowledge.maxChars` | 聊天時每批最多帶多少字的知識，預設 2500（300~4000）；`always` 另外算，合計 600 字 |
 | `knowledge.toolMaxChars` | 工具觸發（生圖）時附加的知識上限，預設 3000（300~6000） |
+| `historyArchive.enabled` | 歷史歸檔開關，預設 `false`。開了才會把頻道訊息 embed 後存進 Qdrant，並註冊 `recall_history` |
+| `historyArchive.baseUrl` | Qdrant 位址，預設 `http://127.0.0.1:6333` |
+| `historyArchive.embedUrl` | oMLX（或任何 OpenAI 相容）的 `/v1` 位址；`enabled: true` 時必填 |
+| `historyArchive.embedModel` | embedding 模型，預設 `bge-m3-mlx-fp16`（1024 維） |
+| `historyArchive.apiKey` | embedding 服務的 API key，沒有就留空 |
+| `historyArchive.collection` | Qdrant 集合名稱，預設 `dc_history`；不能用別的服務的集合 |
+| `historyArchive.retentionDays` | 保留幾天，預設 360（1~3650）；每天清一次 |
+| `historyArchive.flushMs` / `batch` | 幾毫秒或累積幾則送一批，預設 60000／32 |
 | `followup.enabled` | 回訪開關，預設 `false`（時間到了會多一個模型回合）。`chattyChannels` 裡的頻道靠它自己開新話題，關掉就只剩被動接話 |
 | `sandbox.enabled` | 是否開放 `run_script`（一次性在 Docker 容器裡跑模型寫的程式），預設 `false`。橋接主機要有 Docker，image 要先 pull；見「執行程式」 |
 | `sandbox.channels` | 允許執行的頻道 id（字串陣列）。只有這些頻道能跑；預設空（全關） |
@@ -757,7 +766,9 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
    控制台「日誌」與 pm2 log，不用等建置結束才看得到進度。
 
 2. **表情提示**：prompt 附兩段，同一個會話 30 分鐘最多帶一次，內容沒變就不重複帶，壓縮後清掉重帶。
-   - 【常用表情】：本伺服器用過的前 8 個＋其他伺服器前 4 個（名稱＋使用時機）。沒用過的不列。
+   - 【常用表情】：本伺服器用過的前 5 個＋每天輪替的 3 個冷門表情（含從沒用過的）＋其他伺服器前 4 個
+     （名稱＋使用時機）。只挑用過的會鎖在同一組，實測前 8 名佔全站使用 85%。冷門表情按目錄 id 排序、
+     用本地日期算起點，同一天同一批。
    - 【本伺服器表情】：本伺服器其餘表情按情緒分組（好笑、無語、困惑…），只列名稱；
      分不到組的不列，已經在【常用表情】的不重複列。上限 2500 字。
    其他表情用 `mcp__discord__search_emojis` 查：當前伺服器 +6 分、名稱命中 +4、
@@ -1023,6 +1034,12 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   每條後面標「（今天）」或「（N 天前）」：記下或最後一次再記同一句的時間，讓模型判斷哪條可能過期。
 - **推測 30 天過期**：開頭是「（推測）」的那條，30 天沒再記一次同一句，就在下一次帶記憶時刪掉（本人說的不會過期）。
   模型覺得推測還對，用 `remember_user` 再記同一句就會續期。
+- **側寫（每天一次）**：事實至少 4 條、上次側寫之後事實又動過、而且離上次超過 7 天的人，
+  背景會話用 `dc-learner` 把事實歸納成一句（60 字以內）存在同一個 entry 的 `profile`。
+  只整理事實裡已經有的興趣、偏好與近況；不推測性格、不評價好壞，照樣過 `defang`。
+  注入時接在事實後面（`側寫：…`），**不取代事實**；預算不夠先砍側寫，不會把後面的人擠掉。
+  候選排除 `deny` 與模型不理名單；模型回傳的名單外的 id 一律丟掉。事實刪光、`/forget`、
+  或淘汰最久沒更新的人時，側寫跟著 entry 一起消失。`user_info` 也會多列一行側寫。
 - **所有伺服器共用**：記憶掛在使用者身上，不分伺服器；在 A 伺服器記的事，那個人在 B 伺服器說話時也會帶進來。
 - **私聊不記**：在私聊呼叫記憶工具會回錯誤。也不記 bot。NSFW 頻道照常記。
 - **上限**：每人最多 `memory.maxFacts` 條（預設 20，滿了丟最舊的）；總共最多 500 人（滿了丟最久沒更新的）；
@@ -1104,6 +1121,38 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 ```json
 "memes": { "enabled": true, "max": 8 }
 ```
+
+## 歷史歸檔（選用）
+
+把看得到的頻道訊息 embed 後存進 Qdrant，之後模型可以用**意思**找很久以前的對話（`recall_history`）。
+預設關閉；沒開就完全不連外。
+
+- **來源**：guild 頻道的人類訊息與 bot 自己的訊息。`//` 訊息、`deny.users`、模型不理名單、
+  `/blacklist` 退出的人都不收。私聊不收。
+- **跳過雜訊**：去掉提及、emoji、連結後少於 4 個字的不 embed（「笑死」「+1」跟任何查詢都像）。
+- **寫入**：累積 32 則或 60 秒送一批；embed 走 oMLX 的 `/v1/embeddings`，存進 Qdrant。
+  點 id 由訊息 id 決定，所以編輯會覆蓋、重送不會重複。
+- **刪除**：訊息被刪（含批次刪除）就從歸檔刪掉；`/forget` 會清佇列、等正在送的批次，再刪這個人的點。
+- **保留期**：每天清一次超過 `retentionDays` 的點（預設 360 天，用訊息時間算）。
+- **查詢**：`recall_history` 只搜目前頻道，查詢時再套一次現在的封鎖與不理名單；
+  分數低於門檻回「沒有夠像的」，不硬湊。跟 `read_history`／`search_history` 共用一輪 3 次配額。
+- **集合**：預設 `dc_history`，1024 維 Cosine、int8 量化、向量與 HNSW 放磁碟。
+  既有的集合維度不符時直接停用歸檔（記 log），不會硬寫。
+- **控制台**：設定頁可以開關與改保留天數（端點與 key 只留在 `config.json`，重啟後生效）；
+  「群友記憶」分頁有狀態卡：集合、點數（近似）、佇列、最後送出時間、累計與最近錯誤。
+
+```json
+"historyArchive": {
+  "enabled": true,
+  "embedUrl": "http://192.168.1.9:8000/v1",
+  "apiKey": "...",
+  "retentionDays": 360
+}
+```
+
+:::warning
+Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道對話，不要讓整個區網讀得到。
+:::
 
 ## 頻道筆記（選用）
 
@@ -1400,7 +1449,11 @@ docker pull node:24-alpine       # 也要跑 Node 的話
   `query` 用空白分開的每個詞都要出現（不分大小寫），比對訊息文字與連結預覽的內容；
   `from` 給某人說過的一則 #編號，只找他的。最多回 20 則，結果一律舊→新。
   討論串、語音和私聊沒有這條搜尋 API，維持往回掃最近 300 則（每頁 100 則、最多 3 頁）。
-  和 `read_history` 合計一輪最多 3 次，超過回 429；沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
+  和 `read_history`、`recall_history` 合計一輪最多 3 次，超過回 429；沒開 Message Content 意圖時，別人的訊息沒有文字，結果會註明
+- `mcp__discord__recall_history`（`query`、`limit` 可省略）：用**意思**找這個頻道很久以前的訊息，不用給關鍵字。
+  需要 `historyArchive.enabled`；沒開回 403。只搜目前頻道，查詢時再套一次目前的封鎖與不理名單；
+  低於相似度門檻就回「沒有夠像的」。結果附 `#編號` 與時間，可以再用 `view_message` 看完整內容。
+  和 `read_history`、`search_history` 合計一輪最多 3 次。
 - `mcp__discord__create_poll`（`question`、`answers`、`hours`／`multi` 可省略）：在這個頻道發一個 Discord 投票。
   題目最多 300 字、選項 2~10 個（每個最多 55 字，重複的與空的會拿掉）、`hours` 1~168（預設 24）、`multi` 是否可複選。
   文字過敏感資訊閘門，佔「一輪 5 則」的名額。bot 沒有「建立投票」權限時回錯誤

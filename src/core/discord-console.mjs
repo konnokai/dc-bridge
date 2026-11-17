@@ -74,7 +74,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, archive, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -143,6 +143,26 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
       }
       if (req.method === 'GET' && url.pathname === '/api/memory') {
         sendJson(res, 200, handlers.memory());
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/archive') {
+        sendJson(res, 200, await handlers.archive());
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/archive/channels') {
+        sendJson(res, 200, await handlers.archiveChannels());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/archive/list') {
+        sendJson(res, 200, await handlers.archiveList(await readJson(req)));
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/archive/search') {
+        sendJson(res, 200, await handlers.archiveSearch(await readJson(req)));
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/archive/delete') {
+        sendJson(res, 200, await handlers.archiveDelete(await readJson(req)));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/followups') {

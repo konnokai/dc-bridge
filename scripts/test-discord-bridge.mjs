@@ -154,7 +154,7 @@ const CHANNEL = '444444444444444444';
 const baseCfg = () => normalizeDiscordConfig({});
 const DISCORD_TOOL_NAMES = [
   'send_message', 'send_image', 'send_voice', 'send_voice_file', 'job_status', 'cancel_image', 'send_prts_artwork', 'get_prts_artwork', 'send_sticker', 'add_reaction', 'remove_reaction', 'set_quiet', 'set_custom_status', 'ignore_user', 'schedule_followup', 'edit_message', 'delete_message', 'create_poll',
-  'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'view_message',
+  'search_emojis', 'search_stickers', 'search_gifs', 'run_script', 'read_history', 'search_history', 'recall_history', 'view_message',
   'user_info', 'server_info', 'conversation_stats', 'remember_user', 'forget_user_fact',
   'note_event', 'search_notes', 'forget_note', 'propose_knowledge', 'save_meme', 'search_memes', 'forget_meme',
   'submit_feedback', 'list_feedback', 'edit_feedback',
@@ -281,6 +281,17 @@ console.log('## 1. 設定收斂');
   ok(mem.enabled === true, 'memory.enabled 可開');
   ok(mem.maxFacts === 50 && mem.maxChars === 200, '記憶數字欄位收斂');
   ok(!('maxMessages' in cfg.memory) && !('ttlDays' in cfg.memory), '舊的原文記憶欄位已移除');
+  ok(cfg.memory.profiles === false, '群友側寫預設關閉（多一次模型呼叫）');
+  ok(normalizeDiscordConfig({ memory: { enabled: true, profiles: true } }).memory.profiles === true, 'memory.profiles 可開');
+  ok(cfg.historyArchive.enabled === false, '歷史歸檔預設關閉');
+  ok(cfg.historyArchive.baseUrl === 'http://127.0.0.1:6333' && cfg.historyArchive.collection === 'dc_history', '歸檔預設值');
+  ok(cfg.historyArchive.retentionDays === 360 && cfg.historyArchive.batch === 32, '保留期與批次預設值');
+  const archiveCfg = normalizeDiscordConfig({
+    historyArchive: { enabled: true, embedUrl: 'http://192.168.1.9:8000/v1/', retentionDays: 0, batch: 9999 },
+  }).historyArchive;
+  ok(archiveCfg.embedUrl === 'http://192.168.1.9:8000/v1', 'embedUrl 去掉結尾斜線');
+  ok(archiveCfg.retentionDays === 1 && archiveCfg.batch === 256, '歸檔數字欄位收斂');
+  throws(() => normalizeDiscordConfig({ historyArchive: { enabled: true } }), /embedUrl/, '開了歸檔一定要有 embedUrl');
 
   ok(cfg.slang.enabled === false, '黑話學習預設關閉');
   ok(cfg.slang.extractMinMessages === 20 && cfg.slang.injectMax === 8 && cfg.slang.maxPerDay === 40, '黑話預設值');
@@ -4908,9 +4919,27 @@ console.log('## 11. 表情目錄與代換');
   ok(hint.includes('- pat：安慰人時'), '跨伺服器的表情也會列');
   ok(hint.indexOf('kekw') < hint.indexOf('pat'), '本服的表情排在跨服前面');
   ok(hint.includes('- kekw：覺得好笑時') && hint.indexOf('kekw') === hint.lastIndexOf('kekw'), '跨服同名只列一次，用本服的描述');
-  ok(!hint.includes('cry'), '沒用過的不列');
+  ok(hint.includes('- cry：哭'), '沒用過的冷門表情也會補進名額');
   ok(buildEmojiHint(catalogs, { guildId: '111', usage: new Map() }) === '', '沒有使用紀錄就不注入');
   ok(buildEmojiHint(catalogs, { guildId: '111', usage: hintUsage, maxChars: 20 }) === '', 'maxChars 太小就不注入');
+  // 本服 20 個、8 個有使用紀錄：前 5 名固定，剩下 3 個名額輪替沒用過的。
+  const rotateCatalog = new Map([['7', {
+    guildId: '7',
+    entries: Array.from({ length: 20 }, (_, i) => ({ id: `r${String(i).padStart(2, '0')}`, name: `r${i}`, usage: '測試' })),
+  }]]);
+  const rotateUsage = new Map([['7', new Map(Array.from({ length: 8 }, (_, i) => [`r${String(i).padStart(2, '0')}`, 100 - i]))]]);
+  const day1 = Date.UTC(2026, 0, 5, 12);
+  const day2 = Date.UTC(2026, 0, 6, 12);
+  const rotated1 = buildEmojiHint(rotateCatalog, { guildId: '7', usage: rotateUsage, maxChars: 2000, now: day1 });
+  const rotated2 = buildEmojiHint(rotateCatalog, { guildId: '7', usage: rotateUsage, maxChars: 2000, now: day2 });
+  ok(rotated1.split('\n').length === 9, '本服名額 8：5 個常用的＋3 個輪替的（加標題 9 行）');
+  ok(buildEmojiHint(rotateCatalog, { guildId: '7', usage: rotateUsage, maxChars: 2000, now: day1 }) === rotated1, '同一天同一批');
+  ok(rotated1 !== rotated2, '換日換一批冷門表情');
+  const rotatedNames = rotated1.split('\n').slice(1).map((line) => /^- (.+?)：/.exec(line)?.[1]);
+  const topFive = new Set(['r0', 'r1', 'r2', 'r3', 'r4']);
+  ok(rotatedNames.filter((name) => !topFive.has(name)).length === 3, '3 個輪替的都不在前 5 名');
+  ok(rotatedNames.some((name) => Number(String(name).slice(1)) >= 8), '輪替包含沒用過的表情');
+  ok(!buildEmojiHint(catalogs, { guildId: null, usage: hintUsage }).includes('cry'), '私聊不輪替沒用過的表情');
   const many = new Map([
     ['9', { guildId: '9', entries: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, name: `m${i}`, usage: '測試' })) }],
     ['8', { guildId: '8', entries: Array.from({ length: 12 }, (_, i) => ({ id: `o${i}`, name: `o${i}`, usage: '測試' })) }],

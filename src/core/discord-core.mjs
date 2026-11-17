@@ -255,6 +255,8 @@ export function normalizeDiscordConfig(raw) {
     memory: {
       // 群友記憶：模型用 remember_user 記下的事。預設關閉（會保存關於使用者的文字）。
       enabled: src.memory?.enabled === true,
+      // 側寫：每天用背景會話把事實歸納成一句。預設關閉（多一次模型呼叫）。
+      profiles: src.memory?.profiles === true,
       maxFacts: clamp(src.memory?.maxFacts, 20, 5, 50),
       maxChars: clamp(src.memory?.maxChars, 800, 200, 3000),
     },
@@ -275,6 +277,25 @@ export function normalizeDiscordConfig(raw) {
       maxChars: clamp(src.knowledge?.maxChars, 2500, 300, 4000),
       toolMaxChars: clamp(src.knowledge?.toolMaxChars, 3000, 300, 6000),
     },
+    historyArchive: (() => {
+      const raw = src.historyArchive ?? {};
+      const enabled = raw.enabled === true;
+      const embedUrl = text(raw.embedUrl, '').replace(/\/+$/, '');
+      // 開了才檢查：沒開的人不該被這裡擋住啟動。
+      if (enabled && !embedUrl) throw new Error('discord.historyArchive.enabled 需要一起填 embedUrl（oMLX 的 /v1）');
+      return {
+        // 歷史歸檔：訊息 embed 後存進 Qdrant。預設關閉（外部服務、會保存頻道文字）。
+        enabled,
+        baseUrl: text(raw.baseUrl, 'http://127.0.0.1:6333').replace(/\/+$/, ''),
+        embedUrl,
+        embedModel: text(raw.embedModel, 'bge-m3-mlx-fp16'),
+        apiKey: typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '',
+        collection: text(raw.collection, 'dc_history'),
+        retentionDays: clamp(raw.retentionDays, 360, 1, 3650),
+        flushMs: clamp(raw.flushMs, 60_000, 15_000, 900_000),
+        batch: clamp(raw.batch, 32, 1, 256),
+      };
+    })(),
     followup: {
       // 回訪：模型自己排「N 分鐘後回來看」。預設關閉（時間到了會多一個模型回合）。
       enabled: src.followup?.enabled === true,
@@ -815,6 +836,7 @@ const PROGRESS_LABELS = {
   'mcp__discord__get_prts_artwork': ['🖼️ 看立繪', (args) => args.artwork_id],
   'mcp__discord__read_history': ['📜 翻聊天紀錄'],
   'mcp__discord__search_history': ['🔎 搜尋聊天紀錄', (args) => args.query],
+  'mcp__discord__recall_history': ['🔎 用意思找舊訊息', (args) => args.query],
   'mcp__discord__view_message': ['🔎 看一則訊息'],
   'mcp__discord__user_info': ['👤 查看群友資料'],
   'mcp__discord__server_info': ['🏠 查看伺服器資訊'],

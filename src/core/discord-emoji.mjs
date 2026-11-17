@@ -191,12 +191,28 @@ export const EMOJI_MOODS = [
   ['看戲', ['看戲', '圍觀', '偷看', '盯']],
 ];
 
+/** 本伺服器保留幾個名額給冷門表情：只列常用的話，多樣性會鎖在同一組（實測前 8 名佔 85%）。 */
+const ROTATE_SLOTS = 3;
+
 /**
- * prompt 的【常用表情】：本伺服器用過的前 localMax 個，其他伺服器前 otherMax 個。
- * 只收有使用紀錄的：純目錄順序跟當下無關。同名只列一次，本伺服器優先。
+ * 冷門表情按本地日期輪替：同一天同一個順序，換日才換一批。
+ * 按 id 排不按次數排——被輪到的那個一旦有人用，次數就變，排序跟著跳。
+ */
+function rotatingEmojis(pool, count, now) {
+  if (!pool.length || count <= 0) return [];
+  const date = new Date(now);
+  const day = Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000);
+  const start = ((day % pool.length) + pool.length) % pool.length;
+  return Array.from({ length: Math.min(count, pool.length) }, (_, i) => pool[(start + i) % pool.length]);
+}
+
+/**
+ * prompt 的【常用表情】：本伺服器用過的前幾名＋每天輪替的冷門表情，其他伺服器前 otherMax 個。
+ * 冷門表情從「本服全部 − 前幾名」挑，沒用過的也輪得到；只列用過的永遠是同一組 8 個。
+ * 同名只列一次，本伺服器優先。
  * 私聊沒有「本伺服器」，全部合起來取 localMax + otherMax。
  */
-export function buildEmojiHint(catalogs, { guildId = null, usage = null, localMax = 8, otherMax = 4, maxChars = 600 } = {}) {
+export function buildEmojiHint(catalogs, { guildId = null, usage = null, localMax = 8, otherMax = 4, maxChars = 600, now = Date.now() } = {}) {
   if (!catalogs?.size || !usage?.size) return '';
   const current = guildId === null || guildId === undefined ? null : String(guildId);
   const local = [];
@@ -210,9 +226,19 @@ export function buildEmojiHint(catalogs, { guildId = null, usage = null, localMa
     }
   }
   const byCount = (a, b) => b.count - a.count || String(a.entry.name).localeCompare(String(b.entry.name));
+  const rotateCount = Math.min(ROTATE_SLOTS, localMax);
+  const common = local.sort(byCount).slice(0, localMax - rotateCount);
+  const commonNames = new Set(common.map(({ entry }) => String(entry.name).toLowerCase()));
+  const rotation = rotatingEmojis(
+    (catalogs.get(current)?.entries ?? [])
+      .filter((entry) => entry?.id && entry?.name && !commonNames.has(String(entry.name).toLowerCase()))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    rotateCount,
+    now,
+  ).map((entry) => ({ entry }));
   const picks = current === null
     ? other.sort(byCount).slice(0, localMax + otherMax)
-    : [...local.sort(byCount).slice(0, localMax), ...other.sort(byCount).slice(0, otherMax)];
+    : [...common, ...rotation, ...other.sort(byCount).slice(0, otherMax)];
 
   const lines = [];
   const seen = new Set();

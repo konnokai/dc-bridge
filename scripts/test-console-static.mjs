@@ -42,6 +42,12 @@ console.log('## Discord 控制台');
     '梗圖縮圖用標頭帶 token，不放進網址');
   ok(/img-src 'self' blob:/.test(fs.readFileSync(path.join(ROOT, 'src', 'core', 'discord-console.mjs'), 'utf8')),
     '控制台 CSP 允許 blob: 圖片（縮圖用）');
+  ok(/id="archive-rows"/.test(dc) && /id="archive-pager"/.test(dc) && /id="archive-channel"/.test(dc),
+    '歷史歸檔卡片有表格、分頁與頻道選單');
+  ok(/api\('\/api\/archive\/list'/.test(dc) && /api\('\/api\/archive\/search'/.test(dc)
+    && /api\('\/api\/archive\/delete'/.test(dc) && /api\('\/api\/archive\/channels'/.test(dc),
+  '歷史歸檔卡片接上瀏覽、搜尋、刪除與頻道端點');
+  ok(/confirm\(`從歸檔刪掉這則/.test(dc), '歸檔刪除要二次確認');
   ok(/table\s*\{[^}]*table-layout:\s*fixed/.test(dc), '所有表格固定欄寬');
   ok(/\.entry-table\s*\{[^}]*min-width/.test(dc) && /\.entry-table tbody td\s*\{[^}]*height:\s*84px/.test(dc), '黑話／頻道表固定列高');
   const dcScript = [...dc.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0] ?? '';

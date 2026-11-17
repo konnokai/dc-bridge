@@ -557,7 +557,8 @@ export function onceInSession(shown, slot, text, now, refreshMs) {
   return text;
 }
 
-function escapeLearnerText(value) {
+/** 學習會話的不可信文字：轉義後才包進 tag，避免群友用 `<`、`｜` 改掉資料的結構。 */
+export function escapeLearnerText(value) {
   return String(value ?? '')
     .replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]))
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');

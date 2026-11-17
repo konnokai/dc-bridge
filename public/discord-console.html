@@ -600,6 +600,28 @@
   </section>
 
   <section class="card">
+    <h2>歷史歸檔 <span id="archive-count" class="muted"></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:12px">頻道訊息 embed 後存進 Qdrant，給 recall_history 用。端點與 key 在 config.json；開關與保留天數在「設定」頁，重啟後生效。<strong>這裡看得到所有已歸檔頻道的原文。</strong></p>
+    <p id="archive-status" class="muted">載入中…</p>
+    <div class="row" style="margin:10px 0">
+      <select id="archive-channel" aria-label="歸檔頻道">
+        <option value="">全部頻道</option>
+      </select>
+      <input id="archive-search" type="search" aria-label="搜尋歸檔" placeholder="用一句話搜尋（不用關鍵字）" style="max-width:320px">
+      <button id="archive-search-btn" type="button" class="ghost">搜尋</button>
+      <button id="archive-latest" type="button" class="ghost">最新</button>
+    </div>
+    <div class="table-wrap">
+      <table style="min-width:760px">
+        <colgroup><col style="width:17%"><col style="width:15%"><col style="width:13%"><col><col style="width:9%"></colgroup>
+        <thead><tr><th>時間</th><th>頻道</th><th>作者</th><th>內容</th><th></th></tr></thead>
+        <tbody id="archive-rows"></tbody>
+      </table>
+    </div>
+    <div class="row pager" id="archive-pager"></div>
+  </section>
+
+  <section class="card">
     <h2>頻道筆記 <span id="notes-count" class="muted"></span></h2>
     <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 note_event 記下的事，加上每天自動產生的頻道摘要。刪掉後模型就看不到那條。</p>
     <div class="row" style="margin-bottom:10px">
@@ -1684,10 +1706,117 @@
       unit: '人',
       cells: (user) => [
         el('td', {}, el('strong', {}, user.name || user.userId)),
-        el('td', {}, ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact))),
+        el('td', {},
+          ...user.facts.map((fact, index) => el('div', {}, (index + 1) + '. ' + fact)),
+          ...(user.profile ? [el('div', { className: 'muted' }, '側寫：' + user.profile)] : [])),
         el('td', { className: 'muted' }, fmtAgo(user.updatedAt)),
       ],
     });
+  }
+
+  function renderArchive(data) {
+    const box = $('archive-status');
+    if (!data?.enabled) {
+      $('archive-count').textContent = '';
+      box.textContent = '沒有開啟（config.json 的 discord.historyArchive.enabled）。';
+      return;
+    }
+    $('archive-count').textContent = data.count === null ? '' : `（${data.count} 個點）`;
+    const parts = [
+      `集合 ${data.collection}`,
+      data.count === null ? `點數：${data.countError || '查不到'}` : `${data.count} 個點（近似）`,
+      `保留 ${data.retentionDays} 天`,
+      `佇列 ${data.queued} 則`,
+      data.lastFlushAt ? `最後送出 ${fmtAgo(data.lastFlushAt)}` : '還沒送出過',
+      data.flushed ? `累計 ${data.flushed} 則` : '',
+    ].filter(Boolean);
+    box.textContent = parts.join('｜') + (data.lastError ? `；最近錯誤：${data.lastError}` : '');
+  }
+
+  const archiveView = { items: [], next: null, stack: [], names: new Map(), loaded: false, search: null };
+
+  const archiveTime = (at) => {
+    const time = Number(at);
+    return Number.isFinite(time) && time > 0 ? new Date(time).toLocaleString('zh-TW', { hour12: false }) : '—';
+  };
+
+  function renderArchiveRows(note = '') {
+    const rows = archiveView.items;
+    $('archive-rows').replaceChildren(...(rows.length
+      ? rows.map((item) => el('tr', {},
+        el('td', { className: 'muted' }, archiveTime(item.at)),
+        el('td', {}, archiveView.names.get(String(item.channelId)) || item.channelId || '—'),
+        el('td', {}, item.author || '某人'),
+        el('td', { title: item.text || '' }, String(item.text || '').slice(0, 200)),
+        el('td', {}, el('button', { type: 'button', className: 'ghost', dataset: { archiveId: String(item.id) } }, '刪除'))))
+      : [el('tr', {}, el('td', { colSpan: 5, className: 'muted' }, note || '沒有資料。'))]));
+    $('archive-pager').replaceChildren(
+      el('button', { type: 'button', className: 'ghost', id: 'archive-prev', disabled: archiveView.stack.length === 0 }, '上一頁'),
+      el('span', { className: 'muted' }, archiveView.search
+        ? `搜尋「${archiveView.search}」`
+        : `第 ${archiveView.stack.length + 1} 頁`),
+      el('button', { type: 'button', className: 'ghost', id: 'archive-next', disabled: !archiveView.next }, '下一頁'),
+    );
+  }
+
+  async function loadArchive(cursor = null) {
+    try {
+      const data = await api('/api/archive/list', {
+        method: 'POST',
+        body: JSON.stringify({
+          channelId: $('archive-channel').value,
+          before: cursor?.before ?? null,
+          skip: cursor?.skip ?? [],
+        }),
+      });
+      archiveView.items = data?.items ?? [];
+      archiveView.next = data?.next ?? null;
+      archiveView.search = null;
+      renderArchiveRows();
+    } catch (error) {
+      archiveView.items = [];
+      archiveView.next = null;
+      renderArchiveRows('讀取失敗：' + error.message);
+    }
+  }
+
+  async function loadArchiveChannels() {
+    try {
+      const data = await api('/api/archive/channels');
+      archiveView.names = new Map((data?.channels ?? []).map((row) => [String(row.channelId), row.name]));
+      const select = $('archive-channel');
+      const current = select.value;
+      select.replaceChildren(
+        el('option', { value: '' }, '全部頻道'),
+        ...(data?.channels ?? []).map((row) => el('option', { value: String(row.channelId) },
+          `${row.name ? '#' + row.name : row.channelId}（${row.count}）`)),
+      );
+      select.value = current;
+    } catch { /* 沒開或抓不到就只留「全部頻道」 */ }
+  }
+
+  async function searchArchive() {
+    const query = $('archive-search').value.trim();
+    if (!query) {
+      archiveView.stack = [];
+      await loadArchive(null);
+      return;
+    }
+    try {
+      const data = await api('/api/archive/search', {
+        method: 'POST',
+        body: JSON.stringify({ query, channelId: $('archive-channel').value }),
+      });
+      archiveView.items = data ?? [];
+      archiveView.next = null;
+      archiveView.stack = [];
+      archiveView.search = query;
+      renderArchiveRows('沒有夠像的。換個說法，或先選頻道。');
+    } catch (error) {
+      archiveView.items = [];
+      archiveView.next = null;
+      renderArchiveRows('搜尋失敗：' + error.message);
+    }
   }
 
   function feedbackPrompt(item) {
@@ -1959,6 +2088,9 @@
     { path: 'memory.enabled', label: 'memory.enabled：群友記憶', kind: 'bool' },
     { path: 'memory.maxFacts', label: 'memory.maxFacts：每人上限', kind: 'number', min: 5, max: 50, step: 1 },
     { path: 'memory.maxChars', label: 'memory.maxChars：注入上限（字）', kind: 'number', min: 200, max: 3000, step: 50 },
+    { path: 'memory.profiles', label: 'memory.profiles：每天產生群友側寫（多一次模型呼叫）', kind: 'bool' },
+    { path: 'historyArchive.enabled', label: 'historyArchive.enabled：歷史歸檔（重啟後生效；embedUrl 只能填在 config.json）', kind: 'bool' },
+    { path: 'historyArchive.retentionDays', label: 'historyArchive.retentionDays：保留天數', kind: 'number', min: 1, max: 3650, step: 1 },
     { path: 'notes.enabled', label: 'notes.enabled：頻道筆記', kind: 'bool' },
     { path: 'notes.injectMax', label: 'notes.injectMax：帶幾條', kind: 'number', min: 1, max: 20, step: 1 },
     { path: 'notes.maxChars', label: 'notes.maxChars：注入上限（字）', kind: 'number', min: 100, max: 3000, step: 50 },
@@ -1987,7 +2119,7 @@
   const FEATURE_SECTIONS = {
     '': '對話行為', media: '媒體', videoLinks: '影片連結', context: '上下文', batch: '批次',
     tts: '語音（TTS）', security: '安全', emoji: '表情', memes: '梗圖', reactions: 'Reaction',
-    memory: '群友記憶', notes: '頻道筆記', knowledge: '群知識', followup: '回訪排程', slang: '黑話',
+    memory: '群友記憶', notes: '頻道筆記', knowledge: '群知識', followup: '回訪排程', slang: '黑話', historyArchive: '歷史歸檔',
   };
   const featureSection = (path) => (path.includes('.') ? path.split('.')[0] : '');
 
@@ -2284,7 +2416,7 @@
       api('/api/status'), api('/api/sessions'), api('/api/logs?limit=200'), api('/api/slang'), api('/api/invite'),
       api('/api/usage?range=' + encodeURIComponent(usageRange)), api('/api/quota'), api('/api/memory'), triggersPromise,
       api('/api/notes'), api('/api/codex-usage'), devFeedbackPromise, api('/api/followups'),
-      api('/api/trade/overview'), api('/api/memes'), knowledgePromise,
+      api('/api/trade/overview'), api('/api/memes'), knowledgePromise, api('/api/archive'),
     ]);
     if (results[0].status === 'fulfilled') renderStatus(results[0].value);
     if (results[0].status === 'fulfilled') renderEmoji(results[0].value.emoji);
@@ -2304,6 +2436,12 @@
     if (results[13].status === 'fulfilled') renderTrade(results[13].value);
     if (results[14].status === 'fulfilled') renderMemes(results[14].value);
     if (results[15].status === 'fulfilled' && results[15].value) renderKnowledge(results[15].value);
+    if (results[16]?.status === 'fulfilled') renderArchive(results[16].value);
+    // 歸檔表格不跟著 5 秒輪詢：第一次打開「記憶」分頁時抓一次，之後靠按鈕與操作更新。
+    if (!$('tab-memory').hidden && !archiveView.loaded) {
+      archiveView.loaded = true;
+      void loadArchiveChannels().then(() => loadArchive(null));
+    }
   }
 
   $('gate-form').addEventListener('submit', async (event) => {
@@ -2751,6 +2889,51 @@
     } finally {
       button.disabled = false;
     }
+  });
+
+  $('archive-rows').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-archive-id]');
+    if (!button) return;
+    const item = archiveView.items.find((row) => String(row.id) === button.dataset.archiveId);
+    if (!item) return;
+    const preview = String(item.text || '').slice(0, 40);
+    if (!confirm(`從歸檔刪掉這則？\n${item.author || ''}：${preview}\n\n刪了救不回來；這則之後被編輯會再收進來。`)) return;
+    button.disabled = true;
+    try {
+      await api('/api/archive/delete', { method: 'POST', body: JSON.stringify({ id: String(item.id) }) });
+      await loadArchive(archiveView.stack.at(-1) ?? null);
+    } catch (error) {
+      alert('刪除失敗：' + error.message);
+      button.disabled = false;
+    }
+  });
+
+  $('archive-pager').addEventListener('click', async (event) => {
+    if (event.target.closest('#archive-next') && archiveView.next) {
+      archiveView.stack.push(archiveView.next);
+      await loadArchive(archiveView.next);
+      return;
+    }
+    if (event.target.closest('#archive-prev') && archiveView.stack.length) {
+      archiveView.stack.pop();
+      await loadArchive(archiveView.stack.at(-1) ?? null);
+    }
+  });
+
+  $('archive-search-btn').addEventListener('click', () => { void searchArchive(); });
+  $('archive-search').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void searchArchive();
+  });
+  $('archive-latest').addEventListener('click', () => {
+    archiveView.stack = [];
+    $('archive-search').value = '';
+    void loadArchive(null);
+  });
+  $('archive-channel').addEventListener('change', () => {
+    archiveView.stack = [];
+    void loadArchive(null);
   });
 
   $('note-rows').addEventListener('click', async (event) => {

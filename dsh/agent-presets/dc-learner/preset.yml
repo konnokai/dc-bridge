@@ -1,3 +1,3 @@
 name: Discord 黑話抽取
-description: 黑話學習專用：沒有人格長文、沒有任何工具，只把頻道語料整理成 JSON 候選。由 dc-bridge 的 slang.learnerPreset 使用。
+description: 背景整理專用：沒有人格長文、沒有任何工具，只把頻道語料整理成 JSON 候選或摘要。由 dc-bridge 的 slang.learnerPreset 使用（黑話抽取、頻道摘要、群友側寫）。
 order: 12
