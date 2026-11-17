@@ -38,6 +38,8 @@ import {
   slashInputAction,
   withSelfMutedUser,
   loadSessions,
+  loadSessionPresets,
+  saveSessionPresets,
   normalizeDiscordConfig,
   catalogView,
   parseKeyAction,
@@ -55,6 +57,8 @@ import {
   isSkippedMessage,
   viewChannelId,
   viewMessageTarget,
+  presetForChannelKey,
+  OPEN_POLITICS_PRESET,
 } from '../src/core/discord-core.mjs';
 import {
   collectMediaAttachments,
@@ -126,6 +130,7 @@ import { createUrgentTyping } from '../src/core/discord-typing.mjs';
 import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { COMMAND_CODE_API_BASE, createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, GO_USAGE_URL, GOAT_MONTHLY_CREDITS, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
+import { describeAge } from '../src/model-view.js';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
 let failures = 0;
@@ -161,6 +166,15 @@ console.log('## 1. 設定收斂');
 {
   const cfg = baseCfg();
   ok(cfg.agentPreset === 'dc-chat', '預設 preset = dc-chat');
+  ok(cfg.openPoliticsChannels.length === 0, '政治開放頻道預設空');
+  const politicsCfg = normalizeDiscordConfig({ openPoliticsChannels: [CHANNEL] });
+  ok(politicsCfg.openPoliticsChannels.includes(CHANNEL), '政治開放頻道保留頻道 ID');
+  throws(() => normalizeDiscordConfig({ openPoliticsChannels: CHANNEL }), /必須是陣列/, '政治開放頻道不能是單一字串');
+  throws(() => normalizeDiscordConfig({ openPoliticsChannels: ['abc'] }), /非法 Discord ID/, '政治開放頻道只收 Discord ID');
+  ok(presetForChannelKey(cfg, `ch:${CHANNEL}`) === 'dc-chat', '沒列出的頻道用 agentPreset');
+  ok(presetForChannelKey(politicsCfg, `ch:${CHANNEL}`) === OPEN_POLITICS_PRESET, '列出的頻道用政治開放版');
+  ok(presetForChannelKey(politicsCfg, `ch:${GUILD}`) === 'dc-chat', '其他頻道照 agentPreset');
+  ok(presetForChannelKey(politicsCfg, `dm:${USER}`) === 'dc-chat', '私聊不套用政治開放版');
   ok(cfg.allowAllWhenEmpty === false, '白名單空時預設全擋（fail-closed）');
   ok(cfg.requireMentionInGuild === true, '頻道預設要 @bot');
   ok(Object.keys(cfg.requireMentionInChannel).length === 0, '單頻道覆寫預設空');
@@ -328,6 +342,8 @@ console.log('## 1b. 範例設定可以直接用');
   const example = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'config.example.json'), 'utf8'));
   const cfg = normalizeDiscordConfig(example.discord);
   ok(cfg.agentPreset === 'dc-chat', 'config.example.json 的 discord.agentPreset = dc-chat');
+  ok(Array.isArray(example.discord.openPoliticsChannels) && example.discord.openPoliticsChannels.length === 0,
+    '範例的政治開放頻道是空的');
   ok(cfg.token === '', '範例不帶 token');
   ok(cfg.ownerIds.length === 0 && cfg.allow.guilds.length === 0, '範例白名單是空的（要求使用者自己填）');
   ok(cfg.memory.enabled === false, '範例的群友記憶預設關閉');
@@ -335,6 +351,17 @@ console.log('## 1b. 範例設定可以直接用');
   ok(cfg.slang.enabled === false, '範例的黑話學習預設關閉');
   const hedge = normalizeHedgeConfig(example.dsh.hedge, { ttftTimeoutMs: cfg.ttftTimeoutMs });
   ok(hedge.enabled === false && hedge.afterMs === 12_000, '範例的 hedge 預設關閉、門檻 12 秒');
+}
+
+console.log('## 1c. 相對時間');
+{
+  const now = Date.parse('2026-10-18T11:31:05+08:00');
+  ok(describeAge(now - 38_000, now) === '38s', '38 秒前');
+  ok(describeAge(now - 38 * 60_000, now) === '38m', '38 分鐘前');
+  ok(describeAge(now - 2 * 3_600_000, now) === '2h', '2 小時前');
+  ok(describeAge(now - 3 * 86_400_000, now) === '3d', '3 天前');
+  ok(describeAge(now + 10_000, now) === '0s', '未來時間夾到 0s');
+  ok(describeAge(0, now) === '', '0 回空字串');
 }
 
 console.log('## 2. 白名單');
@@ -596,6 +623,22 @@ console.log('## 6. 會話映射檔');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+console.log('## 6b. 會話 preset 映射檔');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-bridge-presets-'));
+  const file = path.join(dir, 'session-presets.json');
+  assert.deepEqual(loadSessionPresets(file), { presets: {}, warning: null }, '檔案不存在 → 空映射');
+  saveSessionPresets(file, { sess_abc: 'dc-chat-open', sess_def: 'dc-chat' });
+  assert.deepEqual(loadSessionPresets(file).presets, { sess_abc: 'dc-chat-open', sess_def: 'dc-chat' },
+    '寫入後讀回一致');
+  fs.writeFileSync(file, '{ 壞掉的 json');
+  const corrupt = loadSessionPresets(file);
+  ok(corrupt.warning && Object.keys(corrupt.presets).length === 0, '壞檔只回警告，不中斷啟動');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, presets: { sess_a: 'dc-chat', sess_b: 3, '': 'dc-chat' } }));
+  assert.deepEqual(loadSessionPresets(file).presets, { sess_a: 'dc-chat' }, '無效的 sessionId／preset 跳過');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('## 7. dc-chat preset 與守衛');
 {
   const stale = buildPatches({ check: true, log: () => {} }).filter((r) => r.changed);
@@ -642,7 +685,58 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(/ignore_user/.test(persona) && /管理員不能設/.test(persona), 'persona 教模型用 ignore_user，並說明管理員不能設');
   ok(/戰績圖/.test(persona) && /不要按/.test(persona), 'persona 明確叫模型不要對戰績圖按 reaction');
   ok(!/【發送】行給的值/.test(persona) && /由系統自動帶入/.test(persona), 'persona 叫模型不要填 token');
+
+  // dc-chat-open：跟 dc-chat 同一份人格，只把政治基線換掉。釘住「只有 4 行不同」，避免兩份 drift。
+  const openPatchFile = patchFileFor('dc-chat-open');
+  ok(fs.existsSync(openPatchFile), `${path.relative(REPO_ROOT, openPatchFile)} 存在`);
+  const openRow = yaml.load(fs.readFileSync(openPatchFile, 'utf8'))[0]?.insert?.[0];
+  ok(openRow?.config?.id === 'dc-chat-open', 'dc-chat-open patch 行 config.id 正確');
+  const openPlugins = openRow?.config?.plugins ?? [];
+  ok(openPlugins.some((p) => p.id === 'persona'), 'dc-chat-open 有 persona 行');
+  ok(openPlugins.find((p) => p.id === 'dc-tool-restrict')?.config?.allowImageGen === true,
+    'dc-chat-open 也開啟 allowImageGen');
+  const openPersona = openPlugins.find((p) => p.id === 'persona')?.config?.prefix ?? '';
+  ok(/政治可以聊/.test(openPersona), '政治開放版明講政治可以聊');
+  ok(!/政治不碰/.test(openPersona), '政治開放版沒有「政治不碰」');
+  ok(!/這題我不碰/.test(openPersona), '政治開放版沒有政治固定拒絕句');
+  const baseLines = persona.split('\n');
+  const openLines = openPersona.split('\n');
+  ok(baseLines.length === openLines.length, '兩版人格行數相同');
+  const changedLines = baseLines.map((line, index) => [line, openLines[index]]).filter(([a, b]) => a !== b);
+  ok(changedLines.length === 4, `兩版人格只有 4 行不同（實際 ${changedLines.length}；改 dc-chat 要同步 dc-chat-open）`);
+  const findLine = (lines, needle) => lines.find((line) => line.includes(needle)) ?? '';
+  const imageBase = findLine(baseLines, '政治人物這類照【安全邊界】不畫');
+  const imageOpen = findLine(openLines, '政治人物這類不畫');
+  ok(imageBase && imageOpen && imageOpen === imageBase.replace('這類照【安全邊界】不畫', '這類不畫'),
+    '生圖限制只拿掉「照【安全邊界】」，情色、血腥、恐怖、真實人物攻擊都還在');
+  const creationBase = findLine(baseLines, '政治人物照第 5 條。');
+  const creationOpen = findLine(openLines, '政治人物算公眾人物');
+  ok(creationBase && creationOpen && creationOpen === creationBase.replace(
+    '政治人物照第 5 條。',
+    '政治人物算公眾人物，可以當創作題材，但不能捏造他們的具體言行，也不能寫成攻擊。',
+  ), '創作規則只改政治人物那句，其他限制不動');
+  const ruleOpen = findLine(openLines, '5. 政治可以聊。');
+  ok(ruleOpen.includes('不嗆人、不貶低人') && ruleOpen.includes('不幫任何政黨或候選人拉票')
+    && ruleOpen.includes('不代表任何立場'), '政治開放版有正面規則與界線');
+  const identityBase = findLine(baseLines, '「你是中國的還是台灣的」→');
+  const identityOpen = findLine(openLines, '「你是中國的還是台灣的」→');
+  ok(identityBase && identityOpen && identityOpen === identityBase.replace(
+    '✗ 表態，或講一段歷史 ✓「這題我不碰，換一個」',
+    '✗ 只回「我不碰政治」，或背一段宣傳 ✓ 照你手上的資料講你的理解，不確定就說不確定',
+  ), '身分問題示範改成正常回答');
+  const withoutPersona = (list) => list.filter((row) => row.id !== 'persona');
+  ok(JSON.stringify(withoutPersona(openPlugins)) === JSON.stringify(withoutPersona(plugins)),
+    '兩版 preset 的工具面與其他設定完全相同');
   const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
+  ok(/const agentPreset = presetForChannelKey\(cfg\.discord, key\)/.test(bridgeSource), 'ensureSession 依 key 選 preset');
+  ok(/await requirePreset\(agentPreset\)/.test(bridgeSource), '建立會話前驗證選出的 preset');
+  ok(/api\.sessions\.create\(\{\s*workspaceId: workspace\.workspace\.workspaceId,\s*agentPreset,\s*\}\)/.test(bridgeSource),
+    'sessions.create 帶入選出的 preset');
+  ok(/error\?\.code === 'preset-missing'/.test(bridgeSource), 'preset 安裝細節只寫 log，不貼公開頻道');
+  ok(/sessionPresets\[sessionId\] = agentPreset/.test(bridgeSource), '建會話時記下實際 preset');
+  ok(/delete sessionPresets\[sessionId\]/.test(bridgeSource), '重置會話時清掉 preset 記錄');
+  ok(/const actualPreset = sessionId \? sessionPresets\[sessionId\] : ''/.test(bridgeSource),
+    '/status 讀會話實際 preset');
   ok(!bridgeSource.includes('【發送】token='), '【發送】行不再把令牌寫進 prompt');
 
   const guardPath = path.join(REPO_ROOT, 'plugins', 'dc-agent-presets', 'dc-tool-restrict.mjs');

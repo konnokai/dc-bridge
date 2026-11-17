@@ -33,6 +33,8 @@ import {
   isSilentMessage,
   isTransientDshError,
   loadSessions,
+  loadSessionPresets,
+  saveSessionPresets,
   matchesTerms,
   requireMentionForChannel,
   searchTerms,
@@ -54,6 +56,7 @@ import {
   viewChannelId,
   viewMessageTarget,
   isChattyChannel,
+  presetForChannelKey,
   catalogView,
   validateModelChoice,
   parseKeyAction,
@@ -265,6 +268,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STATE_DIR = path.join(ROOT, 'state');
 const CONFIG_FILE = path.join(ROOT, 'config.json');
 const SESSIONS_FILE = path.join(STATE_DIR, 'discord-sessions.json');
+const SESSION_PRESETS_FILE = path.join(STATE_DIR, 'discord-session-presets.json');
 const MEMORY_FILE = path.join(STATE_DIR, 'discord-memory.json');
 const TRIGGER_FILE = path.join(STATE_DIR, 'discord-triggers.json');
 const IGNORE_FILE = path.join(STATE_DIR, 'discord-ignore.json');
@@ -508,12 +512,36 @@ async function main() {
   if (!token) {
     throw new Error('沒有 Discord bot token：請設定 config.json 的 discord.token，或環境變數 DISCORD_TOKEN');
   }
+  if (cfg.discord.openPoliticsChannels.length > 0 && cfg.discord.agentPreset !== 'dc-chat') {
+    log(`⚠️ openPoliticsChannels 使用內建的 dc-chat-open（以 dc-chat 為底）；這些頻道不會套用 agentPreset=${cfg.discord.agentPreset}`);
+  }
 
   acquireLock();
   const { sessions } = loadSessions(SESSIONS_FILE);
   const reverse = new Map(Object.entries(sessions).map(([key, sessionId]) => [sessionId, key]));
   // Bot 交易的一次性會話只活在記憶體；不要寫進 sessions 檔，否則重啟後會 follow 已歸檔的 session。
   const persistedSessions = () => Object.fromEntries(Object.entries(sessions).filter(([key]) => !key.startsWith('bot:')));
+
+  // sessionId → 建立會話時實際用的 preset。只用來顯示；壞檔不拖垮啟動。
+  const sessionPresetsLoaded = loadSessionPresets(SESSION_PRESETS_FILE);
+  const sessionPresets = sessionPresetsLoaded.presets;
+  if (sessionPresetsLoaded.warning) log(`⚠️ 會話 preset 檔：${sessionPresetsLoaded.warning}`);
+  const saveSessionPresetMap = () => {
+    try {
+      saveSessionPresets(SESSION_PRESETS_FILE, sessionPresets);
+    } catch (error) {
+      log(`會話 preset 檔寫入失敗：${error?.message ?? error}`);
+    }
+  };
+  // 只留還對得上目前 session 對映的條目；DSH UI 直接歸檔的舊會話不要一直長大。
+  let prunedSessionPresets = false;
+  for (const sessionId of Object.keys(sessionPresets)) {
+    if (!reverse.has(sessionId)) {
+      delete sessionPresets[sessionId];
+      prunedSessionPresets = true;
+    }
+  }
+  if (prunedSessionPresets) saveSessionPresetMap();
 
   // 模擬股票：交易域獨立 SQLite；報價、結算與 Bot 排程都在 login 之後才啟動。
   let tradeDb = null;
@@ -905,6 +933,7 @@ async function main() {
 
   // 生圖開關在 preset 的 dc-tool-restrict.config.allowImageGen；沒有開生圖就不查
   // Codex 額度，也不排 5 小時窗口的重置 ping。
+  // 這裡只看預設 preset；dc-chat-open 必須維持同樣的守衛設定（測試會釘住兩份 preset 的其他行相同）。
   const codexImageGenEnabled = presetAllowsImageGen({ root: ROOT, presetId: cfg.discord.agentPreset });
   const codexQuota = codexImageGenEnabled ? createCodexQuota({ snapshotFile: path.join(STATE_DIR, 'discord-codex-quota.json') }) : null;
   async function codexQuotaInfo() {
@@ -1248,18 +1277,35 @@ async function main() {
    * DSH 對未知 preset 可能套用預設值（帶完整本地工具），對 Discord 頻道等於把機器交出去。
    * 所以清單拿不到、或名字不在清單裡，都直接拒絕 —— 寧可回一句安裝提示，也不建一個高權限會話。
    */
-  let presetIds = null;
-  async function requirePreset(name) {
-    if (presetIds === null) {
-      const { presets } = unwrap(await api.agentPresets.list({}), 'agentPresets.list');
-      presetIds = (presets ?? []).map((p) => String(p.id));
-    }
+  let presetList = null;
+  async function loadPresets() {
+    const { presets } = unwrap(await api.agentPresets.list({}), 'agentPresets.list');
+    presetList = (presets ?? []).map((preset) => ({
+      id: String(preset.id),
+      broken: preset.broken ? String(preset.broken).trim() : '',
+    }));
+  }
+  async function requirePreset(name, { refresh = false } = {}) {
+    if (refresh || presetList === null) await loadPresets();
     const wanted = String(name ?? '').trim();
-    if (!presetIds.includes(wanted)) {
-      throw new Error(`preset "${wanted}" 不在 DSH 可用清單（${presetIds.join(', ') || '空'}）。請執行 node scripts/setup-dsh.mjs --discord，然後重啟 DSH`);
+    const found = presetList.find((preset) => preset.id === wanted);
+    if (!found) {
+      // 照文件跑完 setup＋重啟 DSH 之後，橋接手上的清單可能還是舊的：重抓一次再決定。
+      if (!refresh) return requirePreset(name, { refresh: true });
+      const error = new Error(`preset "${wanted}" 不在 DSH 可用清單（${presetList.map((preset) => preset.id).join(', ') || '空'}）。請執行 node scripts/setup-dsh.mjs --discord，然後重啟 DSH`);
+      error.code = 'preset-missing';
+      throw error;
+    }
+    if (found.broken) {
+      // id 還在清單裡但掛載失敗時，DSH 不一定會拒絕建會話；這裡先 fail-closed。
+      // 剛修好 preset、重啟 DSH 後，橋接手上的舊清單可能還標 broken：重抓一次再決定。
+      if (!refresh) return requirePreset(name, { refresh: true });
+      const error = new Error(`preset "${wanted}" 掛載失敗：${found.broken}。請看 DSH log 與 preset patch`);
+      error.code = 'preset-broken';
+      throw error;
     }
   }
-  const ensurePresetAvailable = () => requirePreset(cfg.discord.agentPreset);
+  // 政治開放版是另一個 preset：只在建立會話時選，既有會話不會自己換（要 /reset）。
 
   async function applyModel(sessionId) {
     if (modelApplied.has(sessionId)) return;
@@ -1289,7 +1335,8 @@ async function main() {
     if (sessionPromises.has(key)) return sessionPromises.get(key);
 
     const promise = (async () => {
-      await ensurePresetAvailable();
+      const agentPreset = presetForChannelKey(cfg.discord, key);
+      await requirePreset(agentPreset);
       const dir = cfg.discord.sessionDir || path.join(STATE_DIR, 'discord-agents');
       fs.mkdirSync(dir, { recursive: true });
       const workspace = unwrap(await api.workspace.create({ path: dir }), 'workspace.create');
@@ -1298,7 +1345,7 @@ async function main() {
       }
       const created = unwrap(await api.sessions.create({
         workspaceId: workspace.workspace.workspaceId,
-        agentPreset: cfg.discord.agentPreset,
+        agentPreset,
       }), 'session.create');
       const sessionId = created.sessionId;
       // 建會話期間有人按了 /reset：丟掉這個新會話，不要讓它復活。
@@ -1307,16 +1354,24 @@ async function main() {
         throw new Error('會話建立期間已重置，本次投遞取消');
       }
       await renameSession(sessionId, key);
+      // rename 也是 await：期間有人按 /reset 的話，retireSession 看不到這個會話，
+      // 會回「沒有可重置的會話」；這裡再確認一次，避免重置被吃掉。
+      if (epoch !== epochOf(key)) {
+        try { await withTimeout(api.workspace.archiveSession({ sessionId }), 15_000, 'archiveSession'); } catch { /* 已經沒了 */ }
+        throw new Error('會話建立期間已重置，本次投遞取消');
+      }
       // 新版事件流要顯式 follow，否則收不到 turn 事件（也就永遠不會有回覆）。
       api.events.follow(sessionId);
       sessions[key] = sessionId;
+      sessionPresets[sessionId] = agentPreset;
       reverse.set(sessionId, key);
       // 只有真的新建會話才標記開場。sessions 會從磁碟載入，重啟後 existing 分支
       // 不會走到這裡，所以部署重啟後的第一批不會再被叫去主動說話。
       needsOpening.add(key);
       saveSessions(SESSIONS_FILE, persistedSessions());
+      saveSessionPresetMap();
       await applyModel(sessionId);
-      log(`新會話 ${key} → ${sessionId}（preset ${cfg.discord.agentPreset}）`);
+      log(`新會話 ${key} → ${sessionId}（preset ${agentPreset}）`);
       return sessionId;
     })();
 
@@ -1418,7 +1473,9 @@ async function main() {
     agentSender.forget(sessionId);
     collectors.delete(sessionId);
     modelApplied.delete(sessionId);
+    delete sessionPresets[sessionId];
     saveSessions(SESSIONS_FILE, persistedSessions());
+    saveSessionPresetMap();
 
     // 佇列要清、回合要取消，最後才歸檔（歸檔只是隱藏，不會停掉還在跑的工作）。
     try {
@@ -4673,7 +4730,13 @@ async function main() {
             return;
           }
           log(`投遞失敗 (${key})：${error?.message ?? error}`);
-          if (job.direct) await sendLong(key, `⚠️ 無法送出給 DSH：${error?.message ?? error}`).catch(() => {});
+          if (job.direct) {
+            // preset 的安裝細節（可用清單、setup 指令）只寫 log，不貼到公開頻道。
+            const publicMessage = error?.code === 'preset-missing' || error?.code === 'preset-broken'
+              ? '⚠️ 這個頻道的人格還沒安裝好，請管理員看 bridge log。'
+              : `⚠️ 無法送出給 DSH：${error?.message ?? error}`;
+            await sendLong(key, publicMessage).catch(() => {});
+          }
         });
       promptChains.set(key, next);
       const cleanup = () => { if (promptChains.get(key) === next) promptChains.delete(key); };
@@ -5528,6 +5591,8 @@ async function main() {
     if (registerKey) {
       sessions[registerKey] = sessionId;
       reverse.set(sessionId, registerKey);
+      // 一次性會話只活在記憶體；控制台看得到時要顯示正確 preset。
+      sessionPresets[sessionId] = preset;
     }
     onSession?.(sessionId);
 
@@ -5591,6 +5656,7 @@ async function main() {
       if (registerKey) {
         if (sessions[registerKey] === sessionId) delete sessions[registerKey];
         if (reverse.get(sessionId) === registerKey) reverse.delete(sessionId);
+        delete sessionPresets[sessionId];
         agentSender.forget(sessionId);
       }
       try { await withTimeout(api.stopSessionWork(sessionId), 15_000, 'stopSessionWork'); } catch { /* 已結束 */ }
@@ -6218,7 +6284,15 @@ async function main() {
     }
     if (interaction.commandName === 'status') {
       const [subscriptionUsage, codexUsage] = await Promise.all([quotaInfo(), codexQuotaInfo()]);
-      const lines = [`會話 ${sessions[key] ?? '未建立'}｜preset ${cfg.discord.agentPreset}｜${interaction.guildId ? '頻道' : '私聊'}`];
+      const sessionId = sessions[key];
+      const configuredPreset = presetForChannelKey(cfg.discord, key);
+      const actualPreset = sessionId ? sessionPresets[sessionId] : '';
+      const presetLine = actualPreset
+        ? `preset ${actualPreset}${actualPreset !== configuredPreset ? `｜下次 ${configuredPreset}` : ''}`
+        : sessionId
+          ? `preset 未知（舊會話）｜下次 ${configuredPreset}`
+          : `preset ${configuredPreset}（下次建立）`;
+      const lines = [`會話 ${sessionId ?? '未建立'}｜${presetLine}｜${interaction.guildId ? '頻道' : '私聊'}`];
       const subscriptionLine = formatQuota(subscriptionUsage);
       if (subscriptionLine) lines.push(subscriptionLine);
       const codexLine = formatCodexQuota(codexUsage);
@@ -6794,6 +6868,7 @@ async function main() {
       requireMentionInGuild: cfg.discord.requireMentionInGuild,
       requireMentionInChannel: cfg.discord.requireMentionInChannel,
       chattyChannels: cfg.discord.chattyChannels,
+      openPoliticsChannels: cfg.discord.openPoliticsChannels,
       trade: cfg.discord.trade,
       // 唯讀：改這些要重啟橋接或重生 preset
       messageContentIntent: cfg.discord.messageContentIntent,
@@ -7020,6 +7095,7 @@ async function main() {
         : cfg.discord.requireMentionInGuild,
       requireMentionInChannel: patch?.requireMentionInChannel ?? cfg.discord.requireMentionInChannel,
       chattyChannels: patch?.chattyChannels ?? cfg.discord.chattyChannels,
+      openPoliticsChannels: patch?.openPoliticsChannels ?? cfg.discord.openPoliticsChannels,
       // trade 逐層合併：控制台表單只送有改的欄位，不要把其他費率或 Bot 設定蓋回預設值。
       trade: {
         ...cfg.discord.trade,
@@ -7055,6 +7131,7 @@ async function main() {
       requireMentionInGuild: next.requireMentionInGuild,
       requireMentionInChannel: next.requireMentionInChannel,
       chattyChannels: next.chattyChannels,
+      openPoliticsChannels: next.openPoliticsChannels,
       trade: next.trade,
     };
     // 新區塊只在這次真的送了才寫回：/blacklist、/mention 不該把 tts、reactions 等
@@ -7112,6 +7189,7 @@ async function main() {
     cfg.discord.requireMentionInGuild = next.requireMentionInGuild;
     cfg.discord.requireMentionInChannel = next.requireMentionInChannel;
     cfg.discord.chattyChannels = next.chattyChannels;
+    cfg.discord.openPoliticsChannels = next.openPoliticsChannels;
     cfg.discord.trade = next.trade;
     ownerIds.clear();
     for (const id of next.ownerIds) ownerIds.add(id);
@@ -7157,7 +7235,7 @@ async function main() {
       scheduleTradeJobs();
     }
 
-    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，chatty ${next.chattyChannels.length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
+    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，chatty ${next.chattyChannels.length}，政治開放 ${next.openPoliticsChannels.length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
     warnChattyChannels();
     return editableConfig();
   }
@@ -7179,6 +7257,7 @@ async function main() {
         lastActive: lastActive.get(key) ?? null,
         pending: pending.get(key)?.kind ?? null,
         quietUntil: quietUntil(key),
+        preset: sessionPresets[sessionId] ?? null,
       };
     })
     .sort((a, b) => (b.lastActive ?? 0) - (a.lastActive ?? 0));

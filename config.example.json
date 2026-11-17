@@ -39,6 +39,7 @@
     "requireMentionInGuild": true,
     "requireMentionInChannel": {},
     "chattyChannels": [],
+    "openPoliticsChannels": [],
     "messageContentIntent": true,
     "ackMessage": "",
     "maxMessageChars": 2000,

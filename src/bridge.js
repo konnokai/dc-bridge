@@ -3548,7 +3548,7 @@ async function main() {
           const rs = readRoleState();
           const summaries = roleSummaries();
           sendJson({
-            // roles 保持「人格名字符串数组」的既有契约（scripts/test-console.mjs 等调用方依赖它）；
+            // roles 保持「人格名字符串数组」的既有契约（舊控制台等呼叫方依賴它）；
             // 富信息放在 summaries 里，新老调用方互不影响。
             roles: summaries.map((role) => role.name),
             summaries,
@@ -4788,8 +4788,8 @@ async function main() {
           if (req.headers['x-agent-token'] && !v2ToolEnabled('markRead')) { sendJson({ ok: false, error: '工具未启用：qq_mark_read' }, 403); return; }
           const st = getSocialV2State(key);
           // 注意：不带 throughSeq 的调用会清空全部未读，这是**有意保留的兼容语义**
-          // （旧 preset 与「没有水位」的收尾调用；见 acknowledgeMessagesV2 的注释与
-          // test-token-economy 的 legacy 用例）。当前 preset 会明确要求带上 readThroughSeq 水位。
+          // （旧 preset 与「没有水位」的收尾调用；见 acknowledgeMessagesV2 的注释）。
+          // 当前 preset 会明确要求带上 readThroughSeq 水位。
           const throughSeq = requestedReadThroughSeqV2(st, body, !!req.headers['x-agent-token']);
           // 如果当前已经是“潜水”唤醒配置，且最近还有对话/刚被唤醒，不允许用 mark_read 直接回到潜水；
           // 必须先等够沉睡前观察窗口，避免“聊两句又去潜水”。
@@ -7311,7 +7311,7 @@ async function main() {
             // 两个孤立代理各自成为一条 QQ 消息、永远无法再拼回，群友看到的就是乱码方块。
             // 退一格把整个字符让给下一段；若退成空串就不退（safeMax 极小时），
             // 宁可硬切也要保证循环一定前进。逻辑内联在此，函数保持自包含
-            // —— test-voice.mjs 会把这个函数的源码单独 eval 出来测。
+            // —— 舊語音測試曾把這個函式的原始碼單獨 eval 出來測。
             if (end < piece.text.length && end - i > 1) {
               const last = piece.text.charCodeAt(end - 1);
               if (last >= 0xd800 && last <= 0xdbff) end -= 1;

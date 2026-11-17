@@ -75,6 +75,7 @@ console.log('## 1b. 生圖額度門檻');
 console.log('## 2. preset 的生圖開關');
 {
   ok(presetAllowsImageGen({ root: ROOT, presetId: 'dc-chat' }) === true, 'dc-chat 有開 allowImageGen');
+  ok(presetAllowsImageGen({ root: ROOT, presetId: 'dc-chat-open' }) === true, 'dc-chat-open 有開 allowImageGen');
   ok(presetAllowsImageGen({ root: ROOT, presetId: 'dc-learner' }) === false, 'dc-learner 沒開 allowImageGen');
   ok(presetAllowsImageGen({ root: ROOT, presetId: 'missing' }) === false, '讀不到 preset 時當沒開');
 }

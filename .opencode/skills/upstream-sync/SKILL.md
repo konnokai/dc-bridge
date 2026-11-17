@@ -63,14 +63,10 @@ git log --format='=== %h %s%n%b' --stat <基準>..upstream/main
 
 ```bash
 npm run test:discord
-node scripts/test-audit-security.mjs
-node scripts/test-media-search.mjs
-node scripts/test-hardening.mjs
+npm run test:audit
 ```
 
-改到 DSH client 或其他共用模組時，再跑相關的 `scripts/test-audit-*.mjs` 與 `scripts/test-mux-reconnect.mjs`。
-
-`npm run test:audit` 若出現 `test-voice-system`（缺 `docs/guides/VOICE.md`）或 `test-preset-local-tools`（缺 DSH modules）失敗，先確認不是這次改動造成，再照實回報。
+改到 DSH client 或其他共用模組時，再跑相關的 `scripts/test-dsh-*.mjs` 與 `scripts/test-mux-reconnect.mjs`。
 
 ## 6. 更新基準
 

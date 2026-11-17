@@ -49,7 +49,7 @@
 
 #### Discord 画图例外（2026-10-30）
 
-Discord 的 `dc-chat` 多了一个 `generate_image`，但它**不是**把 `dsh-generate-image` 的全局工具直接放给模型：
+Discord 的 `dc-chat`／`dc-chat-open` 多了一个 `generate_image`，但它**不是**把 `dsh-generate-image` 的全局工具直接放给模型：
 
 - `plugins/dc-agent-presets/dc-draw-image.mjs` 注册一个同名的 **scoped** `generate_image`，盖掉 profile 里的全局版本。
 - scoped 工具调用 Codex 时用 `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（没有 write 规则；`image_gen` 的存图走 `LOCAL_FS`，不需要 profile 写入权）；同时加 `--disable shell_tool --disable unified_exec --disable view_image`。工作目录是 `state/discord-imagegen-work`，不是 DSH 的安装目录。GIF 只在 Codex 的 `features list` 有 `image_generation_animation` 时才加 `--enable`；没有这个 feature（例如 0.167）时 `animated` 直接拒绝，不会 spawn Codex。

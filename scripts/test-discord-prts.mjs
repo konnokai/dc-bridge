@@ -1,4 +1,4 @@
-// PRTS 工具白名單：dc-chat 放行清單內的工具，dc-learner／dc-trader 在註冊期隱藏、執行期再擋一次。
+// PRTS 工具白名單：dc-chat／dc-chat-open 放行清單內的工具，dc-learner／dc-trader 在註冊期隱藏、執行期再擋一次。
 // 另外驗證 setup-dsh --discord 產生的 mcp-prts 條目（transport、URL）與冪等性。
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -31,6 +31,7 @@ function harness(config) {
 // 直接拿三個 preset 的實際 config，避免測試跟 preset 各說各話。
 const chat = harness(presetConfig('dc-chat'))
 assert.equal(presetConfig('dc-chat').allowPrts, true, 'dc-chat 要開 allowPrts')
+assert.equal(presetConfig('dc-chat-open').allowPrts, true, 'dc-chat-open 也要開 allowPrts')
 assert.ok(!chat.denied.includes('mcp__prts__search_prts'), 'dc-chat 不該藏 PRTS 工具')
 assert.equal(chat.guard({ name: 'mcp__prts__search_prts' }), undefined, 'dc-chat 放行查詞條')
 assert.equal(chat.guard({ name: 'mcp__prts__get_operator_basic_info' }), undefined, 'dc-chat 放行查幹員')

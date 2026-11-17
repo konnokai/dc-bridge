@@ -11,6 +11,9 @@ import { normalizeSandboxConfig } from './discord-sandbox.mjs';
 /** Discord 一則訊息的上限。 */
 export const DISCORD_MAX_CHARS = 2000;
 
+/** 政治開放版人格的 preset id；只有 openPoliticsChannels 列出的頻道會用到。 */
+export const OPEN_POLITICS_PRESET = 'dc-chat-open';
+
 /**
  * 邀請連結帶的 scope。`applications.commands` 不能省：少了它 slash command 不會註冊。
  */
@@ -140,6 +143,8 @@ export function normalizeDiscordConfig(raw) {
     requireMentionInChannel: booleanMap(src.requireMentionInChannel, 'discord.requireMentionInChannel'),
     // 不限制發言頻率的頻道：這裡是大家來找 bot 聊天的地方，沒叫它也可以接。
     chattyChannels: idList(src.chattyChannels, 'discord.chattyChannels'),
+    // 使用政治開放版人格（dc-chat-open）的頻道；私聊不套用。
+    openPoliticsChannels: idList(src.openPoliticsChannels, 'discord.openPoliticsChannels'),
     messageContentIntent: src.messageContentIntent !== false,
     ackMessage: typeof src.ackMessage === 'string' ? src.ackMessage : '',
     maxMessageChars: clamp(src.maxMessageChars, DISCORD_MAX_CHARS, 200, DISCORD_MAX_CHARS),
@@ -572,6 +577,17 @@ export function isChattyChannel(cfg, channelId) {
 }
 
 /**
+ * 這個會話 key 要用哪個 preset：只有 `ch:<頻道ID>` 在 openPoliticsChannels 裡才換成政治開放版。
+ * 私聊、背景會話與沒列出的頻道都照 agentPreset。
+ */
+export function presetForChannelKey(cfg, key) {
+  const text = String(key ?? '');
+  const channelId = text.startsWith('ch:') ? text.slice(3) : '';
+  const open = channelId && cfg?.openPoliticsChannels?.includes(channelId);
+  return open ? OPEN_POLITICS_PRESET : (cfg?.agentPreset || 'dc-chat');
+}
+
+/**
  * 會話鍵。伺服器頻道與討論串都用 channel id；私聊用對方的 user id。
  * 全程字串，不經 Number()。
  */
@@ -957,6 +973,46 @@ export function saveSessions(file, sessions) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, sessions }, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * 讀「sessionId → 建立時用的 preset」映射。
+ *
+ * 這份只用來顯示（`/status`、控制台會話表），壞檔不該拖垮橋接：回空映射加警告，
+ * 讓 `/status` 退回「未知（舊會話）」。
+ * @returns {{presets: Record<string,string>, warning: string|null}}
+ */
+export function loadSessionPresets(file) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { presets: {}, warning: null };
+    return { presets: {}, warning: `會話 preset 檔讀取失敗（${error?.message ?? error}），已忽略` };
+  }
+  let doc;
+  try {
+    doc = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+  } catch (error) {
+    return { presets: {}, warning: `會話 preset 檔不是合法 JSON（${error?.message ?? error}），已忽略` };
+  }
+  if (doc?.version !== 1 || !doc.presets || typeof doc.presets !== 'object' || Array.isArray(doc.presets)) {
+    return { presets: {}, warning: '會話 preset 檔格式錯誤，已忽略' };
+  }
+  const presets = {};
+  for (const [sessionId, preset] of Object.entries(doc.presets)) {
+    if (typeof sessionId !== 'string' || !sessionId || typeof preset !== 'string' || !preset.trim()) continue;
+    presets[sessionId] = preset.trim();
+  }
+  return { presets, warning: null };
+}
+
+/** 原子寫「sessionId → preset」映射。 */
+export function saveSessionPresets(file, presets) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, presets }, null, 2)}\n`, 'utf8');
   fs.renameSync(tmp, file);
 }
 

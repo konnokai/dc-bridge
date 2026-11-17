@@ -308,6 +308,9 @@
       <label style="grid-column:1/-1">chattyChannels（一行一個頻道 ID。這些頻道不看 10 分鐘發言比例，沒 @bot 也可以接；需要 messageContentIntent）
         <textarea id="chatty-channels" placeholder="123456789012345678"></textarea>
       </label>
+      <label style="grid-column:1/-1">openPoliticsChannels（一行一個頻道 ID。這些頻道開新會話時改用 dc-chat-open 人格：不套用「政治不碰」基線；已開著的頻道要 /reset 或 /reload-system-prompt 才換）
+        <textarea id="open-politics-channels" placeholder="123456789012345678"></textarea>
+      </label>
       <label>allow.guilds<textarea id="allow-guilds" placeholder="一行一個 ID"></textarea></label>
       <label>allow.channels<textarea id="allow-channels" placeholder="一行一個 ID"></textarea></label>
       <label>allow.users（私聊）<textarea id="allow-users" placeholder="一行一個 ID"></textarea></label>
@@ -633,9 +636,9 @@
   <section class="card">
     <h2>會話 <span id="session-count" class="muted"></span></h2>
     <div class="table-wrap">
-      <table style="min-width:680px">
-        <colgroup><col style="width:26%"><col style="width:20%"><col style="width:13%"><col style="width:9%"><col style="width:8%"><col style="width:24%"></colgroup>
-        <thead><tr><th>會話</th><th>Session</th><th>最後活動</th><th>安靜到</th><th>等待中</th><th></th></tr></thead>
+      <table style="min-width:780px">
+        <colgroup><col style="width:20%"><col style="width:14%"><col style="width:14%"><col style="width:10%"><col style="width:8%"><col style="width:8%"><col style="width:26%"></colgroup>
+        <thead><tr><th>會話</th><th>Session</th><th>Preset</th><th>最後活動</th><th>安靜到</th><th>等待中</th><th></th></tr></thead>
         <tbody id="sessions"></tbody>
       </table>
     </div>
@@ -1876,6 +1879,7 @@
     $('sessions').replaceChildren(...(list.length ? list.map((s) => el('tr', {},
       el('td', { title: s.key }, s.label || s.key),
       el('td', { className: 'mono' }, s.sessionId),
+      el('td', { className: 'mono' }, s.preset || '未知'),
       el('td', {}, fmtAgo(s.lastActive)),
       el('td', { className: 'muted' }, s.quietUntil ? new Date(s.quietUntil).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'),
       el('td', {}, s.pending ? (s.pending === 'question' ? '提問' : '審批') : '—'),
@@ -1887,7 +1891,7 @@
           className: 'danger', dataset: { key: s.key, action: 'reset' }, textContent: '重置',
         }),
       )),
-    )) : [el('tr', {}, el('td', { colSpan: 6, className: 'muted' }, '還沒有任何會話'))]));
+    )) : [el('tr', {}, el('td', { colSpan: 7, className: 'muted' }, '還沒有任何會話'))]));
   }
 
   function renderIgnored(rows) {
@@ -2079,6 +2083,7 @@
       .map(([id, on]) => `${id}=${on}`).join('\n');
     $('require-mention-channels').disabled = !c.messageContentIntent;
     $('chatty-channels').value = join(c.chattyChannels);
+    $('open-politics-channels').value = join(c.openPoliticsChannels);
     const trade = c.trade ?? {};
     const fees = trade.fees ?? {};
     const settlement = trade.settlement ?? {};
@@ -2903,6 +2908,7 @@
           }),
           // chattyChannels 不受 messageContentIntent 鎖定：先設定好，開了意圖就生效。
           chattyChannels: lines($('chatty-channels').value),
+          openPoliticsChannels: lines($('open-politics-channels').value),
         }),
       });
       fillConfig(result.config);

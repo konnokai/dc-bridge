@@ -93,6 +93,6 @@ OpenChamber 这台没有本机 Chrome / Edge，也没装 Playwright，`npm run t
 node scripts/test-console-ui.mjs --original --record-baseline
 ```
 
-普通回归不依赖 `console.before.html`。不要用真实的 `test-console.mjs` 替代本脚本：那个脚本可能向真实 QQ 发送消息。
+普通回归不依赖 `console.before.html`。不要用会连真实服务的脚本替代本脚本：本脚本只使用内存 fixture。
 
 此回归验证前端行为和提交契约，不能替代真实 QQ / DSH 集成测试。

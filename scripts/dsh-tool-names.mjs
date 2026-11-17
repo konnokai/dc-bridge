@@ -1,6 +1,6 @@
 // DSH 工具名抽取：**唯一实现**，供
 //   · `scripts/scan-dsh-tool-names.mjs`（人工/升级时对账，打印清单）
-//   · `scripts/test-preset-local-tools.mjs`（登记期断言，防拼错假名）
+//   · `scripts/verify-dsh-021-adaptation.mjs`（适配验证）
 // 共同使用。
 //
 // 为什么要抽成模块：这两处过去各有一份实现，而测试那份是**模糊**的

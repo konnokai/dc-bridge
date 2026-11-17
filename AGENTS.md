@@ -3,11 +3,11 @@
 ## Lessons
 
 - 改完程式碼、部署前一定先跑 `engineering-code-reviewer` 看完整 diff；review 沒過不要部署，也不要先部署再說。
-- 跑 `scripts/test-console-ui.mjs` 時，「All submitted payloads exactly match the pre-redesign console baseline」與「Token usage trend chart renders bars, tiers and range/metric switching」這兩個檢查本來就掛著（結果 29/31），不要花時間追；其他檢查失敗才要查。
-- `node scripts/verify-persona-config.mjs` 在本機一定跑不了（找不到 DSH 安裝目錄的 `node_modules`），這不是回歸失敗、不用修。要驗 persona 就改跑 `node scripts/test-preset-prompt.mjs` 和 `node scripts/build-agent-preset-patches.mjs --check`。
+- 跑 `scripts/test-console-ui.mjs` 時，「All submitted payloads exactly match the pre-redesign console baseline」與「Token usage trend chart renders bars, tiers and range/metric switching」這兩個檢查本來就掛著，不要花時間追；其他檢查失敗才要查。
+- `node scripts/verify-persona-config.mjs` 需要 DSH 的 `node_modules`；找不到時設 `DSH_INSTALL_MODULES`（指向 npx 快取裡 `@deepseek-ai/dsh` 的上一層 `node_modules`）。preset 結構至少跑 `node scripts/build-agent-preset-patches.mjs --check`。
 - 看 Discord 控制台 UI 時先用 `openchamber_web`（照 docs/guides/CONSOLE-UI-TESTING.md 起離線 fixture），不要只用 Playwright 截圖代替。
 - 同一個人在不同批次出現不同名字時，先查 bridge 有沒有重啟、成員快取是不是空的，不要直接說群友改名。
-- 改這個 repo 的功能時，QQ 端只是實作參考，不是同步維護對象；不要為了 QQ 相容或 QQ 測試而限制 Discord 的改動，除非使用者明講。
+- 改這個 repo 的功能時，QQ 端只是實作參考，不是同步維護對象；QQ 專用測試已移除，不要為了 QQ 相容把測試加回來，除非使用者明講。
 
 ## 部署到 Discord 測試伺服器
 

@@ -28,6 +28,7 @@ import {
   updateSlang,
   upsertCandidates,
 } from '../src/core/discord-slang.mjs';
+import { extractJsonArray } from '../src/slang-learner.js';
 import {
   JEV_ENDPOINT,
   askJev,
@@ -596,6 +597,13 @@ console.log('## 9. Jev 自動分流');
     await askJev({ key: 'k', state: 's', questions: {}, fetchImpl: async () => ({ ok: false, status: 429 }) });
   } catch { httpFailed = true; }
   ok(httpFailed, 'HTTP 失敗要拋錯，讓上層 fail-open');
+}
+
+// 黑話學習的 JSON 解析器是共用的；10 萬個 `[` 不能卡住事件循環。
+{
+  const t0 = Date.now();
+  ok(extractJsonArray('['.repeat(100000)) === null, 'extractJsonArray 遇到大量 [ 回 null');
+  ok(Date.now() - t0 < 1000, 'extractJsonArray 必須在 1 秒內結束');
 }
 
 console.log(failures === 0 ? '\n✅ Discord 黑話詞庫離線回歸通過' : `\n❌ ${failures} 項失敗`);

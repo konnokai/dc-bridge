@@ -1094,7 +1094,7 @@ try {
           { id: 'f3', key: 'discord:ch:223456789012345678', where: '#很長的頻道名稱', note: '月底再看', remainingMinutes: 43200, at: new Date(old).toISOString() },
         ] }),
         notes: () => ({ enabled: true, notes: [{ id: 'n1', channelId: '123456789012345678', channelName: '很長的頻道名稱', text: '筆記', by: 'summary', at: new Date(old).toISOString(), expiresAt: old }] }),
-        sessions: () => [{ key: 'discord:ch:123456789012345678', label: '#很長的頻道名稱 · 很長的伺服器名稱', sessionId: 'ses_0123456789abcdefghijklmn', lastActive: old, quietUntil: old, pending: 'question' }],
+        sessions: () => [{ key: 'discord:ch:123456789012345678', label: '#很長的頻道名稱 · 很長的伺服器名稱', sessionId: 'ses_0123456789abcdefghijklmn', preset: 'dc-chat-open', lastActive: old, quietUntil: old, pending: 'question' }],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
         knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
@@ -1124,6 +1124,8 @@ try {
       assert.deepEqual(await p.locator('#trigger-rows tr td strong').allTextContents(), ['b-user', 'a-user']);
       assert.match(await p.locator('#sessions tr td:first-child').textContent(), /#很長的頻道名稱 · 很長的伺服器名稱/,
         '會話欄顯示頻道 + 伺服器名稱，不是 key');
+      assert.equal(await p.locator('#sessions tr td:nth-child(3)').textContent(), 'dc-chat-open',
+        '會話表顯示實際 preset');
       assert.match(await p.locator('#followup-rows tr td:nth-child(3)').first().textContent(), /25 分鐘/,
         '回訪卡片顯示剩餘時間');
       assert.deepEqual(await p.locator('#followup-rows tr td:nth-child(3)').allTextContents(), ['25 分鐘', '1.5 小時', '30 天'],

@@ -36,7 +36,7 @@ export const inject = ['tools']
  * 不是凭印象列举。教训：本名单初版把 `pwsh_persistent`/`bash_persistent`/
  * `cordis`/`goal_write`/`goal_read` 当成工具名，这五个**根本不存在**——
  * 而 `tools.restrict()` 对未知名字会抛错、被下面的 try/catch 逐个吞掉，
- * 于是坏名字**静默失效**。`test-preset-local-tools.mjs` 现在会把本数组与
+ * 于是坏名字**静默失效**。`scripts/scan-dsh-tool-names.mjs` 会把本数组与
  * DSH 真实工具名集合求差，专门防这类拼写假名。
  *
  * 2026-09-27 针对 0.1.7-rc.2 重新对账（不是逐个打补丁）：`dsh-tool-cordis` 仍在，
@@ -221,7 +221,7 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
   'dev_uninject_plugin',
 ]
 
-// 供 test-preset-local-tools.mjs 导入并与 DSH 真实工具名对账，避免两份名单漂移。
+// 供 scan-dsh-tool-names.mjs / verify-dsh-021-adaptation.mjs 导入并与 DSH 真实工具名对账，避免两份名单漂移。
 export const RESTRICTED_TOOL_NAMES = Object.freeze([...KNOWN_DANGEROUS_GLOBAL_TOOLS])
 
 // 执行期白名单：不在这些范围内的工具一律拒绝。

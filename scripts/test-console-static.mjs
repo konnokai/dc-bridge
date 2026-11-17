@@ -80,6 +80,14 @@ console.log('## Discord 控制台');
   ok(/chattyChannels:\s*lines\(\$\('chatty-channels'\)\.value\)/.test(dc), '儲存會送 chattyChannels');
   ok(/chattyChannels:\s*next\.chattyChannels/.test(fs.readFileSync(path.join(ROOT, 'src', 'discord-bridge.js'), 'utf8')),
     'chattyChannels 會寫回 config.json');
+  ok(/id="open-politics-channels"/.test(dc), '設定有 openPoliticsChannels 欄位');
+  ok(/openPoliticsChannels:\s*lines\(\$\('open-politics-channels'\)\.value\)/.test(dc), '儲存會送 openPoliticsChannels');
+  ok(/openPoliticsChannels:\s*next\.openPoliticsChannels/.test(fs.readFileSync(path.join(ROOT, 'src', 'discord-bridge.js'), 'utf8')),
+    'openPoliticsChannels 會寫回 config.json');
+  ok(/<th>Preset<\/th>/.test(dc) && /s\.preset \|\| '未知'/.test(dc), '會話表顯示每個會話的 preset');
+  ok(/openPoliticsChannels:\s*patch\?\.openPoliticsChannels \?\? cfg\.discord\.openPoliticsChannels/
+    .test(fs.readFileSync(path.join(ROOT, 'src', 'discord-bridge.js'), 'utf8')),
+  '只送其他欄位時 openPoliticsChannels 沿用目前值');
   ok(/\.\.\.\(\$\('require-mention'\)\.disabled \? \{\} : \{[^}]*requireMentionInChannel:/.test(dc),
     '沒開意圖（勾選框鎖住）時不送 requireMentionInChannel，不蓋掉 config.json');
   ok(/mentionOverrides/.test(dc), '總覽的頻道模式列出單頻道覆寫數');

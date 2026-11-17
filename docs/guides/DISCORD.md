@@ -47,7 +47,7 @@ Copy-Item config.example.json config.json
 #    把 config.json 的 discord.token 填成 bot token；
 #    discord.ownerIds 填你自己的 Discord user id（開啟開發者模式 → 右鍵自己的名字 → 複製使用者 ID）。
 
-# 3) 安裝 DSH 端的 dc-chat preset，然後重啟 DSH
+# 3) 安裝 DSH 端的 dc-chat preset（含政治開放版 dc-chat-open），然後重啟 DSH
 node scripts/setup-dsh.mjs --discord
 
 # 4) 啟動橋接
@@ -67,7 +67,7 @@ pm2 logs dc-bridge
 
 看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
 
-> `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
+> `--discord` 只安裝 Discord 那套：`dc-chat` / `dc-chat-open` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
 > `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。它不會改 QQ 的 preset / 設定檔，也不會刪掉
 > profile 裡你自己加的其它 MCP。
 >
@@ -87,7 +87,7 @@ pm2 logs dc-bridge
 | 欄位 | 說明 |
 | --- | --- |
 | `token` | Bot token。留空時讀環境變數 `DISCORD_TOKEN`。**不要提交進 git** |
-| `agentPreset` | 會話使用的 DSH preset，預設 `dc-chat`。找不到就直接拒絕建會話（見「安全邊界」） |
+| `agentPreset` | 預設會話使用的 DSH preset，預設 `dc-chat`；`openPoliticsChannels` 列出的頻道改用 `dc-chat-open`。找不到就直接拒絕建會話（見「安全邊界」） |
 | `workspaceTitle` | DSH 介面裡的會話歸組名稱，預設 `Discord 聊天` |
 | `ownerIds` | 管理員的 Discord user id（**字串**陣列）。管理命令（含 slash command）與工具審批只認這些人 |
 | `allow.guilds` | 允許的伺服器 id |
@@ -99,6 +99,7 @@ pm2 logs dc-bridge
 | `requireMentionInGuild` | `true`（預設）：頻道裡只有 @bot 或回覆 bot 的訊息送進模型。`false`：頻道裡所有訊息都送進模型，由模型決定要不要說話（見「自由參與」） |
 | `requireMentionInChannel` | 單頻道覆寫：`{ "頻道ID": true }` = 該頻道只能 @bot；`false` = 該頻道自由參與；沒列出的頻道跟 `requireMentionInGuild`。值必須是 JSON boolean（`"false"` 字串會被拒絕）。討論串用自己的 id，**不繼承**母頻道的覆寫（跟 `allow.channels` 一樣）；私聊不受影響。沒開 `messageContentIntent` 時一律要 @bot。控制台「設定」可以用 `頻道ID=true` 一行一個編輯 |
 | `chattyChannels` | 不限制發言頻率的頻道 ID 陣列（控制台「設定」可編輯）。列在這裡的頻道不看「10 分鐘送了幾則」，`【新訊息】` 前會多一段【參與度】：沒 ★ 也可以接，聊到她、拿她當梗、接著她剛說的話都算，插不上話才跳過。也允許她用 `schedule_followup` 自己排回訪開新話題（跟一般頻道一樣每天最多 6 次）。預設空（全部照一般自由參與規則） |
+| `openPoliticsChannels` | 使用政治開放版人格的頻道 ID 陣列（控制台「設定」可編輯）。列在這裡的頻道**開新會話時**改用 `dc-chat-open` preset：只把 `dc-chat` 的「政治不碰」基線換成「政治可以聊」，其他工具面與語氣不變，畫圖仍不畫政治人物（見「政治開放版人格」）。已開著的頻道要 `/reset` 或 `/reload-system-prompt` 後才換；私聊不套用；討論串用自己的 ID，不繼承母頻道。預設空 |
 | `batch.debounceMs` | 同一個會話收到訊息後再等多久才送出，期間的新訊息合成一批，預設 20000（500~30000）。有人 @ 或回覆 bot 的那一批改用 8 秒的短等待；這批裡的人在打字就再延一個 10 秒窗口 |
 | `batch.maxWaitMs` | 一批從第一則算起最多等多久，預設 30000（1000~120000）；訊息一直進來也不會無限延後 |
 | `batch.maxMessages` | 一批最多幾則，滿了立刻送出，預設 20（1~50） |
@@ -398,7 +399,7 @@ urgent 的批次只認叫 bot 的那個人，旁人打字不會拖慢回答；�
 | --- | --- | --- |
 | `/reset` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 停掉 DSH 佇列、歸檔舊會話，下一則訊息開新上下文。伺服器管理員只能重置自己伺服器裡、在白名單上的頻道；私聊只有擁有者能用 |
 | `/reload-system-prompt` | bot 擁有者，或該伺服器裡有 Administrator 權限的人 | 排進這個頻道的同一條會話佇列，等目前回合結束後用那個 DSH 會話產生一段對話總結，存進 `state/discord-reload-summaries.json`，再重置會話。排隊期間的新訊息會留在 bridge，重載完成後進新會話；總結會放在新會話第一則 prompt 的開頭。**不會重啟 DSH**，新的 preset 要先由 DSH 重新載入 |
-| `/status` | 管理員 | 顯示目前的 session id、preset、通道種類；provider 是 `opencode-go`、`commandcode` 或 `hedge`（用主線 provider）時再加一行訂閱額度（見「訂閱額度」）；生圖 preset 開著時再加一行 Codex 額度 |
+| `/status` | 管理員 | 顯示目前的 session id、會話建立時的實際 preset（改名單後若還沒重置，會多顯示「下次 X」）、通道種類；provider 是 `opencode-go`、`commandcode` 或 `hedge`（用主線 provider）時再加一行訂閱額度（見「訂閱額度」）；生圖 preset 開著時再加一行 Codex 額度 |
 | `/invite` | 管理員 | 產生機器人邀請連結（含目前功能所需權限），回覆只有自己看得到 |
 | `/console` | 管理員 | 回兩個連結按鈕：DSH 後台（`dsh.baseUrl`）和 bridge 控制台（含控制台 token，點了直接登入；控制台關閉時不列）。回覆只有自己看得到。連結是 `config.json` 裡的位址，通常只有區網或 `--trusted-host` 的電腦打得開；token 會經過 Discord，不要轉貼 |
 | `/mention` | 管理員 | 切換 `requireMentionInGuild`（每次都 toggle：要 @bot ↔ 自由參與），立即生效並寫回 `config.json`。**所有伺服器共用**；個別頻道的 `requireMentionInChannel` 優先。沒開 Message Content 意圖時不能切換（一定得 @bot） |
@@ -485,6 +486,28 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 `/reset` 是立即重置，排隊中的訊息、待用的交接摘要與排隊中的指令會直接丟棄。
 清摘要時如果檔案寫入失敗，`/reset` 會回報失敗並保留會話，避免重啟後舊摘要又復活。
 控制台「會話」分頁每一列的「重載提示詞」按鈕等於這個指令。
+
+### 政治開放版人格（dc-chat-open）
+
+`openPoliticsChannels` 列出的頻道會改用 `dc-chat-open` preset。它跟 `dc-chat` 是同一份人格與工具面，
+差別只有【安全邊界】第 5 條從「政治不碰」換成「政治可以聊」，以及另外三處提到政治的句子跟著改寫：
+**畫圖仍然不畫政治人物**；文字創作可以寫政治人物，但不能捏造他們的具體言行或寫成攻擊。
+其他安全邊界（主機工具、情色、恐怖圖、不拿群友當素材、被帶歪）全部保留。
+
+- 這是**另一個 preset**，不是執行期開關：DSH 的 preset 在建立會話時決定，之後不能換
+  （DSH 的 `agentPreset.select` 只允許在會話還沒跑過任何回合時使用）。所以頻道名單改完，
+  已開著的會話要用 `/reset` 或 `/reload-system-prompt` 才會換人格；新會話自動照名單選。
+- 安裝或更新 `dsh/agent-presets/dc-chat-open/` 之後要跑 `node scripts/setup-dsh.mjs --discord`
+  並重啟 DSH，`agentPresets/list` 才看得到 `dc-chat-open`。橋接在第一次建立那個頻道的會話時才要清單，
+  找不到會再重抓一次；還是找不到（或 preset 標記 `broken`）就 fail-closed、拒絕建立會話。
+  頻道只會看到一句通用錯誤，preset 名稱與安裝細節只寫 log。
+- 名單只看頻道 ID 本身；私聊不套用。討論串有自己的 ID，要另外列進去。
+- 控制台的「白名單與媒體」卡片可以直接編輯這份名單，存檔會寫回 `config.json`。
+- 回退到沒有 `dc-chat-open` 的版本前，先把這份名單清空；否則那些頻道會因為找不到 preset 而拒絕建會話（fail-closed）。
+- `/reload-system-prompt` 的交接摘要原本就不寫政治內容（跟個資、健康、性向同一條），開放頻道也一樣；
+  重載後政治話題的上下文不會被帶過去。
+- `/status` 顯示會話建立時的**實際** preset；名單改過但還沒重置時，會多顯示「下次 X」。要真的換，用 `/reset` 或 `/reload-system-prompt`。
+- `dc-chat-open` 固定以 `dc-chat` 為底；`agentPreset` 改成別的 preset 時，名單上的頻道不會套用 `agentPreset`，啟動時會在 log 警告。
 
 ### 忽略某一則訊息
 
@@ -581,7 +604,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - **記憶**（`#memory`）：記了誰、記了哪些事、最後更新時間（唯讀；要刪請當事人用 `/forget`）；可搜尋名稱或 user id，每頁 20 人。
   下面「頻道筆記」卡片列出模型記的事件與每日摘要，可搜尋頻道名稱或 channel id，每頁 20 條；再下面「梗圖」卡片列出梗圖庫，
   可搜尋名稱或梗圖 id，每頁 20 張
-- **會話**（`#sessions`）：頻道／伺服器名稱（私聊顯示使用者名稱）、session id、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）。
+- **會話**（`#sessions`）：頻道／伺服器名稱（私聊顯示使用者名稱）、session id、實際 preset、最後活動時間；每列有「重載提示詞」（等於 `/reload-system-prompt`）和「重置」（等於 `/reset`）。
   下面「回訪排程」卡片列出模型排的 `schedule_followup`：會話、內容、剩餘時間、到點時間，可以逐筆「取消」
 - **回饋**（`#dev-feedback`）：模型用 `submit_feedback` 送出的功能申請與意見，新的排前面。
   每筆有時間、頻道／伺服器、觸發者、當時的 DSH session、原因／需求／預期結果，以及觸發那一輪訊息的 Discord 跳轉連結；
@@ -591,9 +614,10 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   端點：`GET /api/dev-feedback`、`POST /api/dev-feedback/delete`
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
-    `requireMentionInChannel`（一行一個 `頻道ID=true|false`）/ `chattyChannels`（一行一個頻道 ID）直接編輯，
-    存檔後**立即生效**並寫回 `config.json`。
-    沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）；`chattyChannels` 不鎖，可以先設定好
+    `requireMentionInChannel`（一行一個 `頻道ID=true|false`）/ `chattyChannels` / `openPoliticsChannels`（一行一個頻道 ID）直接編輯，
+    存檔後**立即生效**並寫回 `config.json`。`openPoliticsChannels` 只影響新會話，
+    已開著的頻道要 `/reset` 或 `/reload-system-prompt` 才會換人格。
+    沒開 `messageContentIntent` 時勾選框與頻道覆寫都鎖住（一律要 @bot）；`chattyChannels` 與 `openPoliticsChannels` 不鎖，可以先設定好
   - **功能設定**：`typing`、`sendDelayMs`、`maxMessageChars`、`ackMessage`、`autoCompactTokens`、`ttftTimeoutMs`，
     以及 `media.enabled`／`maxVideoSeconds`、`context.*`、`batch.*`、`tts.enabled`／模型／語氣／參考音／長度與冷卻、
     `security.blockSensitive`、`videoLinks.enabled`、`emoji.*`、`memes.*`、`reactions.*`、`memory.*`、
@@ -686,7 +710,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 
 ## Codex 額度
 
-生圖的 preset（`dc-chat`）有開 `generate_image`（`dc-tool-restrict.config.allowImageGen: true`）時，
+生圖的 preset（`dc-chat`／`dc-chat-open`）有開 `generate_image`（`dc-tool-restrict.config.allowImageGen: true`）時，
 控制台的「Codex 額度」卡片和 `/status` 會顯示 5 小時與每週剩餘百分比、重置時間、重置券張數。
 沒有開生圖的 preset 不查額度，也不排重置 ping；沒有另外的 `config.json` 開關。
 
@@ -1467,7 +1491,7 @@ docker pull node:24-alpine       # 也要跑 Node 的話
 - `mcp__discord__run_script`（`language`、`code`、`stdin` 可省略）：在一次性 Docker 容器裡跑一小段
   Python 或 Node（沒有網路、沒有主機檔案），回 stdout／stderr。預設關閉，只有 `sandbox.channels`
   裡的頻道能用；同一回合最多一次。詳細邊界見「執行程式」。
-- `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat` 放行）：生圖、GIF 或拿設定圖改圖。
+- `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat`／`dc-chat-open` 放行）：生圖、GIF 或拿設定圖改圖。
   `prompt` 必填；要 GIF 時 `animated: true`（還沒完善，Codex 沒有 `image_generation_animation` 時直接回錯誤）；
   畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
   多個角色用逗號串起來（`self,claude`，最多 4 個）；要用群友貼的圖當參考時填 `"ref:#編號/張數"`
@@ -1636,8 +1660,9 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
    - `run_script` 在一次性 Docker 容器裡跑（沒有網路、沒有主機掛載、非 root、資源與時間有上限），
      只回 stdout／stderr；預設關閉，只有列在 `sandbox.channels` 的頻道能用，任何能把文字放進那個會話的人都能觸發。
      詳見「執行程式」。
-2. **fail-closed preset**：啟動時向 DSH 要 preset 清單；`agentPreset` 不在清單裡就拒絕建立會話，並在頻道
-   回報安裝提示。**絕不**回退到 DSH 預設 preset（那通常有完整本地工具）。
+2. **fail-closed preset**：建立會話時向 DSH 要 preset 清單（找不到會再重抓一次）；依頻道選出的 preset
+   不在清單裡或標記 `broken` 就拒絕建立會話。頻道只看到一句通用錯誤，細節只寫 log。
+   **絕不**回退到 DSH 預設 preset（那通常有完整本地工具）。
 3. **白名單**：預設全擋。`deny` 優先於 `allow`；`deny.channels` 也擋母頻道底下的討論串。
    `deny.users` 是管理員封鎖，完全擋。`deny.self` 是自己用 `/blacklist` 退出的名單：@bot 或回覆 bot 時照常處理；
    其他訊息只當頻道背景（【最近頻道訊息】標 `⊘`），不進批次、不回、不按 reaction、不學黑話，讀歷史與搜尋也看不到。
@@ -1707,6 +1732,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - DSH 離線佇列存在記憶體：橋接重啟就消失（跟 QQ 版一樣）。還在等待合批的訊息（最多 `batch.maxWaitMs`）和回合進行中壓住的訊息也一樣。
 - 頻道上下文需要 bot 的 **Read Message History** 權限；沒有權限時會跳過上下文並記一行 log。
 - 對話映射只存在本機 `state/discord-sessions.json`；刪掉它等於所有頻道都開新會話（DSH 舊會話仍在）。
+- 會話 preset 映射存在 `state/discord-session-presets.json`，只用來顯示；刪掉它只會讓 `/status` 和控制台把既有會話顯示成「未知（舊會話）」。
 
 ## 疑難排解
 
@@ -1714,7 +1740,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 | --- | --- |
 | 啟動就報 `Used disallowed intents` | Developer Portal 沒開 Message Content Intent。開了重啟，或把 `messageContentIntent` 設 `false` |
 | 頻道裡 @bot 沒反應 | bot 有 `Read Message History` / `Send Messages` 權限？頻道在 `allow.channels` 或伺服器在 `allow.guilds`？ |
-| 回「找不到 preset」 | 跑 `node scripts/setup-dsh.mjs --discord`，然後**重啟 DSH** |
+| 頻道回「人格還沒安裝好」 | 跑 `node scripts/setup-dsh.mjs --discord`，然後**重啟 DSH**；詳細 preset 錯誤看 bridge log |
 | `DSH 鉴权不可用` | `~/.dsh/.credentials.yaml` 讀不到，或 DSH 不在本機。確認 `DSH_HOME` |
 | 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但這一輪沒有實際送出訊息」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs --discord` 並**重啟 DSH** |
 | 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |

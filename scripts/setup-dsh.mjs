@@ -12,7 +12,7 @@
 //
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]              # QQ 版
-//   node scripts/setup-dsh.mjs --discord [profile]    # Discord 版：只装 dc-chat / dc-learner / dc-trader preset
+//   node scripts/setup-dsh.mjs --discord [profile]    # Discord 版：只装 dc-chat / dc-chat-open / dc-learner / dc-trader preset
 //
 // 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
 import fs from 'node:fs';
@@ -26,7 +26,7 @@ import { ALL_PRESETS, PRESETS, buildPatches, patchFileFor } from './build-agent-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-// --discord：只装 Discord 那套（dc-chat / dc-learner / dc-trader preset + dc-agent-presets bundle），
+// --discord：只装 Discord 那套（dc-chat / dc-chat-open / dc-learner / dc-trader preset + dc-agent-presets bundle），
 // 不碰 profile 里既有的 MCP，也不写 QQ 的 state/mode.json。
 const DISCORD_ONLY = process.argv.includes('--discord');
 const PROFILE = process.argv.slice(2).find((arg) => !arg.startsWith('--')) || 'web';
@@ -344,7 +344,7 @@ function patchProfilePackage(links) {
 
 /**
  * 畫圖要另外裝 dsh-generate-image。它不是本 repo 的 bundle，setup 不自動安裝
- * （會連網、要 Codex 登入），但少了它 dc-chat 的 generate_image 就不存在，
+ * （會連網、要 Codex 登入），但少了它 dc-chat／dc-chat-open 的 generate_image 就不存在，
  * 所以至少要在安裝時講一聲。
  */
 function warnMissingImagePlugin() {
@@ -355,7 +355,7 @@ function warnMissingImagePlugin() {
   const installed = Boolean(pkg.dependencies?.['dsh-generate-image'])
     && (pkg.dsh?.profile?.bundles ?? []).includes('dsh-generate-image');
   if (installed) return;
-  log('⚠️ 這個 profile 沒裝 dsh-generate-image：dc-chat 的 generate_image 會不存在，大肥魚畫不了圖。');
+  log('⚠️ 這個 profile 沒裝 dsh-generate-image：dc-chat／dc-chat-open 的 generate_image 會不存在，大肥魚畫不了圖。');
   log(`   安裝：dsh plugin --profile ${PROFILE} add github:zemul/dsh-generate-image`);
 }
 
@@ -423,5 +423,5 @@ if (!DISCORD_ONLY) reportLegacyPresetDir();
 if (!DISCORD_ONLY) ensureLocalModeFile();
 autoInstallProfileBundles();
 log(DISCORD_ONLY
-  ? 'Done. Restart DSH (or reload the profile) so the dc-chat / dc-learner / dc-trader presets take effect.'
+  ? 'Done. Restart DSH (or reload the profile) so the dc-chat / dc-chat-open / dc-learner / dc-trader presets take effect.'
   : 'Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');
