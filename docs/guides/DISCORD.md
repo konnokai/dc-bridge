@@ -107,7 +107,7 @@ pm2 logs dc-bridge
 | `maxMessageChars` | 單則訊息上限，200 ~ 2000，預設 2000 |
 | `questionTimeoutMs` | 等提問／審批回答的時間，預設 300000（5 分鐘） |
 | `autoCompactTokens` | 一輪結束時 context（上一次請求的 totalTokens）超過這個數，橋接就透過 DSH 的 `commands/execute` 替會話執行 `/compact`，預設 80000；`0` = 關閉。同一會話 10 分鐘內最多執行一次 |
-| `ttftTimeoutMs` | 模型多久沒吐出第一個 token 就取消這一輪，預設 30000（5~120 秒）；`0` = 關閉。已經開始呼叫工具就不受這個限制 |
+| `ttftTimeoutMs` | 模型多久沒吐出第一個 token 就取消這一輪，預設 30000（5~120 秒）；`0` = 關閉。已經開始呼叫工具就不受這個限制。`hedge` 備援也用它當最後上限 |
 | `typing` | 送出「正在輸入」提示，預設 `true` |
 | `sendDelayMs` | 連續送出的間隔，預設 300 毫秒 |
 | `sessionDir` | 會話工作目錄，預設 `<repo>/state/discord-agents` |
@@ -214,12 +214,40 @@ pm2 logs dc-bridge
   橋接就送 `session/cancel` 取消這一輪。直接叫 bot 的頻道會收到「想太久，先取消」的提示。
 - 只要模型開始輸出或呼叫工具，計時器就停：工具跑多久都不會被這個機制取消，讓它把該輪做完。
 - 自動壓縮的 `/compact` 不計時。
+- 備援在 DSH 的 LLM adapter 層做（`plugins/dsh-llm-hedge`）：主線超過 `afterMs` 還沒吐出第一個
+  token，就同時把同一個請求送給備援 provider；第一個 token 先到的那邊勝出，另一邊立刻 abort。
+  橋接照常收 stream，不切 provider、也不重送 prompt。
+- 備援只影響那一次請求；主線本來就快時完全不會打備援。已經收到第一個 token、或工具已經開始跑，
+  就不會再啟動備援。
+- `ttftTimeoutMs` 仍是最後上限：主線和備援都卡住時，橋接在 30 秒取消這一輪。
 
 `dsh` 段沿用 QQ 版的欄位（`baseUrl`、`provider`、`model`、`reasoningEffort`、`authToken`、`allowRemote`）。
 預設是 `commandcode` / `deepseek/deepseek-v4.1-flash`（橋接的內建預設，走 DSH 的
 `@mars-sea/dsh-commandcode-provider` 外掛）。實際可用的 provider/model 以 DSH 的
 `session/modelCatalog` 為準——不在 `routableProviders` 裡的組合會讓每個回合在送出訊息前就失敗。
 `dsh.authToken` 通常留空，讓橋接用 `~/.dsh/.credentials.yaml` 離線鑄造 Cookie。
+
+要用 tail-latency 備援時，把 `provider` 設成 `hedge`、`model` 設成主線的 model id；備援的
+provider/model 與門檻在控制台「供應商」卡片，存在 `config.json` 的 `dsh.hedge`，橋接會推給
+DSH 的 `llm-hedge` settings 命名空間。
+`hedge` provider 由 `plugins/dsh-llm-hedge` 提供，`npm run setup:discord` 會安裝並掛進 profile。
+備援的 provider/model 可以跟主線不同（例如主線 `commandcode`、備援 `opencode-go`），
+但兩邊的 model id 要各自填對，不能互借。
+
+橋接把這組設定存在 `config.json` 的 `dsh.hedge`，啟動與每次 DSH 重連都會推給 `llm-hedge` 命名空間
+（DSH 重啟後命名空間會回到預設，所以不能只存在 DSH 那邊）：
+
+| 欄位 | 說明 |
+| --- | --- |
+| `dsh.hedge.enabled` | 開啟備援，預設 `false` |
+| `dsh.hedge.afterMs` | 主線多久沒第一個 token 就並行打備援，預設 12000（3000~115000），必須比 `ttftTimeoutMs` 少 5000 以上 |
+| `dsh.hedge.primaryProvider` / `primaryModel` | 主線 provider 與 model；`dsh.provider` 要同時設成 `hedge`，`dsh.model` 用這裡的 model id |
+| `dsh.hedge.primaryEffort` | 主線思考強度；留空 = 不指定 |
+| `dsh.hedge.fallbackProvider` / `fallbackModel` | 備援 provider 與 model |
+| `dsh.hedge.fallbackEffort` | 備援思考強度；留空 = 不指定 |
+
+`dsh.hedge` 設定不合法時（例如 `afterMs` 太接近 `ttftTimeoutMs`），橋接啟動會停用備援、
+寫一行 log，並保留其他欄位讓控制台修正；不會讓橋接起不來。
 
 聯網搜尋走 `webSearch` 段（`setup-dsh.mjs --discord` 會把 `mcp-web-search-safe` 掛進 profile）：
 
@@ -573,6 +601,15 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
     欄位在區內自動排成 1～3 欄；存檔後立即生效並寫回
     `config.json`；格式與範圍由 `normalizeDiscordConfig` 驗證，錯誤會直接顯示在卡片上。
     `tts.baseUrl`、`videoLinks.ytDlpPath`、`emoji.dir` 這類會連網址或執行程式的欄位刻意只在 `config.json` 改
+  - **供應商**：主模型與備援（provider、model、reasoningEffort、`enabled`、`afterMs`）。
+    備援設定存在 `config.json` 的 `dsh.hedge`，橋接啟動與 DSH 重連時推給 DSH 的
+    `llm-hedge` settings 命名空間（`plugins/dsh-llm-hedge`）；主模型存回 `config.json` 的 `dsh.*`。
+    模型選單可以打字篩選，資料來自 DSH 的 `session/modelCatalog`，
+    provider 與 model 成對選；目前的設定不在目錄裡時會另外標示。provider 金鑰只顯示「已輸入」／
+    「未設定」，輸入新值才替換，清除是另一個按鈕；金鑰直接寫進 DSH 的 `~/.dsh/.credentials.yaml`，
+    不會回傳、不會寫進日誌。主模型改了會清掉已套用的紀錄，現有會話下一批生效；備援設定下一輪生效。
+    金鑰寫入後 provider 會在下一輪請求重新讀取；出現驗證錯誤時 `pm2 restart dsh`。
+    控制台走 LAN 明文 HTTP 時，金鑰區會提示明文傳輸的風險。
   - **執行程式（沙箱）**：`sandbox.enabled` 與 `sandbox.channels`（一行一個頻道 ID），存檔後立即生效並寫回
     `config.json`；image、逾時與輸出上限仍在 `config.json`。image 要先在橋接主機 pull；開啟前先看「執行程式」的邊界
   - **表情目錄**：每個伺服器的表情條目數，可手動更新

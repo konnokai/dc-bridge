@@ -88,7 +88,7 @@ function backupBeforeOverwrite(file, keep = 5) {
 //          ① 把 qq-agent-presets bundle 注册进 profile（link: 依赖 + bundles + junction）；
 //          ② 从仓库权威源（dsh/agent-presets/<preset>/）重新生成 patch 文件。
 //        旧目录不再写入、也不删除（见 reportLegacyPresetDir）。
-const BUNDLE_NAMES = DISCORD_ONLY ? ['dc-agent-presets'] : ['qq-mode-console', 'qq-agent-presets'];
+const BUNDLE_NAMES = DISCORD_ONLY ? ['dc-agent-presets', 'dsh-llm-hedge'] : ['qq-mode-console', 'qq-agent-presets'];
 
 /** 从仓库源重新生成 bundle 里的 patch 文件（人格正文/工具面改了就必须重跑）。 */
 function regeneratePresetPatches() {

@@ -1,0 +1,14 @@
+# 用 `insert` 而不是直接列在上面：這是 bundle 的 patch，掛在 profile 既有的
+# llm 與 provider 之後，`inject: ['llm', 'settings']` 會等服務就緒。
+- insert:
+    - id: llm-hedge
+      name: 'dsh-llm-hedge'
+      config:
+        enabled: false
+        afterMs: 12000
+        primaryProvider: commandcode
+        primaryModel: deepseek/deepseek-v4.1-flash
+        primaryEffort: ''
+        fallbackProvider: opencode-go
+        fallbackModel: deepseek-v4.1-flash
+        fallbackEffort: ''

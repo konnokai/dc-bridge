@@ -39,6 +39,12 @@ import {
   withSelfMutedUser,
   loadSessions,
   normalizeDiscordConfig,
+  catalogView,
+  parseKeyAction,
+  validateModelChoice,
+  normalizeHedgeConfig,
+  normalizeEffort,
+  PROVIDER_KEY_REFS,
   parseApprovalAnswer,
   questionAnswersFor,
   requireMentionForChannel,
@@ -327,6 +333,8 @@ console.log('## 1b. 範例設定可以直接用');
   ok(cfg.memory.enabled === false, '範例的群友記憶預設關閉');
   ok(!('maxMessages' in example.discord.memory), '範例沒有舊的原文記憶欄位');
   ok(cfg.slang.enabled === false, '範例的黑話學習預設關閉');
+  const hedge = normalizeHedgeConfig(example.dsh.hedge, { ttftTimeoutMs: cfg.ttftTimeoutMs });
+  ok(hedge.enabled === false && hedge.afterMs === 12_000, '範例的 hedge 預設關閉、門檻 12 秒');
 }
 
 console.log('## 2. 白名單');
@@ -4192,12 +4200,13 @@ console.log('## 9. 控制台');
   let resetKey = null;
   let reloadKey = null;
   let usageWasReset = false;
+  const consoleLogs = [];
   const handle = await startConsole({
     host: '127.0.0.1',
     port: 0,
     token: 'test-token',
     htmlPath,
-    log: () => {},
+    log: (line) => { consoleLogs.push(String(line)); },
     handlers: {
       status: () => ({
         bot: { tag: 'bot#1' }, dsh: { lastFrameAt: null }, sessions: 0, pending: 0,
@@ -4253,6 +4262,19 @@ console.log('## 9. 控制台');
       updateConfig: async (patch) => {
         if (patch.bad) throw new Error('bad config');
         return { allow: patch.allow ?? {}, deny: {}, ownerIds: [], media: {} };
+      },
+      providers: async () => ({
+        primary: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: 'high' },
+        fallback: { enabled: true, provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'high', afterMs: 12000 },
+        ttftTimeoutMs: 30000,
+        dshDefault: null,
+        catalog: { ok: true, fetchedAt: 1, routableProviders: ['commandcode', 'opencode-go'], failures: [], groups: [] },
+        keys: [{ provider: 'opencode-go', label: 'OpenCode Go', configured: true, writable: true, source: 'file' }],
+      }),
+      updateProviders: async (patch) => ({ ok: true, primary: patch.primary }),
+      updateProviderKey: async (body) => {
+        if (body.bad) throw new Error('bad key');
+        return { ok: true, key: { provider: body.provider, configured: true, writable: true, source: 'file' } };
       },
       rebuildEmojis: async ({ guildId }) => guildId === '',
       slang: () => ({
@@ -4382,6 +4404,42 @@ console.log('## 9. 控制台');
 
   const badConfig = await fetch(`${base}/api/config`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ bad: true }) });
   ok(badConfig.status === 400 && (await badConfig.json()).error === 'bad config', '設定錯誤回 400 並帶訊息');
+
+  ok((await fetch(`${base}/api/providers`)).status === 401, '沒有 token 讀不到供應商設定');
+  const providersResponse = await fetch(`${base}/api/providers`, { headers: authed });
+  const providersBody = await providersResponse.json();
+  ok(providersResponse.status === 200 && providersBody.keys[0].configured === true
+    && providersBody.keys[0].value === undefined, '供應商端點只回金鑰狀態，不回值');
+  const providersSave = await fetch(`${base}/api/providers`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ primary: { provider: 'commandcode' } }) });
+  ok(providersSave.status === 200 && (await providersSave.json()).ok === true, '供應商設定端點會呼叫 handler');
+
+  const keyViaQuery = await fetch(`${base}/api/providers/key?token=test-token`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'opencode-go', action: 'clear' }),
+  });
+  ok(keyViaQuery.status === 401, '金鑰端點只認 Authorization，token 不能放網址');
+  const keyWrongType = await fetch(`${base}/api/providers/key`, {
+    method: 'POST', headers: { ...authed, 'content-type': 'text/plain' }, body: '{}',
+  });
+  ok(keyWrongType.status === 415, '金鑰端點要求 JSON content-type');
+  const testSecret = 'oc_test_secret_value_123';
+  const keySet = await fetch(`${base}/api/providers/key`, {
+    method: 'POST', headers: resetHeaders, body: JSON.stringify({ provider: 'opencode-go', action: 'set', value: testSecret }),
+  });
+  const keySetText = await keySet.text();
+  ok(keySet.status === 200 && !keySetText.includes(testSecret), '金鑰端點的回應不含金鑰值');
+  const keyViaXToken = await fetch(`${base}/api/providers/key`, {
+    method: 'POST', headers: { 'x-console-token': 'test-token', 'content-type': 'application/json' }, body: JSON.stringify({ provider: 'opencode-go', action: 'clear' }),
+  });
+  ok(keyViaXToken.status === 401, '金鑰端點不接受 x-console-token');
+  const badKeyJson = await fetch(`${base}/api/providers/key`, {
+    method: 'POST', headers: resetHeaders, body: '{"provider":"opencode-go","action":"set","value": sk-SECRET-PARTIAL}',
+  });
+  ok(badKeyJson.status === 400, '金鑰端點的壞 JSON 回 400');
+  ok(!consoleLogs.join('\n').includes('sk-SECRET'), '壞 JSON 不會把金鑰片段寫進 log');
+  const keyError = await fetch(`${base}/api/providers/key`, {
+    method: 'POST', headers: resetHeaders, body: JSON.stringify({ bad: true }),
+  });
+  ok(keyError.status === 400 && (await keyError.json()).error === 'bad key', '金鑰端點的錯誤回 400');
 
   const rebuild = await fetch(`${base}/api/emojis/rebuild`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({}) });
   const rebuildBody = await rebuild.json();
@@ -4833,6 +4891,65 @@ console.log('## 11. 表情目錄與代換');
   ok(ownReaction(fakeReactions, 'e1') === mine, '只收回自己按過的 reaction');
   ok(ownReaction(fakeReactions, '😂') === null, '不是自己按的不能收回');
   ok(ownReaction(fakeReactions, 'nope') === null, '快取裡沒有就回 null');
+}
+
+console.log('## 12. 供應商設定');
+{
+  const hedgeDefaults = normalizeHedgeConfig({});
+  ok(hedgeDefaults.enabled === false && hedgeDefaults.afterMs === 12_000, 'hedge 預設關閉、門檻 12 秒');
+  ok(normalizeEffort('') === '', '空 effort 保持「不指定」');
+  ok(normalizeEffort(undefined) === 'max', 'effort 沒填才用 max');
+  ok(hedgeDefaults.primaryProvider === 'commandcode' && hedgeDefaults.primaryModel === 'deepseek/deepseek-v4.1-flash', 'hedge 主線預設值');
+  ok(normalizeHedgeConfig({ afterMs: 1, enabled: true }, { ttftTimeoutMs: 30_000 }).afterMs === 3_000, 'afterMs 太小拉到 3 秒');
+  ok(normalizeHedgeConfig({ afterMs: 999_999 }).afterMs === 115_000, 'afterMs 太大拉到 115 秒');
+  throws(() => normalizeHedgeConfig({ enabled: true, afterMs: 26_000 }, { ttftTimeoutMs: 30_000 }), /5000/, 'afterMs 太接近硬上限要拋錯');
+  throws(() => normalizeHedgeConfig({ enabled: true }, { ttftTimeoutMs: 0 }), /ttftTimeoutMs/, 'ttftTimeoutMs 關閉時不能開備援');
+  ok(normalizeHedgeConfig({ enabled: true, afterMs: 20_000 }).enabled === true, '沒給 ttft 時只驗格式');
+
+  const rawCatalog = {
+    default: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: 'high' },
+    routableProviders: ['commandcode', 'opencode-go'],
+    groups: [
+      {
+        id: 'commandcode', name: 'Command Code',
+        models: [
+          { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', reasoning: { efforts: [{ id: 'low' }, { id: 'high' }], defaultEffort: 'high' } },
+          { id: 'zai-org/GLM-5', name: 'GLM-5' },
+        ],
+      },
+      {
+        id: 'opencode-go', name: 'opencode-go',
+        models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', reasoning: { efforts: [{ id: 'low' }], defaultEffort: 'low' } }],
+      },
+    ],
+    failures: [{ id: 'broken', name: 'Broken', message: 'nope' }],
+  };
+  const catalog = catalogView(rawCatalog);
+  ok(catalog.ok === true && catalog.groups.length === 2, '目錄只留 UI 要的欄位');
+  ok(catalog.groups[0].models[1].efforts.length === 0, '沒有 reasoning 的模型 efforts 是空陣列');
+  ok(catalog.failures[0].id === 'broken', '目錄保留載入失敗的 provider');
+
+  ok(validateModelChoice(catalog, { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: 'high' }).model === 'deepseek/deepseek-v4.1-flash',
+    '合法的 provider/model 成對通過');
+  throws(() => validateModelChoice(catalog, { provider: 'nope', model: 'x' }), /無法使用/, '不在 routable 的 provider 要拒絕');
+  throws(() => validateModelChoice(catalog, { provider: 'commandcode', model: 'deepseek-v4.1-flash' }), /沒有模型/, '不同 provider 的 model id 不能互借');
+  throws(() => validateModelChoice(catalog, { provider: 'commandcode', model: 'zai-org/GLM-5', reasoningEffort: 'high' }), /思考強度/,
+    '沒有 reasoning 的模型不能帶 effort');
+  ok(validateModelChoice(catalog, { provider: 'commandcode', model: 'zai-org/GLM-5' }).reasoningEffort === '', '沒有 reasoning 時 effort 是空字串');
+  throws(() => validateModelChoice(catalog, { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: 'max' }), /思考強度/,
+    '不在清單的 effort 要拒絕');
+  throws(() => validateModelChoice({ ok: false, error: 'x' }, { provider: 'a', model: 'b' }), /讀不到/, '目錄失敗時不能驗證');
+
+  ok(PROVIDER_KEY_REFS['opencode-go'] === 'OPENCODE_GO_API_KEY' && PROVIDER_KEY_REFS.commandcode === 'COMMANDCODE_API_KEY',
+    'provider 對應固定的憑證 ref');
+  const keyAction = parseKeyAction({ provider: 'opencode-go', action: 'set', value: 'abc_123' });
+  ok(keyAction.action === 'set' && keyAction.ref === 'OPENCODE_GO_API_KEY' && keyAction.value === 'abc_123', '金鑰 set 轉成 ref');
+  ok(parseKeyAction({ provider: 'commandcode', action: 'clear', value: 'ignored' }).value === undefined, 'clear 忽略 value');
+  throws(() => parseKeyAction({ provider: 'BROWSER_SESSION_KEY', action: 'set', value: 'x' }), /provider/, '不能用任意 ref 寫入');
+  throws(() => parseKeyAction({ provider: 'opencode-go', action: 'set', value: '   ' }), /空的/, '空金鑰要拒絕');
+  const newlineError = (() => { try { parseKeyAction({ provider: 'opencode-go', action: 'set', value: 'secret\nvalue' }); } catch (error) { return String(error.message); } return ''; })();
+  ok(/ASCII/.test(newlineError) && !newlineError.includes('secret'), '金鑰含換行要拒絕，錯誤訊息不能帶值');
+  throws(() => parseKeyAction({ provider: 'opencode-go', action: 'set', value: 'x'.repeat(513) }), /512/, '金鑰長度上限');
 }
 
 console.log(failures === 0 ? '\n✅ Discord 橋接離線回歸通過' : `\n❌ ${failures} 項失敗`);

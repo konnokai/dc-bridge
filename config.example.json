@@ -4,6 +4,16 @@
     "provider": "commandcode",
     "model": "deepseek/deepseek-v4.1-flash",
     "reasoningEffort": "max",
+    "hedge": {
+      "enabled": false,
+      "afterMs": 12000,
+      "primaryProvider": "commandcode",
+      "primaryModel": "deepseek/deepseek-v4.1-flash",
+      "primaryEffort": "high",
+      "fallbackProvider": "opencode-go",
+      "fallbackModel": "deepseek-v4.1-flash",
+      "fallbackEffort": "high"
+    },
     "authToken": "",
     "authHeader": "authorization",
     "authPrefix": "Bearer",

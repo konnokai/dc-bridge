@@ -126,6 +126,13 @@
   /* auto-fill：只有兩三個欄位的區不會被拉成半版寬的大輸入框。 */
   .fsec .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: end; }
   @media (max-width: 720px) { .fsec { grid-template-columns: 1fr; gap: 8px; } }
+  /* 供應商：兩個模型挑選器並排，選單固定高度讓篩選時版面不跳。 */
+  .provider-picker { display: grid; gap: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+  .provider-picker-head { font-size: 13px; font-weight: 600; }
+  .provider-picker select[size] { height: 168px; }
+  .provider-key { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
+  .provider-key:first-child { border-top: 0; }
+  @media (max-width: 720px) { .provider-key { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -315,6 +322,38 @@
       </div>
     </form>
     <p class="muted" style="margin:10px 0 0">每行一個 Discord ID（字串）。preset、模型、port、token 請改 config.json 後重啟。</p>
+  </section>
+
+  <section class="card">
+    <h2>供應商</h2>
+    <form id="provider-form" class="grid" novalidate>
+      <div id="provider-active" class="muted" style="grid-column:1/-1"></div>
+      <div class="provider-picker" style="grid-column:1/-1">
+        <div class="provider-picker-head">主模型</div>
+        <input id="provider-primary-filter" placeholder="輸入關鍵字篩選模型" autocomplete="off">
+        <select id="provider-primary-select" size="8" aria-label="主模型"></select>
+        <label>思考強度<select id="provider-primary-effort" aria-label="主模型思考強度"></select></label>
+        <div id="provider-primary-chosen" class="muted"></div>
+      </div>
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="provider-fallback-enabled" type="checkbox" style="width:auto;margin:0">
+        fallback.enabled：主線超過門檻還沒吐 token 時，並行打備援
+      </label>
+      <label>備援門檻（毫秒）<input id="provider-after-ms" type="number" min="3000" max="115000" step="500"></label>
+      <div class="provider-picker" style="grid-column:1/-1">
+        <div class="provider-picker-head">備援模型</div>
+        <input id="provider-fallback-filter" placeholder="輸入關鍵字篩選模型" autocomplete="off">
+        <select id="provider-fallback-select" size="8" aria-label="備援模型"></select>
+        <label>思考強度<select id="provider-fallback-effort" aria-label="備援模型思考強度"></select></label>
+        <div id="provider-fallback-chosen" class="muted"></div>
+      </div>
+      <div id="provider-keys" style="grid-column:1/-1"></div>
+      <div class="row" style="grid-column:1/-1">
+        <button type="submit">儲存</button>
+        <span id="provider-msg" class="msg"></span>
+      </div>
+    </form>
+    <p class="muted" style="margin:10px 0 0">主模型與備援都來自 DSH 的 <code>session/modelCatalog</code>，provider 與 model 成對選。儲存後主模型會切到 <code>hedge</code>；現有會話下一批生效。API Key 只顯示「已輸入」／「未設定」，輸入新值才會替換。金鑰經 LAN 明文 HTTP 傳送，建議用 SSH tunnel 從 127.0.0.1 開控制台。</p>
   </section>
 
   <section class="card">
@@ -2048,10 +2087,149 @@
     renderFeatureFields(c);
   }
 
+  // ── 供應商 ────────────────────────────────────────────────────────────────
+  const providerChoice = { primary: null, fallback: null };
+  let providerData = null;
+
+  function providerModelItems() {
+    const groups = providerData?.catalog?.ok ? providerData.catalog.groups : [];
+    return groups.flatMap((group) => group.models.map((model) => ({
+      provider: group.id,
+      providerName: group.name || group.id,
+      model: model.id,
+      name: model.name || model.id,
+      description: model.description || '',
+      efforts: model.efforts ?? [],
+      defaultEffort: model.defaultEffort || '',
+    })));
+  }
+
+  function providerOptionValue(choice) {
+    return choice ? JSON.stringify([choice.provider, choice.model]) : '';
+  }
+
+  function providerEffortOptions(side) {
+    const select = $('provider-' + side + '-effort');
+    const choice = providerChoice[side];
+    const item = providerModelItems().find((entry) => entry.provider === choice?.provider && entry.model === choice?.model);
+    const efforts = item?.efforts ?? [];
+    const current = choice?.reasoningEffort ?? '';
+    const options = [{ value: '', label: '預設（不指定）' }];
+    for (const effort of efforts) options.push({ value: effort, label: effort });
+    select.replaceChildren(...options.map((option) => el('option', { value: option.value, textContent: option.label })));
+    select.value = options.some((option) => option.value === current)
+      ? current
+      : (item?.defaultEffort && efforts.includes(item.defaultEffort) ? item.defaultEffort : '');
+    select.disabled = efforts.length === 0;
+    select.dataset.side = side;
+    // 選單顯示什麼就送什麼：已存的值不在清單裡時，不能留著舊值去餵伺服器。
+    if (choice) choice.reasoningEffort = select.value;
+  }
+
+  function providerChosenText(side) {
+    const choice = providerChoice[side];
+    const box = $('provider-' + side + '-chosen');
+    if (!choice) { box.textContent = '尚未選擇'; return; }
+    const item = providerModelItems().find((entry) => entry.provider === choice.provider && entry.model === choice.model);
+    const warning = item ? '' : ' ⚠️ 目錄裡找不到';
+    box.textContent = `已選：${choice.provider} / ${choice.model}${choice.reasoningEffort ? ` / ${choice.reasoningEffort}` : ''}${warning}`;
+  }
+
+  function renderProviderPicker(side) {
+    const select = $('provider-' + side + '-select');
+    const filter = $('provider-' + side + '-filter').value.trim().toLowerCase();
+    const allItems = providerModelItems();
+    const items = allItems.filter((item) => !filter
+      || `${item.provider} ${item.providerName} ${item.model} ${item.name} ${item.description}`.toLowerCase().includes(filter));
+    const choice = providerChoice[side];
+    const chosenValue = providerOptionValue(choice);
+    const groups = new Map();
+    for (const item of items) {
+      const rows = groups.get(item.provider) ?? [];
+      rows.push(item);
+      groups.set(item.provider, rows);
+    }
+    const nodes = [];
+    if (choice && !allItems.some((item) => item.provider === choice.provider && item.model === choice.model)) {
+      nodes.push(el('option', { value: chosenValue, textContent: `⚠️ 目前設定（目錄裡找不到）：${choice.provider} / ${choice.model}` }));
+    }
+    for (const [provider, rows] of groups) {
+      const group = el('optgroup', { label: rows[0].providerName });
+      group.append(...rows.map((item) => el('option', {
+        value: providerOptionValue({ provider: item.provider, model: item.model }),
+        textContent: `${item.name}${item.description ? ` — ${item.description}` : ''}`,
+      })));
+      nodes.push(group);
+    }
+    select.replaceChildren(...nodes);
+    select.value = chosenValue;
+    providerEffortOptions(side);
+    providerChosenText(side);
+  }
+
+  function renderProviderKeys(keys) {
+    if (!Array.isArray(keys)) {
+      $('provider-keys').textContent = keys?.error ? `讀不到金鑰狀態：${keys.error}` : '讀不到金鑰狀態';
+      return;
+    }
+    $('provider-keys').replaceChildren(...keys.map((key) => {
+      const input = el('input', {
+        type: 'password', autocomplete: 'new-password', spellcheck: 'false',
+        placeholder: '輸入新的 API Key（留空＝不改）',
+      });
+      input.dataset.keyInput = key.provider;
+      const set = el('button', { type: 'button', className: 'ghost', dataset: { keySet: key.provider }, textContent: '更新' });
+      const clear = el('button', { type: 'button', className: 'danger', dataset: { keyClear: key.provider }, textContent: '清除' });
+      if (!key.writable) { input.disabled = true; set.disabled = true; clear.disabled = true; }
+      const state = `${key.configured ? '已輸入' : '未設定'}${key.source ? ` · ${key.source}` : ''}${key.writable ? '' : ' · 不可寫'}`;
+      return el('div', { className: 'provider-key' },
+        el('div', {}, el('strong', {}, key.label), el('div', { className: 'muted', style: 'font-size:11px' }, state)),
+        input, set, clear);
+    }));
+  }
+
+  function fillProviders(data) {
+    providerData = data;
+    const hedge = data?.hedge;
+    const ready = data?.pluginReady !== false;
+    providerChoice.primary = hedge?.primary?.model ? hedge.primary : null;
+    providerChoice.fallback = hedge?.fallback?.model ? hedge.fallback : null;
+    $('provider-active').textContent = !hedge
+      ? '橋接設定裡沒有 dsh.hedge。'
+      : !ready
+        ? 'DSH 沒有 hedge provider：先跑 npm run setup:discord，再重啟 DSH。'
+        : (data.active
+          ? `目前主模型：hedge（${hedge.primary.provider} / ${hedge.primary.model}）`
+          : `目前主模型：${data.primary.provider} / ${data.primary.model}；儲存後切到 hedge`);
+    $('provider-form').querySelector('button[type="submit"]').disabled = !ready;
+    $('provider-fallback-enabled').checked = hedge ? hedge.enabled !== false : false;
+    $('provider-after-ms').value = hedge?.afterMs ?? 12000;
+    const catalog = data?.catalog;
+    const pickers = ['provider-primary', 'provider-fallback'];
+    for (const id of pickers) {
+      $(id + '-select').disabled = !catalog?.ok;
+      $(id + '-filter').disabled = !catalog?.ok;
+    }
+    if (!catalog?.ok) {
+      $('provider-primary-chosen').textContent = `模型目錄讀不到：${catalog?.error ?? '未知錯誤'}`;
+      $('provider-fallback-chosen').textContent = '';
+    } else {
+      renderProviderPicker('primary');
+      renderProviderPicker('fallback');
+    }
+    renderProviderKeys(data?.keys);
+  }
+
+  async function loadProviders() {
+    fillProviders(await api('/api/providers'));
+  }
+
   async function loadConfig() {
     const c = await api('/api/config');
     fillConfig(c);
     configLoaded = true;
+    // 供應商卡片失敗不影響其他設定；卡片自己會顯示錯誤。
+    try { await loadProviders(); } catch { $('provider-primary-chosen').textContent = '供應商設定讀取失敗'; }
   }
 
   async function refreshTriggers() {
@@ -2731,6 +2909,96 @@
       msg.textContent = '已儲存（立即生效）';
       msg.className = 'msg ok';
       await refresh();
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  function onProviderPick(side, value) {
+    if (!value) return;
+    let provider;
+    let model;
+    try { [provider, model] = JSON.parse(value); } catch { return; }
+    providerChoice[side] = { provider, model, reasoningEffort: providerChoice[side]?.reasoningEffort ?? '' };
+    providerEffortOptions(side);
+    providerChoice[side].reasoningEffort = $('provider-' + side + '-effort').value;
+    providerChosenText(side);
+  }
+
+  $('provider-primary-select').addEventListener('change', (event) => onProviderPick('primary', event.target.value));
+  $('provider-fallback-select').addEventListener('change', (event) => onProviderPick('fallback', event.target.value));
+  for (const side of ['primary', 'fallback']) {
+    $('provider-' + side + '-filter').addEventListener('input', () => renderProviderPicker(side));
+    $('provider-' + side + '-effort').addEventListener('change', (event) => {
+      if (providerChoice[side]) providerChoice[side].reasoningEffort = event.target.value;
+      providerChosenText(side);
+    });
+  }
+
+  $('provider-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const msg = $('provider-msg');
+    if (!providerChoice.primary) {
+      msg.textContent = '請先選主模型';
+      msg.className = 'msg err';
+      return;
+    }
+    const enabled = $('provider-fallback-enabled').checked;
+    if (enabled && !providerChoice.fallback) {
+      msg.textContent = '開啟備援前先選備援模型';
+      msg.className = 'msg err';
+      return;
+    }
+    msg.textContent = '儲存中…';
+    msg.className = 'msg';
+    try {
+      const result = await api('/api/providers', {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled,
+          afterMs: Number($('provider-after-ms').value),
+          primary: providerChoice.primary,
+          fallback: providerChoice.fallback ?? { provider: '', model: '', reasoningEffort: '' },
+        }),
+      });
+      fillProviders(result);
+      if (result.synced === false) {
+        msg.textContent = `設定已存到 config.json，但推到 DSH 失敗：${result.syncError ?? '未知錯誤'}（重新儲存或重啟 DSH 後會再推）`;
+        msg.className = 'msg err';
+      } else {
+        msg.textContent = '已儲存（下一批生效）';
+        msg.className = 'msg ok';
+      }
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  $('provider-keys').addEventListener('click', async (event) => {
+    const setButton = event.target.closest('button[data-key-set]');
+    const clearButton = event.target.closest('button[data-key-clear]');
+    if (!setButton && !clearButton) return;
+    const provider = setButton?.dataset.keySet ?? clearButton?.dataset.keyClear;
+    const input = document.querySelector(`input[data-key-input="${provider}"]`);
+    const action = setButton ? 'set' : 'clear';
+    const value = input?.value ?? '';
+    const msg = $('provider-msg');
+    if (action === 'set' && !value.trim()) {
+      msg.textContent = '請先輸入新的 API Key';
+      msg.className = 'msg err';
+      return;
+    }
+    if (action === 'clear' && !confirm(`清除 ${provider} 的 API Key？之後這個 provider 的請求會失敗。`)) return;
+    msg.textContent = '處理中…';
+    msg.className = 'msg';
+    try {
+      await api('/api/providers/key', { method: 'POST', body: JSON.stringify({ provider, action, value }) });
+      if (input) input.value = '';
+      fillProviders(await api('/api/providers'));
+      msg.textContent = action === 'set' ? '已寫入 DSH 憑證檔' : '已清除';
+      msg.className = 'msg ok';
     } catch (error) {
       msg.textContent = error.message;
       msg.className = 'msg err';

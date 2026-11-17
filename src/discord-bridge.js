@@ -54,6 +54,12 @@ import {
   viewChannelId,
   viewMessageTarget,
   isChattyChannel,
+  catalogView,
+  validateModelChoice,
+  parseKeyAction,
+  normalizeHedgeConfig,
+  normalizeEffort,
+  PROVIDER_KEY_REFS,
 } from './core/discord-core.mjs';
 import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, replyTargetId, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
@@ -433,18 +439,30 @@ function loadConfig() {
   const authToken = typeof dsh.authToken === 'string' ? dsh.authToken : '';
   const giphy = file?.giphy ?? {};
   const giphyRating = String(giphy.rating || '').trim().toLowerCase();
+  const discord = normalizeDiscordConfig(file?.discord);
+  let hedge;
+  try {
+    hedge = normalizeHedgeConfig(dsh.hedge, { ttftTimeoutMs: discord.ttftTimeoutMs });
+  } catch (error) {
+    // 壞掉的備援設定不該讓橋接起不來；只關掉開關，其他欄位原樣保留給控制台修。
+    log(`dsh.hedge 設定無效，已停用：${error?.message ?? error}`);
+    const rawHedge = dsh.hedge && typeof dsh.hedge === 'object' && !Array.isArray(dsh.hedge) ? dsh.hedge : {};
+    hedge = normalizeHedgeConfig({ ...rawHedge, enabled: false });
+  }
   return {
     dsh: {
       baseUrl: String(dsh.baseUrl || 'http://127.0.0.1:3080').replace(/\/+$/, ''),
       provider: String(dsh.provider || 'commandcode'),
       model: String(dsh.model || 'deepseek/deepseek-v4.1-flash'),
-      reasoningEffort: String(dsh.reasoningEffort || 'max'),
+      // 空字串是「不指定」；不能變成 max，否則主線不支援時每批都會失敗。
+      reasoningEffort: normalizeEffort(dsh.reasoningEffort, 'max'),
+      hedge,
       // 顯式填的 token 優先；留空時才去日誌裡找（新版 DSH 通常找不到，改用離線鑄造 Cookie）。
       authToken: authToken || discoverDshLaunchToken(),
       authTokenExplicit: Boolean(authToken),
       allowRemote: dsh.allowRemote === true,
     },
-    discord: normalizeDiscordConfig(file?.discord),
+    discord,
     // GIPHY：search_gifs 用。key 留空時讀環境變數；rating 預設 pg（GIPHY 的 MPAA 分級）。
     giphy: {
       apiKey: String(giphy.apiKey || process.env.GIPHY_API_KEY || '').trim(),
@@ -863,9 +881,9 @@ async function main() {
   const commandCodeQuota = createCommandCodeQuota({
     getKey: () => process.env.COMMANDCODE_API_KEY?.trim() || readDshCredential('COMMANDCODE_API_KEY'),
   });
-  /** 目前 provider 的訂閱額度；換成沒有查詢來源的 provider 時回 skipped（卡片和 /status 那一行都會消失）。 */
+  /** 目前 provider 的訂閱額度；hedge 用主線 provider 的額度。 */
   async function quotaInfo() {
-    const provider = cfg.dsh.provider;
+    const provider = cfg.dsh.provider === 'hedge' ? cfg.dsh.hedge.primaryProvider : cfg.dsh.provider;
     if (provider !== 'opencode-go' && provider !== 'commandcode') {
       return { ok: false, skipped: true, error: `provider 是 ${provider}，沒有對應的額度查詢` };
     }
@@ -1234,12 +1252,10 @@ async function main() {
   async function applyModel(sessionId) {
     if (modelApplied.has(sessionId)) return;
     try {
-      const value = unwrap(await api.sessions.selectModel({
-        sessionId,
-        provider: cfg.dsh.provider,
-        model: cfg.dsh.model,
-        reasoningEffort: cfg.dsh.reasoningEffort,
-      }), 'session.selectModel');
+      const selection = { sessionId, provider: cfg.dsh.provider, model: cfg.dsh.model };
+      // 空的 reasoningEffort 代表「不指定」，不能傳空字串：DSH 會當成不支援的檔位。
+      if (cfg.dsh.reasoningEffort) selection.reasoningEffort = cfg.dsh.reasoningEffort;
+      const value = unwrap(await api.sessions.selectModel(selection), 'session.selectModel');
       modelApplied.add(sessionId);
       usage.rememberModel(sessionId, value.selected);
       log(`會話 ${sessionId} 模型 → ${value.selected?.provider}/${value.selected?.model}`);
@@ -4505,6 +4521,9 @@ async function main() {
       let frames = 0;
       try {
         log('連線 DSH 事件流…');
+        // DSH 重啟後 llm-hedge 會回到預設；重連時把橋接的設定推回去。
+        // 不能 await：DSH 慢的時候會拖到事件流連線。
+        void syncHedgeSettings();
         for await (const envelope of api.events.mux({})) {
           frames += 1;
           lastFrameAt = Date.now();
@@ -6773,6 +6792,164 @@ async function main() {
     };
   }
 
+  // ── 供應商（hedge）───────────────────────────────────────────────────────
+  // `config.json` 的 `dsh.hedge` 是權威；DSH 的 `llm-hedge` 命名空間只是即時層。
+  // 存檔後立刻推一次，橋接啟動與 DSH 重連也會再推，DSH 重啟不會洗掉設定。
+  const HEDGE_NS = 'llm-hedge';
+  const PROVIDER_LABELS = { 'opencode-go': 'OpenCode Go', commandcode: 'Command Code' };
+  let providerCatalogCache = null; // { at, value }
+
+  async function providerCatalog({ refresh = false } = {}) {
+    const now = Date.now();
+    const ttl = providerCatalogCache?.value?.ok ? 5 * 60_000 : 15_000;
+    if (!refresh && providerCatalogCache && now - providerCatalogCache.at < ttl) return providerCatalogCache.value;
+    let value;
+    try {
+      const raw = unwrap(await withTimeout(api.callUnary('session/modelCatalog', {}), 8000, 'session/modelCatalog'), 'session/modelCatalog');
+      const view = catalogView(raw);
+      value = {
+        ...view,
+        fetchedAt: now,
+        hedgeAvailable: view.routableProviders.includes('hedge'),
+        // hedge 是橋接自己，不能拿來當主線或備援。
+        groups: view.groups.filter((group) => group.id !== 'hedge'),
+        routableProviders: view.routableProviders.filter((provider) => provider !== 'hedge'),
+      };
+    } catch (error) {
+      value = { ok: false, error: String(error?.message ?? error).slice(0, 300), fetchedAt: now, hedgeAvailable: false, groups: [], routableProviders: [], failures: [] };
+    }
+    providerCatalogCache = { at: now, value };
+    return value;
+  }
+
+  async function providerKeyStates() {
+    const refs = Object.values(PROVIDER_KEY_REFS);
+    const described = unwrap(await api.callUnary('credentials/describe', { refs }), 'credentials/describe');
+    return Object.entries(PROVIDER_KEY_REFS).map(([provider, ref]) => ({
+      provider,
+      label: PROVIDER_LABELS[provider] ?? provider,
+      configured: described?.[ref]?.configured === true,
+      writable: described?.[ref]?.writable === true,
+      source: described?.[ref]?.source ?? null,
+    }));
+  }
+
+  /** 橋接的 `dsh.hedge` 才是權威；DSH 的命名空間只是即時層，重連時會再推一次。 */
+  async function providerSettings() {
+    const [catalog, keys] = await Promise.all([
+      providerCatalog(),
+      providerKeyStates().catch((error) => ({ error: String(error?.message ?? error) })),
+    ]);
+    return {
+      primary: {
+        provider: cfg.dsh.provider,
+        model: cfg.dsh.model,
+        reasoningEffort: cfg.dsh.reasoningEffort,
+      },
+      active: cfg.dsh.provider === 'hedge',
+      pluginReady: catalog.hedgeAvailable === true,
+      hedge: {
+        enabled: cfg.dsh.hedge.enabled,
+        afterMs: cfg.dsh.hedge.afterMs,
+        primary: {
+          provider: cfg.dsh.hedge.primaryProvider,
+          model: cfg.dsh.hedge.primaryModel,
+          reasoningEffort: cfg.dsh.hedge.primaryEffort,
+        },
+        fallback: {
+          provider: cfg.dsh.hedge.fallbackProvider,
+          model: cfg.dsh.hedge.fallbackModel,
+          reasoningEffort: cfg.dsh.hedge.fallbackEffort,
+        },
+      },
+      catalog,
+      keys,
+    };
+  }
+
+  function writeDshConfig({ model, reasoningEffort, hedge }) {
+    const doc = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    doc.dsh = { ...(doc.dsh ?? {}), provider: 'hedge', model, reasoningEffort, hedge: { ...hedge } };
+    const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
+    fs.rmSync(tmp, { force: true });
+    try {
+      fs.writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, CONFIG_FILE);
+    } catch (error) {
+      fs.rmSync(tmp, { force: true });
+      throw error;
+    }
+  }
+
+  /** 把橋接的設定推給 DSH 的 `llm-hedge`；回傳錯誤字串（成功回 null）。 */
+  async function syncHedgeSettings() {
+    if (cfg.dsh.provider !== 'hedge') return null;
+    try {
+      await api.settings.update({ ns: HEDGE_NS, patch: { ...cfg.dsh.hedge } });
+      return null;
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      log(`同步 hedge 設定失敗：${message}`);
+      return message;
+    }
+  }
+
+  async function updateProviders(patch) {
+    const primary = patch?.primary ?? {};
+    const fallback = patch?.fallback ?? {};
+    const enabled = patch?.enabled === true;
+    const afterMs = Math.round(Number(patch?.afterMs));
+    if (!Number.isFinite(afterMs) || afterMs < 3000 || afterMs > 115000) throw new Error('afterMs 必須在 3000~115000 之間');
+    const catalog = await providerCatalog({ refresh: true });
+    if (!catalog.ok) throw new Error(`讀不到 DSH 模型目錄：${catalog.error ?? '未知錯誤'}`);
+    if (!catalog.hedgeAvailable) throw new Error('DSH 沒有 hedge provider：先跑 npm run setup:discord，再重啟 DSH');
+    const primaryChoice = validateModelChoice(catalog, primary);
+    const fallbackChoice = enabled
+      ? validateModelChoice(catalog, fallback)
+      : {
+        provider: String(fallback?.provider ?? '').trim(),
+        model: String(fallback?.model ?? '').trim(),
+        reasoningEffort: String(fallback?.reasoningEffort ?? '').trim(),
+      };
+    const nextHedge = normalizeHedgeConfig({
+      enabled,
+      afterMs,
+      primaryProvider: primaryChoice.provider,
+      primaryModel: primaryChoice.model,
+      primaryEffort: primaryChoice.reasoningEffort,
+      fallbackProvider: fallbackChoice.provider,
+      fallbackModel: fallbackChoice.model,
+      fallbackEffort: fallbackChoice.reasoningEffort,
+    }, { ttftTimeoutMs: cfg.discord.ttftTimeoutMs });
+    writeDshConfig({ model: primaryChoice.model, reasoningEffort: primaryChoice.reasoningEffort, hedge: nextHedge });
+    cfg.dsh.provider = 'hedge';
+    cfg.dsh.model = primaryChoice.model;
+    cfg.dsh.reasoningEffort = primaryChoice.reasoningEffort;
+    cfg.dsh.hedge = nextHedge;
+    // 下一批 ensureSession 會重新套模型；正在跑的回合不受影響。
+    modelApplied.clear();
+    const syncError = await syncHedgeSettings();
+    log(`供應商設定：主線 ${primaryChoice.provider}/${primaryChoice.model}，備援 ${enabled ? `${fallbackChoice.provider}/${fallbackChoice.model}` : '關閉'}，門檻 ${afterMs}ms`);
+    return { ...(await providerSettings()), synced: !syncError, syncError };
+  }
+
+  async function updateProviderKey(body) {
+    const action = parseKeyAction(body);
+    const states = await providerKeyStates();
+    const target = states.find((key) => key.provider === action.provider);
+    if (!target) throw new Error('未知的 provider');
+    if (!target.writable) throw new Error(`${target.label} 的憑證檔不可寫`);
+    if (action.action === 'set') {
+      unwrap(await api.callUnary('credentials/set', { ref: action.ref, value: action.value }), 'credentials/set');
+      log(`控制台：寫入 ${action.ref}`);
+    } else {
+      unwrap(await api.callUnary('credentials/unset', { ref: action.ref }), 'credentials/unset');
+      log(`控制台：清除 ${action.ref}`);
+    }
+    const next = await providerKeyStates();
+    return { ok: true, key: next.find((key) => key.provider === action.provider) };
+  }
+
   async function updateConfig(patch) {
     // 只接受控制台表單會送的白名單與功能設定；其餘欄位（token、console、preset、模型）一律沿用目前值。
     // 每個區塊逐欄白名單：直接打 API 也不能塞 tts.baseUrl、videoLinks.ytDlpPath、emoji.dir 這類
@@ -6845,6 +7022,13 @@ async function main() {
         },
       },
     });
+
+    // 改 ttftTimeoutMs 不能讓現有的 hedge 設定在下次重啟時炸掉：先驗證再寫檔。
+    try {
+      normalizeHedgeConfig(cfg.dsh.hedge, { ttftTimeoutMs: next.ttftTimeoutMs });
+    } catch (error) {
+      throw new Error(`這個 ttftTimeoutMs 會讓 dsh.hedge 失效：${error?.message ?? error}`);
+    }
 
     // 先寫檔再改記憶體：寫檔失敗時直接拋錯，設定和檔案都還是舊的。
     // 以前反過來做，toggle（/blacklist、/mention）失敗後重試會切到相反狀態。
@@ -7076,6 +7260,9 @@ async function main() {
           reloadSystemPrompt: (key) => reloadSystemPrompt(key),
           config: editableConfig,
           updateConfig,
+          providers: providerSettings,
+          updateProviders,
+          updateProviderKey,
           invite: inviteInfo,
           usage: usageInfo,
           quota: quotaInfo,

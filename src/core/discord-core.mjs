@@ -440,6 +440,104 @@ function dateList(value, label) {
   });
 }
 
+/**
+ * 供應商金鑰在 DSH credentials 裡的 ref。控制台只認這裡列出的兩個：
+ * `.credentials.yaml` 還放了 DSH 的登入簽名密鑰，不能讓它變成可寫入的任意 ref。
+ */
+export const PROVIDER_KEY_REFS = Object.freeze({
+  'opencode-go': 'OPENCODE_GO_API_KEY',
+  commandcode: 'COMMANDCODE_API_KEY',
+});
+
+export function normalizeEffort(value, fallback = 'max') {
+  return typeof value === 'string' ? value.trim() : fallback;
+}
+
+/**
+ * 橋接存的 hedge 設定（`config.json` 的 `dsh.hedge`）。
+ * DSH 的 `llm-hedge` 命名空間只是即時層；橋接啟動與每次重連都會把這份推回去，
+ * 所以 DSH 重啟不會把控制台改過的設定洗掉。
+ */
+export function normalizeHedgeConfig(raw, { ttftTimeoutMs } = {}) {
+  const src = raw ?? {};
+  if (typeof src !== 'object' || Array.isArray(src)) throw new TypeError('config.json 的 dsh.hedge 必須是物件');
+  const text = (value, fallback) => (typeof value === 'string' && value.trim() ? value.trim() : fallback);
+  const n = Number(src.afterMs);
+  const afterMs = Number.isFinite(n) ? Math.min(115_000, Math.max(3_000, Math.round(n))) : 12_000;
+  const hedge = {
+    enabled: src.enabled === true,
+    afterMs,
+    primaryProvider: text(src.primaryProvider, 'commandcode'),
+    primaryModel: text(src.primaryModel, 'deepseek/deepseek-v4.1-flash'),
+    primaryEffort: typeof src.primaryEffort === 'string' ? src.primaryEffort.trim() : '',
+    fallbackProvider: text(src.fallbackProvider, 'opencode-go'),
+    fallbackModel: text(src.fallbackModel, 'deepseek-v4.1-flash'),
+    fallbackEffort: typeof src.fallbackEffort === 'string' ? src.fallbackEffort.trim() : '',
+  };
+  const hard = Number(ttftTimeoutMs);
+  if (hedge.enabled && Number.isFinite(hard) && hard > 0 && hedge.afterMs > hard - 5_000) {
+    throw new Error(`dsh.hedge.afterMs 必須比 discord.ttftTimeoutMs 少 5000 以上（${hedge.afterMs} / ${hard}）`);
+  }
+  if (hard === 0 && hedge.enabled) throw new Error('dsh.hedge：ttftTimeoutMs = 0 時不能開啟備援');
+  return hedge;
+}
+
+/** 把 DSH `session/modelCatalog` 的原始目錄縮成控制台要的形狀。 */
+export function catalogView(raw) {
+  return {
+    ok: true,
+    routableProviders: (raw?.routableProviders ?? []).map(String),
+    failures: (raw?.failures ?? []).map((failure) => ({
+      id: String(failure.id ?? ''),
+      name: String(failure.name ?? failure.id ?? ''),
+      message: String(failure.message ?? ''),
+    })),
+    groups: (raw?.groups ?? []).map((group) => ({
+      id: String(group.id ?? ''),
+      name: String(group.name ?? group.id ?? ''),
+      models: (group.models ?? []).map((model) => ({
+        id: String(model.id ?? ''),
+        name: String(model.name ?? model.id ?? ''),
+        description: typeof model.description === 'string' ? model.description : '',
+        efforts: (model.reasoning?.efforts ?? []).map((effort) => String(effort.id ?? '')).filter(Boolean),
+        defaultEffort: typeof model.reasoning?.defaultEffort === 'string' ? model.reasoning.defaultEffort : '',
+      })),
+    })),
+  };
+}
+
+/** 控制台存檔前先確認 provider/model/effort 真的在目錄裡，免得改完下一輪才失敗。 */
+export function validateModelChoice(catalog, choice) {
+  if (!catalog?.ok) throw new Error('讀不到 DSH 模型目錄，無法驗證');
+  const provider = String(choice?.provider ?? '').trim();
+  const model = String(choice?.model ?? '').trim();
+  const reasoningEffort = String(choice?.reasoningEffort ?? '').trim();
+  if (!(catalog.routableProviders ?? []).includes(provider)) {
+    throw new Error(`provider ${provider || '(空白)'} 目前無法使用`);
+  }
+  const entry = (catalog.groups ?? [])
+    .find((group) => group.id === provider)?.models
+    ?.find((item) => item.id === model);
+  if (!entry) throw new Error(`${provider} 沒有模型 ${model || '(空白)'}`);
+  const efforts = entry.efforts ?? [];
+  const effortOk = efforts.length === 0 ? reasoningEffort === '' : efforts.includes(reasoningEffort);
+  if (!effortOk) throw new Error(`${provider}/${model} 的思考強度 ${reasoningEffort || '(空白)'} 不在清單裡`);
+  return { provider, model, reasoningEffort };
+}
+
+/** 金鑰表單只送 provider 與動作；ref 由伺服器對白名單，錯誤訊息不能帶出金鑰值。 */
+export function parseKeyAction(body) {
+  const provider = String(body?.provider ?? '').trim();
+  const ref = PROVIDER_KEY_REFS[provider];
+  if (!ref) throw new Error('provider 必須是 opencode-go 或 commandcode');
+  if (body?.action === 'clear') return { provider, ref, action: 'clear' };
+  if (body?.action !== 'set') throw new Error('action 必須是 set 或 clear');
+  const value = typeof body?.value === 'string' ? body.value.trim() : '';
+  if (!value) throw new Error('新的 API Key 是空的');
+  if (!/^[\x21-\x7e]{1,512}$/.test(value)) throw new Error('API Key 只能含可視 ASCII 字元，長度 1~512');
+  return { provider, ref, action: 'set', value };
+}
+
 function booleanMap(value, label) {
   if (value === undefined || value === null) return {};
   if (typeof value !== 'object' || Array.isArray(value)) {

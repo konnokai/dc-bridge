@@ -48,6 +48,15 @@ function authorized(req, url, token) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** 只認 `Authorization: Bearer <token>`；金鑰端點不能靠 query / x-console-token 過關。 */
+function authorizedHeader(req, token) {
+  const match = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization ?? ''));
+  if (!match) return false;
+  const a = Buffer.from(match[1]);
+  const b = Buffer.from(token);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 async function readJson(req) {
   const chunks = [];
   let size = 0;
@@ -69,7 +78,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -270,6 +279,44 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         }
         const reload = await handlers.reloadSystemPrompt(key);
         sendJson(res, 200, { ok: true, reload });
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/providers') {
+        sendJson(res, 200, await handlers.providers());
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/providers') {
+        const body = await readJson(req);
+        try {
+          sendJson(res, 200, { ok: true, ...(await handlers.updateProviders(body)) });
+        } catch (error) {
+          sendJson(res, 400, { error: String(error?.message ?? error) });
+        }
+        return;
+      }
+      if (req.method === 'POST' && url.pathname === '/api/providers/key') {
+        // 金鑰只能走標頭：不接受 x-console-token / ?token=，避免 token 與金鑰一起留在網址或日誌。
+        if (!authorizedHeader(req, token)) {
+          sendJson(res, 401, { error: '金鑰端點只接受 Authorization 標頭' });
+          return;
+        }
+        if (!/^application\/json\b/i.test(String(req.headers['content-type'] ?? ''))) {
+          sendJson(res, 415, { error: '需要 application/json' });
+          return;
+        }
+        let body;
+        try {
+          body = await readJson(req);
+        } catch {
+          // 不能讓 JSON.parse 的訊息（可能含金鑰片段）進到 log ring。
+          sendJson(res, 400, { error: 'JSON 格式錯誤' });
+          return;
+        }
+        try {
+          sendJson(res, 200, await handlers.updateProviderKey(body));
+        } catch (error) {
+          sendJson(res, 400, { error: String(error?.message ?? error) });
+        }
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/config') {

@@ -1,0 +1,20 @@
+{
+  "name": "dsh-llm-hedge",
+  "version": "0.1.0",
+  "description": "DSH LLM adapter：主線超過 afterMs 還沒吐出第一個 token 時，把同一個請求並行送給備援 provider，第一個 token 先到的那邊勝出",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
