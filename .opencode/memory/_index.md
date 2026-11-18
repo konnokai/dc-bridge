@@ -28,6 +28,7 @@
 - [[discord-followup-batching]] — 送出前攔補句：urgent 8 秒、take/takeFollowups、hold 同 step、測試 20 項
 - [[discord-dsh-slash-commands]] — DSH 0.2.1-rc.2 的 CLI/Web registry、`commands/execute` 與 Discord `/compact` 路由
 - [[discord-dsh-022-upgrade]] — DSH 0.2.2-rc.3 相容性、危險工具守衛、升級驗證限制
+- [[discord-dsh-opencode-console]] — DSH 內建 `opencode-go` provider 與 OpenCode Console workspace 整合的差異（2026-11-18）
 - [[discord-message-preview]] — component embed、embed.author、完整 URL、component media、敏感 embed
 - [[discord-view-message]] — view_message 找修復 bot、連結路徑比對、bot 訊息可見性、每日摘要、跨頻道直讀（2026-11-07）
 - [[discord-media-handling]] — 語音訊息分類、行程級媒體佇列（2 個 ffmpeg）、view_message 預算、影片抽格時間戳、PNG sBIT 全丟與 alpha 鋪白底策略、連結預覽圖（embedImages）
@@ -48,6 +49,7 @@
 - [[discord-console-table-layout]] — 黑話／頻道表固定版面、84px 列高、colgroup 欄寬
 - [[discord-console-detail-modal]] — 控制台通用放大彈窗（detail-modal）：CSS [hidden] 陷阱、梗圖 token 守衛、訂單整列點擊、帳號名稱快取
 - [[discord-console-settings]] — Discord 控制台功能設定依設定路徑分區；桌機左右欄、窄螢幕上下排與共用儲存
+- [[discord-console-mobile-layout]] — 控制台手機原生欄位縮寬、`<select size>`、iOS WebKit 修正與 iOS／Android 實機測試（2026-11-18）
 - [[discord-emoji-catalog]] — 離開伺服器時清理自訂表情目錄，以及暫時不可用與刪除失敗的處理
 - [[discord-emoji-hints]] — prompt 表情提示「前 5＋每日輪替 3 個冷門表情」、打錯 reaction 名稱候選與實測使用分布
 - [[discord-console-tabs]] — 控制台 sticky 分頁列只允許水平捲動；`overflow-x: auto` 需搭配 `overflow-y: hidden`

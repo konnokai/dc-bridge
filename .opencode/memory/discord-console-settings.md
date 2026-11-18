@@ -11,4 +11,4 @@ description: Discord 控制台功能設定分區方式與響應式排版
 - 依 `FEATURE_FIELDS.path` 分組，不需另加 `group` 欄位；欄位 DOM 重排不影響 `featurePatch`，因為讀取仍依欄位 path/id。
 - 測試避免寫死區數：確認每個區名不是未翻譯的設定前綴，並檢查欄位總數、TTS 與 `videoLinks` 歸區。
 
-相關：[[discord-console-table-layout]]、[[discord-console-config]]。
+相關：[[discord-console-table-layout]]、[[discord-console-config]]、[[discord-console-mobile-layout]]。

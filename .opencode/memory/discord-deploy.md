@@ -9,7 +9,9 @@ description: 部署到 Discord 測試伺服器的腳本行為、已知誤判風�
 - `package.json`／`package-lock.json` 有變更也要重啟 `dc-bridge`，避免程序繼續載入舊依賴。DSH 重啟範圍：掃 `src/mcp-*.js` 遞迴 import，加上 `dsh/agent-presets/`、`plugins/`、`scripts/setup-dsh.mjs`；其他變更只重啟 `dc-bridge`，純文件不重啟。
 - 自 2026-11-12 起，本機工作目錄檢查也排除 `docs/`：文件不在伺服器執行，未提交文件不應擋部署。但腳本只部署 HEAD 的 tracked 檔案，未提交文件不會跟著部署。
 - 2026-11-13 的 `dfe7935` 部署完成本機與遠端測試；健康檢查確認 `dc-bridge`、`dsh` online，且新 log 有 Discord 登入訊息。這不代表 TTS 語音投遞已做端到端驗證。
-- 2026-11-17 最新記錄的測試伺服器部署是 `0aa8375`；健康檢查確認 `dc-bridge`、`dsh` online 且新 log 有登入訊息。回退目標為 `928dc69`；之後的部署會取代這筆狀態。
+- 2026-11-17 測試伺服器部署 `0aa8375` 已於 2026-11-18 被 `346642e` 取代；當時的回退目標 `928dc69` 也已過時。
+- 2026-11-18 測試伺服器部署 `346642e` 通過 `deploy-discord.mjs` 健康檢查，`dc-bridge`、`dsh` online，且新 log 有 Discord 登入訊息。這是當日狀態，之後的部署會取代它。
+- 2026-11-18 發現 deploy 輸出可能帶出控制台 token 明文；不要把含 token 的部署輸出貼到公開位置。token 值不記錄；這個既有行為未在當次修正。
 - 2026-11-17 `deploy-discord.mjs` 輸出精簡改動已提交並推送為 `c1e431e`：本機測試成功時隱藏輸出，失敗時最多印末 120 行；遠端成功測試不輸出，失敗時印步驟標籤與末 30 行；遠端錯誤不再回印整段腳本。當日已跑 `node --check scripts/deploy-discord.mjs` 和 `--dry-run`，沒有實際部署。`--skip-tests` 分支仍會印 skip 警告，未驗證。
 - 2026-11-13 遠端 `npm install` 曾回報 7 個 audit vulnerability（5 moderate、1 high、1 critical）；沒有檢查套件明細，屬當日觀察，不代表目前仍有相同數量。
 - 部署前工作目錄乾淨檢查排除 `.opencode/memory` 與 `.agents`（pathspec `-- . ':(exclude).opencode/memory' ':(exclude).agents'`）；dream 背景改記憶檔不再擋部署。只部署 commit 過的內容，程式碼未 commit 改動仍擋（2026-11-07）。
