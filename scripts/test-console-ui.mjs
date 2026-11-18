@@ -689,6 +689,10 @@ try {
         .map((node) => ({ id: node.id, width: Math.round(node.getBoundingClientRect().width) }))
         .filter((box) => box.width < 12));
       assert.deepEqual(squashed, [], `手機上 checkbox 不能被壓扁（${JSON.stringify(squashed)}）`);
+      // 手機的 <select size> 只畫一行下拉按鈕，不能留成桌機清單的固定高度。
+      // 模擬環境仍是桌機的清單渲染（約 140px），所以只驗「沒有被固定成舊的 168px」。
+      const selectHeight = await p.evaluate(() => Math.round(document.querySelector('#provider-primary-select').getBoundingClientRect().height));
+      assert(selectHeight < 160, `手機上模型選單不能留成固定清單高度（${selectHeight}px）`);
     } finally {
       await dcContext.close();
       await dc.close();

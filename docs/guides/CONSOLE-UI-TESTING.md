@@ -37,6 +37,7 @@ OpenChamber 這台沒有本機 Chrome／Edge，`npm run test:console-ui` 會直�
 - iOS 的 `date`／`time` 欄位把 `width` 當內容寬度算，左右的 padding 和邊框會讓它比容器多 20px（WebKit bug 301648）。所以有一段 `@supports (-webkit-touch-callout: none)` 的 `width: calc(100% - 20px)`；改欄位的 padding 或 border 時，這個 20px 要一起改。
 - `.grid` 的子項有 `min-width: 0`，容器才不會被其中一個欄位撐寬。
 - 放原生控制項的巢狀 grid（例如 `.provider-picker`）要固定欄寬 `minmax(0, 1fr)`。
+- `<select size>` 的列高交給 `size` 屬性，不要固定 `height`；手機只畫一行下拉按鈕，固定高度會留下一個空盒子。
 
 `scripts/test-console-ui.mjs` 有一條回歸：把下拉選單和時間欄位故意設成比卡片寬，其他欄位和頁面不能跟著變寬；同一條也檢查 checkbox 沒被壓扁。
 

@@ -140,11 +140,12 @@
   /* auto-fill：只有兩三個欄位的區不會被拉成半版寬的大輸入框。 */
   .fsec .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: end; }
   @media (max-width: 720px) { .fsec { grid-template-columns: 1fr; gap: 8px; } }
-  /* 供應商：兩個模型挑選器並排，選單固定高度讓篩選時版面不跳。
+  /* 供應商：主模型和備援模型兩個挑選器上下排；清單高度交給 size 屬性，手機才不會留一個空盒子。
      欄寬固定在卡片裡：手機的下拉按鈕會用最長選項的寬度排版，不固定就會把整張卡撐開。 */
   .provider-picker { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
   .provider-picker-head { font-size: 13px; font-weight: 600; }
-  .provider-picker select[size] { height: 168px; }
+  /* 思考強度：label 文字和右邊的下拉選單留一點距離。 */
+  .provider-picker label { display: inline-flex; align-items: center; gap: 8px; }
   .provider-key { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
   .provider-key:first-child { border-top: 0; }
   @media (max-width: 720px) { .provider-key { grid-template-columns: 1fr; } }
