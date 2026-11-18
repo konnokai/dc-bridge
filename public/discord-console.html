@@ -35,6 +35,15 @@
   input, textarea { width: 100%; min-width: 0; max-width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
   /* checkbox／radio 有自己的尺寸，放在 flex 的 label 裡不能被一起壓縮。 */
   input[type="checkbox"], input[type="radio"] { min-width: auto; max-width: none; }
+  /* iOS 把 date/time 欄位的 width 當內容寬度算，左右的 padding 9px 和邊框 1px 會多出來
+     （WebKit bug 301648）；扣掉 2×(9+1)px 才貼齊卡片。改 padding 或 border 時這裡要一起改。 */
+  @supports (-webkit-touch-callout: none) {
+    @media (hover: none) {
+      input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"], input[type="week"] {
+        width: calc(100% - 20px);
+      }
+    }
+  }
   textarea { font-family: var(--mono); font-size: 12px; min-height: 84px; resize: vertical; }
   label { display: block; font-size: 12px; color: var(--muted); }
   label input, label textarea { margin-top: 4px; }

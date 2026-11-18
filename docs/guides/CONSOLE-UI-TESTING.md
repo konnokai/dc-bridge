@@ -34,6 +34,7 @@ OpenChamber 這台沒有本機 Chrome／Edge，`npm run test:console-ui` 會直�
 所以表單控制的容器要能壓縮，欄位自己也要夾住寬度：
 
 - `input, select, textarea` 有 `min-width: 0` 和 `max-width: 100%`；`checkbox`／`radio` 例外，不然放在 flex 的 label 裡會被壓扁。
+- iOS 的 `date`／`time` 欄位把 `width` 當內容寬度算，左右的 padding 和邊框會讓它比容器多 20px（WebKit bug 301648）。所以有一段 `@supports (-webkit-touch-callout: none)` 的 `width: calc(100% - 20px)`；改欄位的 padding 或 border 時，這個 20px 要一起改。
 - `.grid` 的子項有 `min-width: 0`，容器才不會被其中一個欄位撐寬。
 - 放原生控制項的巢狀 grid（例如 `.provider-picker`）要固定欄寬 `minmax(0, 1fr)`。
 
