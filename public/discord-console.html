@@ -30,13 +30,18 @@
   button:disabled { opacity: .5; cursor: default; }
   button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
   button.danger { background: var(--danger); }
-  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; max-width: 100%; }
+  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; min-width: 0; max-width: 100%; }
   select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  input, textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
+  input, textarea { width: 100%; min-width: 0; max-width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
+  /* checkbox／radio 有自己的尺寸，放在 flex 的 label 裡不能被一起壓縮。 */
+  input[type="checkbox"], input[type="radio"] { min-width: auto; max-width: none; }
   textarea { font-family: var(--mono); font-size: 12px; min-height: 84px; resize: vertical; }
   label { display: block; font-size: 12px; color: var(--muted); }
   label input, label textarea { margin-top: 4px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  /* 表單欄位在手機上會拿到比容器寬的原生寬度（下拉按鈕跟著最長選項，時間欄位也不一定吃 width）。
+     grid 子項和欄位本身允許縮到欄寬，別讓其中一個把整欄和頁面撐開。 */
+  .grid > * { min-width: 0; }
   .table-wrap { overflow-x: auto; }
   /* 所有表格固定欄寬：換頁或內容長短變動時，欄位不會左右跳。
      固定欄寬下 nowrap 的長字串會壓到隔壁欄，所以日期、時間這類儲存格不加 nowrap。 */
@@ -126,8 +131,9 @@
   /* auto-fill：只有兩三個欄位的區不會被拉成半版寬的大輸入框。 */
   .fsec .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-items: end; }
   @media (max-width: 720px) { .fsec { grid-template-columns: 1fr; gap: 8px; } }
-  /* 供應商：兩個模型挑選器並排，選單固定高度讓篩選時版面不跳。 */
-  .provider-picker { display: grid; gap: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+  /* 供應商：兩個模型挑選器並排，選單固定高度讓篩選時版面不跳。
+     欄寬固定在卡片裡：手機的下拉按鈕會用最長選項的寬度排版，不固定就會把整張卡撐開。 */
+  .provider-picker { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
   .provider-picker-head { font-size: 13px; font-weight: 600; }
   .provider-picker select[size] { height: 168px; }
   .provider-key { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }

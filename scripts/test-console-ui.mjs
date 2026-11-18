@@ -598,6 +598,103 @@ try {
     }
   });
 
+  await test('Discord 控制台：手機原生欄位比卡片寬時，設定頁不會被撐開', async () => {
+    const providers = {
+      pluginReady: true,
+      active: true,
+      hedge: {
+        enabled: true,
+        afterMs: 12000,
+        primary: { provider: 'commandcode', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: 'high' },
+        fallback: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: '' },
+      },
+      primary: { provider: 'hedge', model: 'deepseek/deepseek-v4.1-flash' },
+      catalog: {
+        ok: true,
+        groups: [{
+          id: 'commandcode',
+          name: 'Command Code',
+          models: [
+            { id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash (latest) (CC)', description: 'Go · Peak · Image · 1M', efforts: ['low', 'high'], defaultEffort: 'high' },
+            { id: 'deepseek/deepseek-v4.1-flash-fast', name: 'DeepSeek V4.1 Flash Fast (latest) (CC)', description: 'Go · Peak · Image · 1M', efforts: ['low', 'high'], defaultEffort: 'high' },
+          ],
+        }],
+      },
+      keys: [],
+    };
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 }, emoji: { entries: 0, guilds: 0, items: [] }, ignored: [] }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        codexQuota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: false, users: [] }),
+        followups: () => ({ enabled: false, items: [] }),
+        notes: () => ({ enabled: false, notes: [] }),
+        memes: () => ({ enabled: false, memes: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {}, trade: { bot: { review: { enabled: true, after: '19:10' } } }, dsh: { hedge: providers.hedge } }),
+        providers: () => providers,
+        slang: () => ({ entries: [], learning: { enabled: false } }),
+        knowledge: () => ({ enabled: false, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        triggers: () => ({ todayUsers: 0, totalUsers: 0, totalTriggers: 0, totalDraws: 0, users: [] }),
+        logs: () => [],
+        trade: async () => ({ enabled: true, accounts: [], orders: [], quotes: [] }),
+        devFeedback: () => ({ items: [] }),
+        archive: () => ({ channels: [], items: [] }),
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 360, height: 900 }, isMobile: true, hasTouch: true });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#settings`);
+      await p.waitForFunction(() => document.querySelector('#provider-primary-select')?.options.length > 0);
+      await p.waitForFunction(() => document.querySelector('#trade-bot-review-after').value !== '');
+      // 手機的原生 select（下拉按鈕）和時間欄位會用比容器寬的寬度排版，這裡用 width 模擬。
+      // 不論瀏覽器給它們多寬，旁邊的欄位和頁面都不能跟著變寬。
+      await p.addStyleTag({ content: '#provider-primary-select { width: max-content !important } #trade-bot-review-after { width: 420px !important }' });
+      const layout = await p.evaluate(() => {
+        const card = document.querySelector('#provider-form').closest('.card');
+        const style = getComputedStyle(card);
+        const box = card.getBoundingClientRect();
+        const width = (selector) => Math.round(document.querySelector(selector).getBoundingClientRect().width);
+        return {
+          vw: document.documentElement.clientWidth,
+          scrollW: document.documentElement.scrollWidth,
+          cardContent: Math.round(box.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 2),
+          picker: width('.provider-picker'),
+          filter: width('#provider-primary-filter'),
+          time: width('#trade-bot-review-after'),
+        };
+      });
+      // 前提：模擬的原生寬度真的比卡片寬，不然下面幾條會空過。
+      const natural = await p.evaluate(() => {
+        const clone = document.querySelector('#provider-primary-select').cloneNode(true);
+        clone.style.cssText = 'position:absolute;visibility:hidden;width:max-content;max-width:none';
+        document.body.append(clone);
+        const width = Math.round(clone.getBoundingClientRect().width);
+        clone.remove();
+        return width;
+      });
+      assert(natural > layout.cardContent, `模擬前提不成立：select 內在寬度 ${natural} 沒有超過卡片 ${layout.cardContent}`);
+      assert.equal(layout.scrollW, layout.vw, '設定頁不能橫向捲動');
+      assert(layout.picker <= layout.cardContent, `供應商卡片不能超出卡片寬度（picker ${layout.picker} > ${layout.cardContent}）`);
+      assert(layout.filter <= layout.cardContent, `模型篩選欄不能超出卡片寬度（${layout.filter} > ${layout.cardContent}）`);
+      assert(layout.time <= layout.cardContent, `復盤時間欄位不能超出卡片寬度（${layout.time} > ${layout.cardContent}）`);
+      const squashed = await p.evaluate(() => [...document.querySelectorAll('#tab-settings input[type="checkbox"]')]
+        .filter((node) => !node.closest('[hidden]') && node.getBoundingClientRect().width > 0)
+        .map((node) => ({ id: node.id, width: Math.round(node.getBoundingClientRect().width) }))
+        .filter((box) => box.width < 12));
+      assert.deepEqual(squashed, [], `手機上 checkbox 不能被壓扁（${JSON.stringify(squashed)}）`);
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('Discord 控制台：群友記憶、頻道筆記、梗圖每頁 20 筆，可依名稱或 ID 篩選', async () => {
     const old = Date.parse('2026-01-02T03:04:05Z');
     const pad = (index) => String(index).padStart(2, '0');
