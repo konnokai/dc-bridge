@@ -142,7 +142,8 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
   "tools": ["send_message"],
   "tokens": 1234,
   "ttftMs": 820,
-  "model": "deepseek-chat"
+  "model": "deepseek-chat",
+  "scope": "batch"
 }
 ```
 
@@ -153,13 +154,14 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 - `turn` 用 DSH 的回合編號；沒有就 `null`。`tokens` 用 `sessionId` 和 `turn` 對上 `token-ledger`，
   取不到就 `null`。`ttftMs` 也一樣，取不到就 `null`。
 - `merged` 是這批合併了幾則之前壓住的訊息。
+- `scope` 是 `batch`（批次有結果）或 `message`（進批次前就被擋掉的單則訊息）；算 decision 比例時只看 `batch`。
 - 寫入點：批次真的送出時、模型回完時、被閘門擋下時。同一個 key 同一輪只寫一次。
 - 檔案上限 20 MB；超過就改名成 `.1`，只留一份舊檔。寫入用 append，不重寫整檔。
 
 **實作（2026-11-19）**
 
 - 寫入器在 `src/core/discord-turns.mjs`：`turnRecord()` 組紀錄、`normalizeTurnRecord()` 驗證、
-  `createTurnLog()` append 與 20 MB 輪替。不合法的 `decision`／`reason` 不寫，只留 log。
+  `createTurnLog()` append 與 20 MB 輪替。不合法的 `decision`／`reason`／`scope` 不寫，只留 log。
 - 掛點：
   - 投遞前：`quiet`、`yield`、`media-only`、會話重置與 DSH 拒收（`gate`）。
   - 回合完成：有送訊息 `sent`；只有 reaction 或沒送訊息 `silent`。
@@ -171,7 +173,7 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 - 不寫：`error`／`aborted` 回合（原因在 log），以及 DSH Web GUI 直接開的回合（不是橋接排的批次）。
 - `sent` 只算真的送出訊息；只按 reaction 的回合算 `silent`。
 - 極端情況（prompt 已受理、連線在 `turn/start` 後才斷）可能同時留下一筆 `gate` 與該回合的
-  `sent`／`silent`；機率低。分析時用 `turn` 是否有值區分批次列與單則訊息列。
+  `sent`／`silent`；機率低。分析時用 `scope` 區分批次列與單則訊息列。
 
 ### 不做
 
@@ -199,25 +201,32 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 控制台加一個唯讀「回合」分頁，顯示最近 200 筆，可依 key／decision 篩選。
 沒有要查就別做。
 
-### M2c（可選，等 M2a 有資料）
+### M2c（2026-11-19 已完成設定）
 
-**2026-11-19 已完成（Alloy + dashboard）**：
+**Alloy**：
 
 - `alloy` 容器由 [deploy/alloy/compose.yaml](../../deploy/alloy/compose.yaml) 管理：
-  `grafana/alloy:v1.22.0`、`network_mode: host`、以 `jun`（1000:1000）執行，
-  掛 `/home/jun/.pm2/logs` 唯讀，收 `dc-bridge-out.log` / `dc-bridge-error.log`，
-  標籤 `job=dc-bridge`、`stream`、`service`、`host`，推 `http://127.0.0.1:3100`。
-- 頻道筆記與梗圖的 log 用 `stage.drop` 丟掉，不進 Loki。
-- Grafana dashboard `dc-bridge-ops`（https://grafana.konnokai.me/d/dc-bridge-ops）：
-  log 量、已投遞／MCP 送出、未送出回合、錯誤、未送出原因 top 10、各頻道 top 10、
-  自動壓縮、最近未送出、Qdrant 點數／query rate／平均延遲。
-  匯入檔：[deploy/grafana/dc-bridge-ops.json](../../deploy/grafana/dc-bridge-ops.json)。
+  `grafana/alloy:v1.22.0`、`network_mode: host`、以 `jun`（1000:1000）執行。
+  掛 `/home/jun/.pm2/logs` 與 `/home/jun/dc-bridge/state` 唯讀，推 `http://127.0.0.1:3100`。
+- 第一個來源收 `dc-bridge-out.log` / `dc-bridge-error.log`，標籤 `job=dc-bridge`、`stream`、
+  `service`、`host`；頻道筆記與梗圖的 log 用 `stage.drop` 丟掉。
+- 第二個來源收 `state/discord-turns.jsonl`，標籤 `job=dc-bridge-turns`、`service`、`host`。
+  內容只有判斷與計數，不需要 redact；LogQL 用 `| json` 解析 decision／reason／tokens／ttftMs。
 - 設定在 [deploy/alloy/config.alloy](../../deploy/alloy/config.alloy)；
   啟動：`docker compose -f deploy/alloy/compose.yaml up -d`。不進 `/root/docker-monitoring`。
   操作說明：[deploy/alloy/README.md](../../deploy/alloy/README.md)。
 
-- 驗證：`{job="dc-bridge"}` 查得到 log；`MCP 記頻道筆記` 與 `MCP 存梗圖` 查不到（被 drop）。
-  Qdrant 的 `collection_vectors`、`rest_responses_*` 面板有資料；query rate 目前是 0（recall 沒人用）。
+**Grafana dashboard `dc-bridge-ops`**（https://grafana.konnokai.me/d/dc-bridge-ops）：
+
+- 原有面板：log 量、已投遞／MCP 送出、未送出回合、錯誤、未送出原因 top 10、各頻道 top 10、
+  自動壓縮、最近未送出、Qdrant 點數／query rate／平均延遲。
+- 新面板：回合 decision / 5m（只算 `scope="batch"`）、跳過原因 top 10（精確）、
+  Token 用量 / 5m（依 model）、TTFT 平均 / 5m（依 model）。
+- 匯入檔：[deploy/grafana/dc-bridge-ops.json](../../deploy/grafana/dc-bridge-ops.json)。
+
+驗證：`{job="dc-bridge"}` 查得到 log；`MCP 記頻道筆記` 與 `MCP 存梗圖` 查不到（被 drop）。
+`{job="dc-bridge-turns"} | json | scope="batch"` 在 M2a 上線後才有資料。
+Qdrant 的 `collection_vectors`、`rest_responses_*` 面板有資料；query rate 目前是 0（recall 沒人用）。
 
 以下保留原設計：
 

@@ -698,8 +698,8 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 - `reason`：只在 `skipped` 有值，固定是 `yield`、`media-only`、`quiet`、`ignored`、`denied`、
   `empty`、`gate`、`ask`、`system` 其中一個。
 - 背景／提醒／回訪等內部提示記 `skipped/system`，不混進頻道回覆率；`error`／`aborted` 回合不寫。
-- 檔案同時有批次列（`turn` 有值）與單則訊息列（`turn` 是 null，例如 `ignored`、`empty`）。
-  算 decision 比例時只看批次列，或把單則訊息列當成前置閘門統計。
+- `scope` 是 `batch` 或 `message`：批次有結果的列是 `batch`；進批次前就被擋掉的單則訊息是
+  `message`（例如 `ignored`、`empty`）。算 decision 比例時只看 `batch`。
 - 檔案超過 20 MB 時輪替成 `discord-turns.jsonl.1`，只留一份舊檔。
 
 ## 訂閱額度

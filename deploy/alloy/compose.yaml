@@ -1,5 +1,5 @@
 # dc-bridge 的 Loki 收集器。獨立於 /root/docker-monitoring。
-# 只收這台機器的 pm2 log，推到本機 Loki；不影響 bridge 本身。
+# 收這台機器的 pm2 log 與回合決策 JSONL，推到本機 Loki；不影響 bridge 本身。
 name: dc-bridge-alloy
 
 services:
@@ -14,6 +14,8 @@ services:
     volumes:
       - ./config.alloy:/etc/alloy/config.alloy:ro
       - /home/jun/.pm2/logs:/pm2logs:ro
+      # 回合決策 JSONL 在 state/；整包唯讀掛進來，Alloy 只讀 discord-turns.jsonl。
+      - /home/jun/dc-bridge/state:/state:ro
       # positions 檔放在 repo 外，重啟後從上次的位置續讀。
       - /home/jun/alloy/data:/data
     command:

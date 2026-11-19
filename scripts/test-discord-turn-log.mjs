@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   TURN_DECISIONS,
   TURN_MAX_BYTES,
+  TURN_SCOPES,
   TURN_SKIP_REASONS,
   createTurnLog,
   normalizeTurnRecord,
@@ -42,12 +43,13 @@ console.log('## 1. schema');
   const keys = Object.keys(row);
   ok(keys.join(',') === [
     'at', 'key', 'turn', 'decision', 'reason', 'direct', 'named', 'chatty', 'mediaOnly',
-    'yielded', 'merged', 'users', 'sent', 'tools', 'tokens', 'ttftMs', 'model',
+    'yielded', 'merged', 'users', 'sent', 'tools', 'tokens', 'ttftMs', 'model', 'scope',
   ].join(','), '欄位固定且順序一致');
   ok(row.at === '2026-11-19T12:00:00.000Z' && row.key === 'ch:1' && row.turn === 7, '時間、key、turn');
   ok(row.direct === true && row.chatty === true && row.merged === 2, '批次旗標');
   ok(row.users.join() === A && row.sent === 2 && row.tools.join() === 'send_message,add_reaction', 'users、sent、tools');
   ok(row.tokens === 1234 && row.ttftMs === 820 && row.model === 'deepseek-chat', 'tokens、ttft、model');
+  ok(row.scope === 'batch', '預設是批次列');
 
   // 橋接呼叫時不會傳 now：預設值必須真的產生 ISO 時間，不能把 Date.now 函式丟給 Date。
   const defaultNow = turnRecord({ key: 'ch:1', decision: 'sent' });
@@ -60,6 +62,12 @@ console.log('## 2. decision / reason 的允許值');
 {
   ok(TURN_DECISIONS.join() === 'sent,silent,skipped', 'decision 三個值');
   ok(TURN_SKIP_REASONS.length === 9 && TURN_SKIP_REASONS.includes('media-only'), 'reason 九個值');
+  ok(TURN_SCOPES.join() === 'batch,message', 'scope 兩個值');
+  const messageRow = normalizeTurnRecord(turnRecord({
+    key: 'ch:1', decision: 'skipped', reason: 'empty', scope: 'message', now: NOW,
+  }));
+  ok(messageRow?.scope === 'message', '單則訊息列可以標成 message');
+  ok(normalizeTurnRecord({ ...messageRow, scope: 'nope' }) === null, '未知 scope 不寫');
 
   for (const reason of TURN_SKIP_REASONS) {
     const row = normalizeTurnRecord(turnRecord({ key: 'ch:1', decision: 'skipped', reason, now: NOW }));

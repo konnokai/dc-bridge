@@ -13,6 +13,16 @@ loki.source.file "pm2" {
   tail_from_end = false
 }
 
+// 回合決策紀錄：bridge 每批結果 append 一行 JSON。內容只有判斷與計數，不需要 redact；
+// 解析留給 LogQL 的 `| json`，Loki 端才看得到 decision／reason 這些欄位。
+loki.source.file "turns" {
+  targets = [
+    {__path__ = "/state/discord-turns.jsonl", "job" = "dc-bridge-turns", "service" = "dc-bridge", "host" = "mainserver"},
+  ]
+  forward_to    = [loki.write.local.receiver]
+  tail_from_end = false
+}
+
 // 這兩種 log 會帶頻道筆記與梗圖內容；觀測不需要，直接丟掉。
 loki.process "redact" {
   forward_to = [loki.write.local.receiver]
