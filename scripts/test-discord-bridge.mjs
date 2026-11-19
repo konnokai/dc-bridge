@@ -70,6 +70,7 @@ import {
   loadReferenceImage,
   parseDrawRef,
   prepareMediaBlock,
+  referenceImageCount,
   referenceRefsByUrl,
   resolveGeneratedImage,
   resolveReferenceImage,
@@ -493,7 +494,17 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(viewBody.includes('ignoredUser(target.author?.id)') && !viewBody.includes('canReadMessage('),
     'view_message 只擋模型的不理名單，deny 名單不擋唯讀');
   ok(viewBody.includes('source.messages.fetch'), 'view_message 的連結修復 bot 跟著來源頻道抓');
+  ok(viewBody.includes('referenceRefsByUrl([target, repliedMessage, ...fixMessages]'),
+    'view_message 把修復 bot 補的連結預覽圖也算進生圖參考');
+  ok(viewBody.includes('rememberRefExtras(target.id, { base: targetRefBase')
+    && viewBody.includes('allImages.findIndex') && viewBody.includes('targetRefBase + position + 1'),
+    'view_message 把 X 貼文圖片用貼文清單的位置記成 ref:#編號/n');
   ok(bridgeSource.includes('found.guildId !== channel.guildId'), 'view_message 不能跨伺服器讀');
+  const editableBody = bridgeSource.slice(bridgeSource.indexOf('function editableConfig()'), bridgeSource.indexOf('// ── 供應商'));
+  ok(editableBody.includes('historyArchive: {') && editableBody.includes('retentionDays: cfg.discord.historyArchive.retentionDays'),
+    '控制台回的設定包含歷史歸檔開關與保留天數');
+  ok(!editableBody.includes('historyArchive: cfg.discord.historyArchive'),
+    '控制台不回傳歷史歸檔的端點與 API key');
 
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
@@ -4291,8 +4302,8 @@ console.log('## 8. 附件（圖片與影片）');
     const message = {
       id: '123456789012345678',
       attachments: new Map([
-        ['1', att({ name: 'one.png' })],
-        ['2', att({ name: 'two.png' })],
+        ['1', att({ name: 'one.png', url: 'https://cdn.discordapp.com/attachments/1/2/one.png?ex=1' })],
+        ['2', att({ name: 'two.png', url: 'https://cdn.discordapp.com/attachments/1/2/two.png?ex=1' })],
       ]),
       stickers: new Map(),
       embeds: [],
@@ -4303,7 +4314,7 @@ console.log('## 8. 附件（圖片與影片）');
     await throwsAsync(() => loadReferenceImage(message, 3, limits, { fetchMedia: async () => png }),
       /只有 2 張/, '張數超出範圍回清楚的原因');
     await throwsAsync(() => loadReferenceImage({ ...message, attachments: new Map() }, 1, limits, { fetchMedia: async () => png }),
-      /沒有.*附件/, '沒有附件時回清楚的原因');
+      /沒有.*圖片/, '沒有圖片時回清楚的原因');
     const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
     await throwsAsync(() => loadReferenceImage(message, 1, limits, { fetchMedia: async () => gif }),
       /動圖/, '動圖不當參考圖');
@@ -4321,6 +4332,17 @@ console.log('## 8. 附件（圖片與影片）');
       resolveChannel: async () => channel, limits, fetchMedia: async () => png,
     });
     ok(solo.name === 'one.png', 'resolveReferenceImage 用 #編號找到訊息裡的圖');
+    // view_message 另外抓的 X 貼文圖片：extras 用訊息 id 對應，索引接在訊息本身圖片後面。
+    const bareMessage = { id: '123456789012345682', attachments: new Map(), stickers: new Map(), embeds: [] };
+    const bareRef = refs.register('ch:1', bareMessage.id);
+    const bareChannel = { messages: { fetch: async (id) => (id === bareMessage.id ? bareMessage : null) } };
+    const extraOnly = await resolveReferenceImage({
+      sessionId: 'sess-1', ref: `#${bareRef}/1`, reverse, sessions, refs,
+      resolveChannel: async () => bareChannel, limits,
+      extras: new Map([[bareMessage.id, { base: 0, urls: ['https://pbs.twimg.com/media/x.jpg?name=medium'] }]]),
+      fetchExtra: async () => png,
+    });
+    ok(extraOnly.name === 'x.jpg', 'resolveReferenceImage 把 view_message 另外抓的 X 貼文圖片算進去');
     await throwsAsync(() => resolveReferenceImage({
       sessionId: 'sess-1', ref: `#${ref}/1`, reverse, sessions, refs,
       resolveChannel: async () => channel, limits, enabled: false, fetchMedia: async () => png,
@@ -4360,6 +4382,72 @@ console.log('## 8. 附件（圖片與影片）');
     ok(urlRefs.get(sticker.url) === 'ref:#abc123/2', '貼圖接在附件後面算第 2 張');
     ok(![...urlRefs.keys()].some((url) => url.includes('big.png')), '被擋掉的附件不佔編號');
     ok(![...urlRefs.keys()].some((url) => url.includes('skip.pdf')), '不是圖片的附件不佔編號');
+
+    // 連結預覽的圖（X／YouTube／一般網頁）也要能當參考圖：接在附件與貼圖後面，不能換掉既有編號。
+    const previewUrl = 'https://images-ext-1.discordapp.net/external/abc/preview.jpg';
+    const withPreview = { ...withSticker, id: '123456789012345680', embeds: [{ image: { proxyURL: previewUrl } }] };
+    const previewRefs = referenceRefsByUrl([withPreview], limits, () => '#prev01');
+    ok(previewRefs.get(previewUrl) === 'ref:#prev01/3', '連結預覽圖接在附件與貼圖後面算第 3 張');
+    ok(referenceImageCount(withPreview, limits) === 3, '參考圖張數把連結預覽圖算進去');
+    const previewImage = await loadReferenceImage(withPreview, 3, limits, { fetchMedia: async () => png });
+    ok(previewImage.name === 'preview.jpg' && Buffer.from(previewImage.data, 'base64').equals(png),
+      'ref 指到連結預覽圖時抓得到，檔名從網址取');
+
+    // X 貼文圖片不屬於訊息內容：view_message 另外記住網址，索引接在訊息本身的圖後面。
+    const bare = { id: '123456789012345681', attachments: new Map(), stickers: new Map(), embeds: [] };
+    ok(referenceImageCount(bare, limits) === 0, '沒有圖片的訊息張數是 0');
+    const tweetUrl = 'https://pbs.twimg.com/media/HXakoenbUAAiEy6.jpg?name=medium';
+    let extraArgs = null;
+    const tweetImage = await loadReferenceImage(bare, 1, limits, {
+      extras: { base: 0, urls: [tweetUrl] },
+      fetchExtra: async (url, maxBytes) => { extraArgs = [url, maxBytes]; return png; },
+    });
+    ok(extraArgs?.[0] === tweetUrl && extraArgs?.[1] === limits.maxBytes, '額外圖片用 pbs.twimg.com 網址與 media.maxBytes 抓');
+    ok(tweetImage.name === 'HXakoenbUAAiEy6.jpg' && Buffer.from(tweetImage.data, 'base64').equals(png),
+      'X 貼文圖片可以當參考圖');
+    await throwsAsync(() => loadReferenceImage(bare, 2, limits, {
+      extras: { base: 0, urls: [tweetUrl] }, fetchExtra: async () => png,
+    }), /1~1/, '額外圖片的張數超出範圍也要擋');
+    await throwsAsync(() => loadReferenceImage(bare, 1, limits, {
+      extras: { base: 0, urls: [tweetUrl] },
+    }), /view_message/, '有額外圖片但沒有抓取函式時，叫模型再看一次');
+    await throwsAsync(() => loadReferenceImage(bare, 1, limits, {
+      extras: { base: 0, urls: [tweetUrl] }, fetchExtra: async () => gif,
+    }), /動圖/, 'X 貼文圖片是 GIF 時不當參考圖');
+    await throwsAsync(() => loadReferenceImage(bare, 1, limits, {
+      extras: { base: 1, urls: [tweetUrl] }, fetchExtra: async () => png,
+    }), /訊息內容變了/, '訊息後來的圖片張數和 view 當下不同時，舊編號直接拒絕');
+    const withExtra = await loadReferenceImage(withPreview, 4, limits, {
+      extras: { base: 3, urls: [tweetUrl] }, fetchExtra: async () => png,
+    });
+    ok(withExtra.name === 'HXakoenbUAAiEy6.jpg', '訊息本身 3 張加 X 圖片時，第 4 張是 X 圖片');
+    await throwsAsync(() => loadReferenceImage(withPreview, 5, limits, {
+      extras: { base: 3, urls: [tweetUrl] }, fetchExtra: async () => png,
+    }), /4 張.*1~4/, '總張數把訊息本身的圖與額外圖一起算');
+
+    // Components V2：附件與 component 的 proxy 網址是同一張圖（同 pathname），不能重複算。
+    const v2Message = {
+      id: '123456789012345683',
+      flags: 1 << 15,
+      attachments: new Map([['a1', att({
+        id: 'a1',
+        name: 'photo.png',
+        url: 'https://cdn.discordapp.com/attachments/1/2/photo.png',
+      })]]),
+      stickers: new Map(),
+      embeds: [],
+      components: [{
+        type: 13,
+        file: {
+          proxy_url: 'https://media.discordapp.net/attachments/1/2/photo.png',
+          attachment_id: 'a1',
+          content_type: 'image/png',
+        },
+        name: 'photo.png',
+        size: 1000,
+      }],
+    };
+    ok(referenceImageCount(v2Message, limits) === 1, '附件與 component 指到同一張圖時只算一張');
   }
 
   const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;

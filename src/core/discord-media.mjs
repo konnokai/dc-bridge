@@ -178,44 +178,95 @@ export function parseDrawRef(value) {
 const drawRefError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
 /**
- * view_message 用：把每則訊息的附件／貼圖對應到 `ref:#編號/張數`，模型才知道哪張圖能當
- * 生圖參考。名單跟 `loadReferenceImage` 完全一樣（附件＋貼圖、同一套上限），編號才對得上。
- * 連結預覽的圖不在名單裡：它們不是訊息附件，`/imageRef` 也拿不到。
+ * 一則訊息能當生圖參考的圖片：附件、貼圖、component 媒體、連結預覽。
+ * 附件與貼圖排最前面：批次 prompt 的 `[圖 #編號/張數]` 是照這個順序數的，
+ * 插在前面會讓舊 prompt 裡的編號指到別張。
+ * 同一個 pathname 會同時出現在附件（cdn）與 component media（proxy host），
+ * 不去重會白吃 `media.maxCount` 的名額。
+ */
+export function referenceImageItems(message) {
+  const parts = messageParts(message);
+  const seen = new Set();
+  return [
+    ...parts.attachments,
+    ...stickerImages(parts.stickers),
+    ...componentImages(parts),
+    ...embedImages(parts.embeds),
+  ].filter((item) => {
+    let key = item.url;
+    try { key = new URL(item.url).pathname; } catch { /* 壞網址留給 collectMediaAttachments 說明 */ }
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** 一則訊息有幾張 `ref:#編號/n` 拿得到的圖（不含 view_message 另外抓的 X 貼文圖片）。 */
+export function referenceImageCount(message, limits) {
+  return collectMediaAttachments(referenceImageItems(message), limits).accepted.length;
+}
+
+/**
+ * view_message 用：把每則訊息能當參考圖的圖片對應到 `ref:#編號/張數`，模型才知道哪張圖能當
+ * 生圖參考。名單跟 `loadReferenceImage` 完全一樣（附件＋貼圖＋component＋連結預覽、同一套上限），
+ * 編號才對得上。
  * @param labelOf (message) => '#編號'；別的頻道沒有編號，呼叫端自己過濾
- * @returns {Map<string, string>} 附件網址 → `ref:#編號/張數`
+ * @returns {Map<string, string>} 圖片網址 → `ref:#編號/張數`
  */
 export function referenceRefsByUrl(messages, limits, labelOf) {
   const refs = new Map();
   for (const message of messages) {
     if (!message) continue;
-    const parts = messageParts(message);
-    const { accepted } = collectMediaAttachments([...parts.attachments, ...stickerImages(parts.stickers)], limits);
+    const { accepted } = collectMediaAttachments(referenceImageItems(message), limits);
     accepted.forEach((item, index) => refs.set(item.url, `ref:${labelOf(message)}/${index + 1}`));
   }
   return refs;
 }
 
 /**
- * 一則訊息的第 index 張附件（1 起算）→ 給 Codex 的靜態參考圖。
- * 來源跟批次 prompt 的 `[圖 #編號/張數]` 一樣是「附件 + 貼圖」，編號才對得上。
+ * 一則訊息的第 index 張參考圖（1 起算）→ 給 Codex 的靜態參考圖。
+ * 順序跟 `referenceRefsByUrl` 一樣；`extras` 是 view_message 另外抓回來的
+ * X 貼文圖片（`{ base, urls }`），編號接在訊息本身的圖片後面。
+ * `base` 是 view_message 當下算的圖片張數；訊息內容變了（連結預覽補上或被收起來）
+ * 就不能用舊編號，寧可叫模型再看一次，也不要靜默指到別張。
  * 影片與動圖不收：模型看到的版本是多格拼圖，拿去當參考只會畫出格子。
  * @param options.fetchMedia 測試注入用，預設抓 Discord CDN
+ * @param options.fetchExtra 抓 extras.urls 用（pbs.twimg.com）；沒有就拒絕
  * @returns {Promise<{name:string, mimeType:string, data:string}>}
  */
-export async function loadReferenceImage(message, index, limits, { fetchMedia = fetchDiscordMedia } = {}) {
-  const parts = messageParts(message);
-  const { accepted, skipped } = collectMediaAttachments([...parts.attachments, ...stickerImages(parts.stickers)], limits);
-  if (!accepted.length) {
-    throw drawRefError(`這則訊息沒有能當參考圖的附件${skipped[0]?.reason ? `（${skipped[0].reason}）` : ''}`, 400);
+export async function loadReferenceImage(message, index, limits, { fetchMedia = fetchDiscordMedia, extras = null, fetchExtra } = {}) {
+  const { accepted, skipped } = collectMediaAttachments(referenceImageItems(message), limits);
+  if (extras && extras.base !== accepted.length) {
+    throw drawRefError('訊息內容變了（連結預覽可能剛補上或被收起來），請再 view_message 一次', 409);
   }
-  if (!Number.isInteger(index) || index < 1 || index > accepted.length) {
-    throw drawRefError(`這則訊息只有 ${accepted.length} 張附件，張數要填 1~${accepted.length}`, 400);
+  const extraUrls = extras?.urls ?? [];
+  const total = accepted.length + extraUrls.length;
+  if (!total) {
+    throw drawRefError(`這則訊息沒有能當參考圖的圖片${skipped[0]?.reason ? `（${skipped[0].reason}）` : ''}`, 400);
   }
-  const item = accepted[index - 1];
-  const buffer = await fetchMedia(item.url, limits);
+  if (!Number.isInteger(index) || index < 1 || index > total) {
+    throw drawRefError(`這則訊息只有 ${total} 張能當參考圖，張數要填 1~${total}`, 400);
+  }
+  let item;
+  let buffer;
+  if (index > accepted.length) {
+    if (!fetchExtra) throw drawRefError('這張連結預覽圖不能當參考圖，請再 view_message 一次', 400);
+    const url = extraUrls[index - accepted.length - 1];
+    try {
+      buffer = await fetchExtra(url, limits.maxBytes);
+    } catch (error) {
+      throw drawRefError(`連結預覽圖下載失敗：${error?.message ?? error}`, 502);
+    }
+    let name = 'preview.jpg';
+    try { name = safeName(decodeURIComponent(new URL(url).pathname.split('/').pop())); } catch { /* 用預設檔名 */ }
+    item = { name, url };
+  } else {
+    item = accepted[index - 1];
+    buffer = await fetchMedia(item.url, limits);
+  }
   if (sniffVideo(buffer)) throw drawRefError('影片不能當參考圖，請用靜態圖片', 400);
   const info = sniffImage(buffer);
-  if (!info) throw drawRefError('附件不是 PNG/JPEG/WebP 圖片', 400);
+  if (!info) throw drawRefError('這張圖不是 PNG/JPEG/WebP 圖片', 400);
   if (info.format === 'gif' || info.animated) throw drawRefError('GIF 或動圖不能當參考圖，請用 PNG/JPEG/WebP', 400);
   const prepared = await prepareMediaBlock(buffer, item.name, limits);
   if (!prepared.block) throw drawRefError(prepared.error, 400);
@@ -227,7 +278,7 @@ export async function loadReferenceImage(message, index, limits, { fetchMedia = 
  * `messageRefs` 綁會話 key，所以只拿得到這個頻道登記過的訊息；別的伺服器、私聊、
  * 已刪除的訊息一律拿不到。依賴從外面給，測試不用起橋接。
  */
-export async function resolveReferenceImage({ sessionId, ref, reverse, sessions, refs, resolveChannel, limits, enabled = true, fetchMedia }) {
+export async function resolveReferenceImage({ sessionId, ref, reverse, sessions, refs, resolveChannel, limits, enabled = true, fetchMedia, fetchExtra, extras }) {
   if (enabled === false) throw drawRefError('這個伺服器沒開圖片功能，不能拿參考圖', 403);
   const key = reverse.get(String(sessionId ?? ''));
   if (!key || sessions[key] !== sessionId) throw drawRefError('這個會話已經結束，拿不到參考圖', 403);
@@ -238,7 +289,12 @@ export async function resolveReferenceImage({ sessionId, ref, reverse, sessions,
   const channel = await resolveChannel(key);
   const message = await channel.messages.fetch(id).catch(() => null);
   if (!message) throw drawRefError(`訊息 #${parsed.ref} 已經不存在（可能被刪了），這張圖不能當參考`, 404);
-  return loadReferenceImage(message, parsed.index, limits, { fetchMedia });
+  // extras 是 view_message 當下看到、但不屬於訊息內容的圖（X 貼文圖片）；只存在記憶體。
+  return loadReferenceImage(message, parsed.index, limits, {
+    fetchMedia,
+    fetchExtra,
+    extras: extras?.get(String(id)) ?? null,
+  });
 }
 
 /**
@@ -476,6 +532,22 @@ export function describeSkipped(skipped) {
   return `\n[附件未送給模型：${items}]`;
 }
 
+/** 訊息頂層 component（Components V2）裡的圖；有 gallery 就優先，只有 thumbnail 時才用它。 */
+function componentImages(parts) {
+  const media = componentParts(parts?.components).media
+    .filter((item) => item.url && (item.kind !== 'file' || /^(image|video)\//.test(item.contentType)));
+  const gallery = media.filter((item) => item.kind === 'gallery');
+  return (gallery.length ? gallery : media.filter((item) => item.kind !== 'gallery'))
+    .map((item) => ({
+      name: safeName(item.name),
+      // 圖片一律交給下載後 sniff；Discord 宣告 avif 這類格式時才不會被 MIME 白名單擋掉。
+      contentType: item.contentType?.startsWith('video/') ? item.contentType : 'image/png',
+      url: item.url,
+      description: item.description,
+      spoiler: item.spoiler,
+    }));
+}
+
 /**
  * view_message 的圖片來源：本則與轉發快照的附件、貼圖，
  * 以及本則、被回覆那則、修復 bot 補上的連結預覽。
@@ -484,20 +556,6 @@ export function describeSkipped(skipped) {
 export function viewMediaItems({ target, replied = null, fixMessages = [] } = {}) {
   const parts = messageParts(target);
   const repliedParts = messageParts(replied);
-  const componentImages = (entry) => {
-    const media = componentParts(entry?.components).media
-      .filter((item) => item.url && (item.kind !== 'file' || /^(image|video)\//.test(item.contentType)));
-    const gallery = media.filter((item) => item.kind === 'gallery');
-    return (gallery.length ? gallery : media.filter((item) => item.kind !== 'gallery'))
-      .map((item) => ({
-        name: safeName(item.name),
-        // 圖片一律交給下載後 sniff；Discord 宣告 avif 這類格式時才不會被 MIME 白名單擋掉。
-        contentType: item.contentType?.startsWith('video/') ? item.contentType : 'image/png',
-        url: item.url,
-        description: item.description,
-        spoiler: item.spoiler,
-      }));
-  };
   const items = [
     ...visibleAttachments(target, parts),
     ...componentImages(parts),
