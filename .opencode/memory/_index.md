@@ -4,7 +4,7 @@
 
 ## Codex 與生圖
 
-- [[codex-imagegen-internals]] — `image_gen` 參數、GIF 選項、`generated_images` 路徑、`image_generation_animation` 在 0.166/0.167/0.168-alpha 的差異
+- [[codex-imagegen-internals]] — `image_gen` 參數、GIF 選項、`generated_images` 路徑、`image_generation_animation` 在 0.166～0.170 的差異、生圖實際用的模型
 
 ## 開發流程
 
@@ -38,7 +38,7 @@
 - [[discord-group-consensus-memory]] — 提議中的「群共識」記憶類型缺口：管理員新增一句、可過期、每輪注入、擋貶低評價；feedback df_mw6f6fbe08b055；未實作（2026-11-07）
 - [[discord-channel-notes]] — 頻道筆記與頻道標籤兩套記憶的收斂；摘要 301 字上限、19 條別名回填、測試保護力
 - [[discord-chatty-channels]] — chattyChannels 主動參與、followup；讓位／純媒體閘門影子狀態、觀察結果與伺服器 log 查詢方式
-- [[discord-codex-quota]] — Codex 額度查詢（app-server JSON-RPC）、生圖守門 15%/5%、快照、5 小時窗口重置 ping（gpt-6-luna test）
+- [[discord-codex-quota]] — Codex 額度查詢（app-server JSON-RPC）、生圖守門 15%/5%、快照、5 小時窗口重置 ping（最新 Luna test）
 - [[discord-commandcode-provider]] — Command Code provider switch：預設 provider/model、價目表別名、額度 API 與每月 $70 shortcut（2026-11-07）
 - [[discord-jev-decision-gate]] — Jev 普通對話閘門成本結論，以及黑話候選分流、控制台門檻與 auto 區間驗證（2026-11-16）
 - [[discord-quiet-gate]] — 安靜期間 /send 閘門擋 send_message/send_sticker/create_poll

@@ -728,7 +728,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   橋接不讀 `~/.codex/auth.json`，也不跟 Codex CLI 搶刷新。
 - **快取 5 分鐘**：控制台每 5 秒刷新，但 5 分鐘內只會真的開一次 app-server；查詢失敗快取 60 秒。
 - **5 小時窗口**：OpenAI 的規則是「前一窗口結束後的第一則訊息」才開始新窗口。橋接在
-  `primary.resetsAt + 30 秒` 送一則 `codex exec` 的 `test`（模型 `gpt-6-luna`、low reasoning、
+  `primary.resetsAt + 30 秒` 送一則 `codex exec` 的 `test`（模型用最新的 Luna，讀不到模型清單才退回 `gpt-6-luna`；low reasoning、
   ephemeral、關掉 shell／檔案工具）把新窗口打開。只寫 log，不發 Discord。
 - **重啟與失敗**：狀態存 `state/discord-codex-reset.json`，同一個重置時間不會重送；失敗 15 分鐘後再試。
   每週額度已滿時跳過，等每週恢復後再處理。
@@ -826,13 +826,16 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
    `node scripts/setup-dsh.mjs` 會檢查 profile；沒裝就印一行警告，不會自動連網安裝。
 2. 本機 Codex CLI 已登入（`codex` 跑一次）。生圖走 Codex 額度，不用另外的 API key。
 
+生圖的 Codex 用 `--ignore-user-config`，所以 `~/.codex/config.toml` 的 `model` 不會生效。外掛會讀 `$CODEX_HOME`（預設 `~/.codex`）的 `models_cache.json`，挑版本號最大的 Luna（2026-11-19 是 `gpt-6-luna`，之後出現 `gpt-6.2-luna` 會自動換；只收 `visibility: list`），再用 `-c model=` 指定；讀不到清單才退回 `gpt-6-luna`。
+
 流程：
 
 - 有人說「畫一張…」「幫我畫…」，persona 叫模型呼叫 `generate_image`。呼叫後工具立刻回「已開始」，
   生圖在背景跑，不佔用會話；同一個會話的其他訊息照常處理。
-  要動圖（「畫一張 GIF」「做個動圖」）時同一個呼叫多帶 `animated: true`。這個功能還沒完善：
-  外掛會先問 Codex 有沒有 `image_generation_animation`，沒有就回錯誤；persona 會照實說現在還不能畫動圖、
-  可以先用靜態圖，不要假裝畫了。支援的版本才會把 prompt 補成明確要求短循環動畫，並用 Codex 的 GIF 輸出。
+  要動圖（「畫一張 GIF」「做個動圖」）時同一個呼叫多帶 `animated: true`。
+  外掛會先問 Codex 有沒有 `image_generation_animation`，沒有就回錯誤；有的版本才把 prompt 補成
+  明確要求短循環動畫，並用 Codex 的 GIF 輸出。CLI 有 feature 不代表帳號能畫：
+  後端回 `GIF output is not enabled for this request` 時是這條 Codex OAuth 路不支援 GIF，照實說這次沒畫成、可以先用靜態圖。
   畫自己（「畫一張你的圖」）時 `inputImage` 填 `"self"`；
   畫別的 AI 娘時填角色代號（`glm`、`gpt`、`ernie`、`qwen`、`kimi`、`doubao`、`minimax`、`grok`、`gemini`、`claude`），
   打中文名也可以。一張圖有多個角色時用逗號串起來（`self,claude`），最多 4 個。畫一般插畫時不要填。
@@ -850,12 +853,14 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   `assets/ai-chan-sheets/<角色>/便于查看/横版完整设定图_01_三视图_查看用.jpg`（多個角色就換成多張），`outputDir` 固定 `state/discord-images`。
   模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持每張設定圖的臉、髮色、服裝與配件。
   11 個角色的代號、中文名與資料夾對照在 [assets/ai-chan-sheets/README.md](../../assets/ai-chan-sheets/README.md)。
-- GIF 是選用且還沒完整：只有 Codex 的 `features list` 出現 `image_generation_animation` 時，
+- GIF 是選用：只有 Codex 的 `features list` 出現 `image_generation_animation` 時，
   外掛才會在該次生圖加 `--enable image_generation_animation`，讓 `image_gen` 自己回傳動畫。
-  目前 0.167 為止的穩定版都還沒有這個 feature；這時 `animated: true` 直接回錯誤，不會 spawn Codex。
-  0.168.0-alpha.7 的 client 已經有 feature，但 2026-11-07 實測後端回
-  `GIF output is not enabled for this request`：這是帳號還沒開 GIF preview，不是 CLI 參數問題。
-  支援後輸出檔名是 `.gif`，`send_image` 跟一般圖片一樣直接上傳；GIF 當生圖參考圖仍然不收。
+  0.167 為止的穩定版都沒有這個 feature；0.168.0 起有，伺服器的 0.170.0 實測看得到。
+  CLI 有 feature 不等於畫得出來：伺服器是 ChatGPT 登入（Codex OAuth），2026-11-19 用 0.170.0 實測，
+  後端回 `GIF output is not enabled for this request`；官方 Images API 文件寫 GIF 需要該模型的 GIF preview 權限，
+  Codex OAuth 這條路目前沒開（openai/codex#59890）。所以 ChatGPT 登入時 `animated: true` 直接拒絕、
+  不 spawn Codex；要畫 GIF 得改用 API key 的 Images API（橋接目前沒接）。
+  輸出檔名是 `.gif` 時，`send_image` 跟一般圖片一樣直接上傳；GIF 當生圖參考圖仍然不收。
   更新 Codex 後要重啟 DSH，外掛才會重新偵測 feature。
 - 生圖用的 Codex 是受限版本：關掉 `shell_tool`、`unified_exec` 與 `view_image`，工作目錄在 `state/discord-imagegen-work`。
   `codex-imagegen-wrapper.mjs` 拿掉 adapter 的 `-s`，改用 permission profile：`:root=read`、`/mnt=deny`（沒有 write 規則）；
@@ -1546,7 +1551,7 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   Python 或 Node（沒有網路、沒有主機檔案），回 stdout／stderr。預設關閉，只有 `sandbox.channels`
   裡的頻道能用；同一回合最多一次。詳細邊界見「執行程式」。
 - `generate_image`（`dsh-generate-image` 外掛，只有 `dc-chat`／`dc-chat-open` 放行）：生圖、GIF 或拿設定圖改圖。
-  `prompt` 必填；要 GIF 時 `animated: true`（還沒完善，Codex 沒有 `image_generation_animation` 時直接回錯誤）；
+  `prompt` 必填；要 GIF 時 `animated: true`（CLI 要有 `image_generation_animation`，但 Codex OAuth 這條路目前不支援 GIF，會回 `GIF output is not enabled for this request`）；
   畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
   多個角色用逗號串起來（`self,claude`，最多 4 個）；要用群友貼的圖當參考時填 `"ref:#編號/張數"`
   （例如 `"self,ref:#k7f3ab/1"`）；要用 PRTS 立繪當參考時填 `"prts:阿米娅/立绘_阿米娅_1.png"`
@@ -1802,6 +1807,6 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 | 有輸入提示但沒有回覆 | 日誌有沒有「回合完成但這一輪沒有實際送出訊息」？DSH 沒掛 `mcp-discord` 時模型沒有發送工具：重跑 `node scripts/setup-dsh.mjs` 並**重啟 DSH** |
 | 日誌出現「工具呼叫失敗」 | 模型抄到舊 token（橋接重啟過）。下一則訊息會帶新 token，不用手動處理 |
 | 叫它畫圖卻只回文字 | DSH profile 沒裝 `dsh-generate-image`，或 Codex CLI 沒登入。跑 `dsh plugin --profile web add github:zemul/dsh-generate-image`，終端機跑一次 `codex` 登入，再重啟 DSH |
-| 叫它畫動圖卻說不支援 | Codex 的 `features list` 沒有 `image_generation_animation`（0.167 為止的穩定版都沒有）。更新 Codex 後**重啟 DSH**；更新前先畫靜態圖。有 feature 但生圖失敗且訊息是 `GIF output is not enabled for this request`，代表帳號還沒開 GIF preview，等 OpenAI 開 |
+| 叫它畫動圖卻說不支援 | Codex 的 `features list` 沒有 `image_generation_animation`（0.167 以下沒有，0.168 起有）。更新 Codex 後**重啟 DSH**；更新前先畫靜態圖。有 feature 但 ChatGPT 登入（Codex OAuth）目前一定失敗（openai/codex#59890），外掛會直接拒絕、不 spawn Codex；要 GIF 得改用 API key 的 Images API。換登入方式後要重啟 DSH，外掛才會重新判斷 |
 | 圖畫好了但送不出去 | bot 有沒有 **Attach Files** 權限？檔案有沒有超過 10MB？日誌看 `MCP 送出 ... 圖片` 那一行 |
 | 回合直接失敗 `session/model-unavailable` | `dsh.provider` / `dsh.model` 不在 DSH 的 `routableProviders`。用 `session/modelCatalog` 查可用組合，改 `config.json` |

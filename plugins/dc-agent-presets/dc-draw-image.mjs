@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { latestLunaModel } from '../../src/core/codex-models.mjs'
 
 export const name = 'dc-draw-image'
 
@@ -300,6 +301,30 @@ export function codexSupportsGif(codexBin, { spawnSyncImpl = spawnSync } = {}) {
   return supported
 }
 
+let loginStatusCache = null
+/** 這個 Codex 是不是 ChatGPT 登入（Codex OAuth）；成功的結果快取，DSH 重啟後才會重問。 */
+export function codexUsesChatGptAuth(codexBin, { spawnSyncImpl = spawnSync, env = process.env } = {}) {
+  if (loginStatusCache?.bin === codexBin) return loginStatusCache.chatgpt
+  // codex exec 會吃環境變數的 API key，但 login status 不會；有設就不要當成 ChatGPT。
+  if (env.CODEX_API_KEY) return false
+  try {
+    const result = spawnSyncImpl(codexBin, ['login', 'status'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+      windowsHide: true,
+    })
+    // login status 把結果印在 stderr（cli/src/login.rs 的 eprintln!），stdout 是空的。
+    if (result.status !== 0) return false
+    const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+    const chatgpt = /Logged in using ChatGPT/i.test(text)
+    loginStatusCache = { bin: codexBin, chatgpt }
+    return chatgpt
+  } catch {
+    // 問不到就維持原本流程，讓後端回真正的錯誤；失敗不快取，下次再問。
+    return false
+  }
+}
+
 /** 橋接端點檔每次重讀：橋接重啟後埠會變。 */
 function readAgentEndpoint() {
   try { return JSON.parse(fs.readFileSync(AGENT_ENDPOINT_FILE, 'utf8')) } catch { return null }
@@ -402,12 +427,13 @@ export function createSerialQueue() {
 const serialize = createSerialQueue()
 
 /** 生圖引擎的固定安全參數；測試直接驗這一份，避免 execute 裡漏掉。 */
-export function codexOptions({ prompt, inputImage = null, signal } = {}) {
+export function codexOptions({ prompt, inputImage = null, signal, model = latestLunaModel() } = {}) {
   return {
     prompt,
     workdir: WORK_DIR,
     sandbox: CODEX_SANDBOX,
     inputImage,
+    model,
     extraArgs: CODEX_EXTRA_ARGS,
     signal,
   }
@@ -665,7 +691,7 @@ export function apply(ctx) {
     name: 'generate_image',
     description:
       'Start an image or short animated GIF generation job from a text description, or use a reference image, with the local Codex image_gen tool. '
-      + 'Set animated to true only when the user asks for a GIF or animation. GIF output is experimental: if the installed Codex lacks it, the tool returns an error; tell the user the animation feature is not ready yet and offer a still image. '
+      + 'Set animated to true only when the user asks for a GIF or animation. GIF output is experimental: it needs a Codex version with image_generation_animation, and ChatGPT/Codex OAuth is currently rejected by the server (openai/codex#59890); animated requests on OAuth are rejected immediately. Tell the user the animation feature is not ready and offer a still image. '
       + 'Returns immediately; the image arrives later in a follow-up message, then send it with send_image. '
       + 'The tool runs with shell and file writes disabled; '
       + 'inputImage is a character code (self, gpt, qwen, ...), a user image reference (ref:#messageId/1), '
@@ -679,7 +705,7 @@ export function apply(ctx) {
         },
         animated: {
           type: 'boolean',
-          description: 'Set true only when the user asks for an animated image / GIF. Experimental: returns an error if this Codex version has no GIF support; tell the user the animation feature is not ready and offer a still image.',
+          description: 'Set true only when the user asks for an animated image / GIF. Experimental and currently unavailable with ChatGPT/Codex OAuth (openai/codex#59890): the tool rejects it immediately; offer a still image.',
         },
         outputDir: {
           type: 'string',
@@ -717,6 +743,10 @@ export function apply(ctx) {
       if (!codexBin) throw new Error('找不到 codex CLI：先安裝並登入 Codex')
       if (animated && !codexSupportsGif(codexBin)) {
         throw new Error('目前 Codex 還沒支援 GIF 動圖（需要 image_generation_animation）；跟頻道說動圖功能還沒完善，問要不要改畫靜態圖，不要假裝畫了')
+      }
+      // OpenAI 的 Codex OAuth 圖片路由目前一律拒絕 GIF（openai/codex#59890）；先擋，不要白跑一輪。
+      if (animated && codexUsesChatGptAuth(codexBin)) {
+        throw new Error('這條 Codex 登入方式（ChatGPT OAuth）目前不能生 GIF（openai/codex#59890）；跟頻道說動圖還沒開，先用靜態圖')
       }
       // 正常走 tools/execute middleware 時 GIF_PROMPT 已經補過；被繞過時這裡補，避免只改了 flag。
       const prompt = animated && !args.prompt.includes(GIF_PROMPT) ? `${args.prompt}${GIF_PROMPT}` : args.prompt
