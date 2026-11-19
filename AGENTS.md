@@ -234,3 +234,6 @@ for line in open('/tmp/session.jsonl'):
 | --- | --- | --- |
 | `dc-bridge` | `src/discord-bridge.js` | `/home/jun/dc-bridge` |
 | `dsh` | `npx -y @deepseek-ai/dsh@0.2.2-rc.3 web --no-open --port 2815 ...`（版本鎖在 `/home/jun/dsh/run.sh`） | `/home/jun/dsh` |
+
+觀測：Alloy 由 `deploy/alloy/compose.yaml` 獨立管理（不是 pm2），收 pm2 log 到 Loki；
+見 `docs/design/ADR_DEPLOYMENT.md`。Dashboard 匯入檔在 `deploy/grafana/dc-bridge-ops.json`。

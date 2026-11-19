@@ -90,6 +90,8 @@
 | `public/` | `discord-console.html`（控制台，預設 3110） |
 | `assets/` | 圖片等資源；`ai-chan-sheets/` 是 AI 娘三視圖與設定圖 |
 | `docs/` | 全部文件，見 [README.md](README.md) |
+| `deploy/alloy/` | Loki 收集器（Alloy）的獨立 compose、設定與操作說明 |
+| `deploy/grafana/` | `dc-bridge 營運` dashboard 的 import JSON 與說明 |
 | `state/` | 執行時資料（會話映射、會話 preset 映射、筆記、回訪、回饋、帳本、鎖、生圖與股票資料）。`.gitignore` 排除，**不要刪** |
 | `config.json` | 真實設定，不入庫；模板是 `config.example.json` |
 

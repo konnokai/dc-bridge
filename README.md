@@ -42,6 +42,11 @@ node scripts/deploy-discord.mjs             # 真的部署
 腳本會在遠端跑測試、必要時重跑 `setup:discord`、依序重啟，再看 log 確認 `已登入：`。
 回退用 `--sha <上一個 commit>`。細節與一次性設定見 [AGENTS.md](AGENTS.md)。
 
+## 參考（Ref）
+
+- [Miyoria](https://github.com/owenliu0924/Miyoria)：AI VTuber 框架。
+  本專案的觀測與部分架構想法參考它的 [`docs/ARCHITECTURE.md`](https://github.com/owenliu0924/Miyoria/blob/main/docs/ARCHITECTURE.md)。
+
 ## 授權
 
 MIT，見 [LICENSE](LICENSE)。

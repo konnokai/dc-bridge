@@ -1,0 +1,27 @@
+# dc-bridge 的 Loki 收集器。獨立於 /root/docker-monitoring。
+# 只收這台機器的 pm2 log，推到本機 Loki；不影響 bridge 本身。
+name: dc-bridge-alloy
+
+services:
+  alloy:
+    image: grafana/alloy:v1.22.0
+    container_name: alloy
+    restart: unless-stopped
+    # Loki 在 127.0.0.1:3100，Alloy 也要讀 /home/jun/.pm2/logs。
+    network_mode: host
+    # jun 的 UID/GID；換機器要改。
+    user: "1000:1000"
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - /home/jun/.pm2/logs:/pm2logs:ro
+      # positions 檔放在 repo 外，重啟後從上次的位置續讀。
+      - /home/jun/alloy/data:/data
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
