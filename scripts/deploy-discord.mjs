@@ -101,12 +101,21 @@ function changesBetween(from, to) {
   return changed;
 }
 
-/** MCP server 會載入的本地檔案（含遞迴 import）。改到其中一個就得重啟 DSH。 */
+/** MCP server 或 DSH 外掛會載入的本地檔案（含遞迴 import）。改到其中一個就得重啟 DSH。 */
 function mcpInputs() {
   const seen = new Set();
   const queue = fs.readdirSync(path.join(ROOT, 'src'))
     .filter((name) => /^mcp-.*\.js$/.test(name))
     .map((name) => `src/${name}`);
+  // DSH 外掛在自己的程序裡載入 repo 檔案；它 import 的 src/ 檔案改了也要重啟 DSH。
+  const walk = (rel) => {
+    for (const entry of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+      const next = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) walk(next);
+      else if (entry.name.endsWith('.mjs')) queue.push(next);
+    }
+  };
+  walk('plugins');
   while (queue.length) {
     const rel = queue.pop();
     if (seen.has(rel)) continue;

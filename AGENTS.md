@@ -30,8 +30,8 @@ node scripts/deploy-discord.mjs             # 真的部署
 3. 本機跑 `build-agent-preset-patches.mjs --check` 與 `npm run test:discord`。
 4. 伺服器 `npm ci`（依 package-lock 補依賴），再確認 tracked 檔案沒被改動；然後遠端跑
    `build-agent-preset-patches.mjs --check` 與所有 `scripts/test-discord-*.mjs`。
-5. 動到 preset／plugin／`scripts/setup-dsh.mjs`，或動到任何 MCP server 會 import 的檔案
-   （`src/mcp-*.js` 的遞迴 import）時：先 `npm run setup:discord`，然後
+5. 動到 preset／plugin／`scripts/setup-dsh.mjs`，或動到任何 MCP server 或 DSH 外掛會 import 的檔案
+   （`src/mcp-*.js` 與 `plugins/**/*.mjs` 的遞迴 import）時：先 `npm run setup:discord`，然後
    `pm2 stop dc-bridge` → `pm2 restart dsh` → `sleep 5` → `pm2 start dc-bridge`；
    其他情況只 `pm2 restart dc-bridge`；只改文件就不重啟。
    伺服器 HEAD 已經在目標 commit、或上次部署留下的 `state/.deployed-sha` 與 HEAD 不一致時，

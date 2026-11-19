@@ -22,8 +22,19 @@ description: 背景生圖工作追蹤、取消語意、GIF 拒絕、send_image �
 
 - Codex 不支援 `image_generation_animation` 時，`animated:true` 在 spawn 前就拒絕，不回報 start。
 - 靜態生圖的 `extraArgs` 不含 `--enable`；GIF 才加 `--enable image_generation_animation`。
+- 伺服器 2026-11-19 升到 0.170.0，`codex features list` 有 `image_generation_animation`；重啟 DSH 後
+  `codexSupportsGif()` 回 true。實際生圖仍被擋（`GIF output is not enabled for this request`）：
+  伺服器是 ChatGPT 登入（Codex OAuth），這條路目前不支援 GIF（openai/codex#59890）。
+- `codexUsesChatGptAuth()` 讀 `codex login status`（結果在 stderr），問一次快取；ChatGPT 登入時 `animated:true` 直接拒絕、
+  不 spawn Codex，不再白跑一輪。有設 `CODEX_API_KEY` 時不當成 OAuth；查詢失敗不快取。要 GIF 得改用 API key 的 Images API。
 - `plugins/dc-agent-presets/dc-draw-image.mjs` 用 `spawnSync` 問 GIF feature（最多卡 10 秒，失敗會快取）；
-  只看 `result.file` 判斷是否 GIF（0.168 實際輸出格式未確認，屬推測）。
+  只看 `result.file` 判斷是否 GIF（帳號沒開，0.170 的實際 GIF 輸出格式仍未實測）。
+
+## 生圖模型
+
+- `latestLunaModel()` 讀 `$CODEX_HOME/models_cache.json`，挑版本號最大的 Luna（6.10 > 6.9 > 6，
+  只收 `visibility: list`，hide／none 跳過），`codexOptions()` 用 `-c model=` 指定；讀不到清單才退回 `gpt-6-luna`。
+- 不要寫死 `gpt-6-luna`：Luna 版本會往上加，寫死會在 6.2 出來後過時。
 
 ## Codex 額度閘門
 

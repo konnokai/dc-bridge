@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import {
   CODEX_DRAW_MIN_FIVE_HOUR_PERCENT,
   CODEX_DRAW_MIN_WEEKLY_PERCENT,
-  CODEX_PING_MODEL,
   CODEX_RESET_GRACE_MS,
   CODEX_RESET_RETRY_MS,
   codexDrawGate,
@@ -200,9 +199,20 @@ console.log('## 5. 重置 ping 的參數');
     return child;
   };
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-codex-ping-'));
-  await runCodexResetPing({ spawnImpl, cwd });
-  ok(captured.args.includes('-m') && captured.args[captured.args.indexOf('-m') + 1] === CODEX_PING_MODEL,
-    '重置 ping 用 luna 模型');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-codex-home-'));
+  fs.writeFileSync(path.join(home, 'models_cache.json'), JSON.stringify({
+    models: [{ slug: 'gpt-6.9-luna' }, { slug: 'gpt-6.10-luna' }, { slug: 'gpt-6.2-sol' }],
+  }));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    await runCodexResetPing({ spawnImpl, cwd });
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+  }
+  ok(captured.args.includes('-m') && captured.args[captured.args.indexOf('-m') + 1] === 'gpt-6.10-luna',
+    '重置 ping 用最新的 Luna');
   ok(captured.args.includes('--ephemeral') && captured.args.includes('--') && captured.args.at(-1) === 'test',
     '重置 ping 是 ephemeral 的 test');
   ok(captured.args[captured.args.indexOf('-s') + 1] === 'read-only', '重置 ping 用 read-only');
@@ -212,44 +222,62 @@ console.log('## 5. 重置 ping 的參數');
   ok(captured.args.includes('--ignore-user-config') && captured.args.includes('--ignore-rules'),
     '重置 ping 忽略使用者設定與 rules');
   fs.rmSync(cwd, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
 }
 
-function makePinger({ resetsAt, weekly = 10, stateFile, runPing, now, retryMs = 10_000, graceMs = 0 }) {
+function makePinger({ resetsAt, weekly = 10, stateFile, runPing, now, retryMs = 10_000, graceMs = 0, log = () => {} }) {
   const quota = { get: async () => ({ ok: true, fiveHour: { resetsAt }, weekly: { usedPercent: weekly } }) };
-  return createCodexResetPinger({ quota, runPing, stateFile, now, pollMs: 1e9, retryMs, graceMs });
+  return createCodexResetPinger({ quota, runPing, stateFile, now, pollMs: 1e9, retryMs, graceMs, log });
 }
 
 console.log('## 6. 5 小時重置排程');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-codex-reset-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-codex-home-'));
+  fs.writeFileSync(path.join(home, 'models_cache.json'), JSON.stringify({
+    models: [{ slug: 'gpt-6.9-luna' }, { slug: 'gpt-6.10-luna' }],
+  }));
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
   const stateFile = path.join(dir, 'reset.json');
+  const logs = [];
   let clock = 1_000_000;
   let pings = 0;
-  const pinger = makePinger({
-    resetsAt: clock + 60_000,
-    stateFile,
-    runPing: async () => { pings += 1; },
-    now: () => clock,
-  });
-  await pinger.tick();
-  ok(pings === 0, '還沒到重置時間不 ping');
-  clock += 60_001;
-  await pinger.tick();
-  ok(pings === 1, '重置後 ping 一次');
-  await pinger.tick();
-  ok(pings === 1, '同一個重置時間不重複 ping');
-  pinger.stop();
+  let pingModel = null;
+  try {
+    const pinger = makePinger({
+      resetsAt: clock + 60_000,
+      stateFile,
+      runPing: async ({ model }) => { pings += 1; pingModel = model; },
+      now: () => clock,
+      log: (line) => logs.push(line),
+    });
+    await pinger.tick();
+    ok(pings === 0, '還沒到重置時間不 ping');
+    clock += 60_001;
+    await pinger.tick();
+    ok(pings === 1, '重置後 ping 一次');
+    ok(pingModel === 'gpt-6.10-luna', '排程用最新的 Luna 模型');
+    ok(logs.some((line) => line.includes('gpt-6.10-luna')), 'log 印出實際送的模型');
+    await pinger.tick();
+    ok(pings === 1, '同一個重置時間不重複 ping');
+    pinger.stop();
 
-  const restarted = makePinger({
-    resetsAt: 1_060_000,
-    stateFile,
-    runPing: async () => { pings += 1; },
-    now: () => clock,
-  });
-  await restarted.tick();
-  ok(pings === 1, '重啟後看 state 不重複 ping');
-  restarted.stop();
-  fs.rmSync(dir, { recursive: true, force: true });
+    const restarted = makePinger({
+      resetsAt: 1_060_000,
+      stateFile,
+      runPing: async () => { pings += 1; },
+      now: () => clock,
+    });
+    await restarted.tick();
+    ok(pings === 1, '重啟後看 state 不重複 ping');
+    restarted.stop();
+  } finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 }
 
 console.log('## 7. 失敗重試與每週額度');

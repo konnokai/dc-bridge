@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 import { PermissionFlagsBits, PermissionsBitField } from 'discord.js';
+import { latestLunaModel } from '../src/core/codex-models.mjs';
 import {
   COMPACT_NOTICE,
   DISCORD_MAX_CHARS,
@@ -961,11 +962,60 @@ console.log('## 7c. 畫圖參數鎖');
     'codexSupportsGif 問過就快取');
   ok(draw.codexSupportsGif('fake-codex-no-gif', { spawnSyncImpl: () => ({ status: 1, stdout: '' }) }) === false,
     'features list 失敗時當不支援');
-  const codexOpts = draw.codexOptions({ prompt: 'a cat', inputImage: null, signal: 'sig' });
+  let loginCalls = 0;
+  ok(draw.codexUsesChatGptAuth('fake-codex-chatgpt', {
+    env: {},
+    spawnSyncImpl: () => {
+      loginCalls += 1;
+      return { status: 0, stdout: '', stderr: 'Logged in using ChatGPT\n' };
+    },
+  }) === true && loginCalls === 1, 'codexUsesChatGptAuth 從 stderr 讀 login status');
+  ok(draw.codexUsesChatGptAuth('fake-codex-chatgpt', { env: {}, spawnSyncImpl: () => { throw new Error('不該再問一次'); } }) === true,
+    'codexUsesChatGptAuth 問過就快取');
+  ok(draw.codexUsesChatGptAuth('fake-codex-apikey', {
+    env: {},
+    spawnSyncImpl: () => ({ status: 0, stdout: '', stderr: 'API key configured - sk-proj-***ABCDE\n' }),
+  }) === false, 'API key 登入不當成 ChatGPT OAuth');
+  ok(draw.codexUsesChatGptAuth('fake-codex-env-key', { env: { CODEX_API_KEY: 'sk-test' }, spawnSyncImpl: () => { throw new Error('不該問'); } }) === false,
+    '環境變數有 CODEX_API_KEY 時不當成 ChatGPT OAuth');
+  let failCalls = 0;
+  const failStatus = () => {
+    failCalls += 1;
+    return { status: 1, stdout: '', stderr: '' };
+  };
+  ok(draw.codexUsesChatGptAuth('fake-codex-login-retry', { env: {}, spawnSyncImpl: failStatus }) === false
+    && draw.codexUsesChatGptAuth('fake-codex-login-retry', { env: {}, spawnSyncImpl: failStatus }) === false
+    && failCalls === 2, 'login status 失敗時不擋，也不快取');
+  const codexOpts = draw.codexOptions({ prompt: 'a cat', inputImage: null, signal: 'sig', model: 'gpt-6.2-luna' });
   ok(codexOpts.sandbox === 'read-only'
     && codexOpts.workdir === path.join(REPO_ROOT, 'state', 'discord-imagegen-work')
+    && codexOpts.model === 'gpt-6.2-luna'
     && codexOpts.extraArgs === draw.CODEX_EXTRA_ARGS
-    && codexOpts.signal === 'sig', '生圖引擎固定在 state/ 的唯讀工作目錄');
+    && codexOpts.signal === 'sig', '生圖引擎固定在 state/ 的唯讀工作目錄，模型可指定');
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-models-'));
+    const file = path.join(dir, 'models_cache.json');
+    try {
+      fs.writeFileSync(file, JSON.stringify({
+        models: [
+          { slug: 'gpt-6.1-luna' },
+          { slug: 'gpt-6.9-luna' },
+          { slug: 'gpt-6.10-luna' },
+          { slug: 'gpt-6.2-sol' },
+          { slug: 'gpt-7-luna', visibility: 'hide' },
+          { slug: 'gpt-8-luna', visibility: 'none' },
+        ],
+      }));
+      ok(latestLunaModel({ codexHome: dir }) === 'gpt-6.10-luna', '挑版本號最大的 Luna（6.10 > 6.9），跳過 hide/none');
+      ok(latestLunaModel({ codexHome: path.join(dir, 'missing') }) === 'gpt-6-luna', '讀不到模型清單時退回 gpt-6-luna');
+      fs.writeFileSync(file, '{');
+      ok(latestLunaModel({ codexHome: dir }) === 'gpt-6-luna', '模型清單壞掉時退回 gpt-6-luna');
+      fs.writeFileSync(file, JSON.stringify({ models: [{ slug: 'gpt-6.2-sol' }] }));
+      ok(latestLunaModel({ codexHome: dir }) === 'gpt-6-luna', '清單沒有 Luna 時退回 gpt-6-luna');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
 
   const exec = { name: 'generate_image', arguments: { prompt: 'draw her eating rice', inputImage: 'self' } };
   let called = false;
@@ -1084,19 +1134,30 @@ console.log('## 7c. 畫圖參數鎖');
   // 用假的 codex module 跑兩次重疊 execute：execute 要立刻回「已開始」，真正生圖在背景排隊。
   {
     const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-draw-fake-'));
+    const codexHome = path.join(fakeDir, 'codex-home');
+    fs.mkdirSync(codexHome);
+    fs.writeFileSync(path.join(codexHome, 'models_cache.json'), JSON.stringify({
+      models: [
+        { slug: 'gpt-6.9-luna' },
+        { slug: 'gpt-6.10-luna' },
+        { slug: 'gpt-6.2-sol' },
+      ],
+    }));
     const fakeModule = path.join(fakeDir, 'codex.mjs');
     const fakeImage = path.join(fakeDir, `dc-test-${process.pid}.png`);
     fs.writeFileSync(fakeImage, 'not a real png, but the test only checks the copy');
     fs.writeFileSync(fakeModule, `
 export const DEFAULT_TIMEOUT_MS = 50;
-export function findCodexBin() { return '/fake/codex'; }
+let bin = '/fake/codex';
+export function findCodexBin() { return bin; }
+export function setBin(next) { bin = next; }
 let active = 0;
 let maxActive = 0;
 const calls = [];
 export async function runCodexGenerate(options) {
   active += 1;
   maxActive = Math.max(maxActive, active);
-  calls.push({ sandbox: options.sandbox, extraArgs: options.extraArgs, workdir: options.workdir, inputImage: options.inputImage });
+  calls.push({ sandbox: options.sandbox, extraArgs: options.extraArgs, workdir: options.workdir, inputImage: options.inputImage, model: options.model });
   await new Promise((resolve) => setTimeout(resolve, 20));
   active -= 1;
   if (options.prompt === 'two') return { file: null, files: [], code: 0, events: [], stderr: '', stdoutTail: '' };
@@ -1122,14 +1183,19 @@ const multi = await tool.execute({ prompt: 'multi', inputImage: multiRefs.join('
   .then(() => 'ok', () => 'rejected');
 const bad = await tool.execute({ prompt: 'x', inputImage: ${JSON.stringify(path.join(REPO_ROOT, 'assets', 'ai-chan-sheets', 'README.md'))} }, { agent: { id: 'sess-bad' } })
   .then(() => 'ok', () => 'rejected');
+const gifNoFeature = await tool.execute({ prompt: 'x', animated: true }, { agent: { id: 'sess-gif-0' } })
+  .then(() => 'ok', (error) => error.message);
+const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
+fake.setBin('/fake/codex-oauth');
+plugin.codexSupportsGif('/fake/codex-oauth', { spawnSyncImpl: () => ({ status: 0, stdout: 'image_generation_animation               under development  false\\n' }) });
+plugin.codexUsesChatGptAuth('/fake/codex-oauth', { env: {}, spawnSyncImpl: () => ({ status: 0, stdout: '', stderr: 'Logged in using ChatGPT\\n' }) });
 const gif = await tool.execute({ prompt: 'x', animated: true }, { agent: { id: 'sess-gif' } })
   .then(() => 'ok', (error) => error.message);
 await new Promise((resolve) => setTimeout(resolve, 200));
-const fake = await import(${JSON.stringify(pathToFileURL(fakeModule).href)});
-console.log(JSON.stringify({ ...fake.stats(), multi, bad, gif, statuses: started.map((result) => result.status) }));
+console.log(JSON.stringify({ ...fake.stats(), multi, bad, gifNoFeature, gif, statuses: started.map((result) => result.status) }));
 `;
     const run = await runAsync(script, {
-      DC_AI_CODEX_MODULE: fakeModule, FAKE_IMAGE_FILE: fakeImage, DC_AGENT_FILE: bridge.file,
+      DC_AI_CODEX_MODULE: fakeModule, FAKE_IMAGE_FILE: fakeImage, DC_AGENT_FILE: bridge.file, CODEX_HOME: codexHome,
     });
     await bridge.close();
     let stats = null;
@@ -1146,14 +1212,19 @@ console.log(JSON.stringify({ ...fake.stats(), multi, bad, gif, statuses: started
       '成功時回報圖片路徑');
     ok(failed[0]?.text.startsWith('【生圖失敗】'), '失敗時回報失敗原因');
     ok(stats?.bad === 'rejected', 'execute 只接受 manifest 裡的設定圖（README 也不行）');
-    ok(String(stats?.gif).includes('還沒支援 GIF') && stats?.calls?.length === 3
+    ok(String(stats?.gifNoFeature).includes('還沒支援 GIF') && stats?.calls?.length === 3
       && reports.filter((report) => report.phase === 'start').length === 3,
       'Codex 不支援 GIF 時，animated:true 直接拒絕，不會 spawn 也不會回報 start');
+    ok(String(stats?.gif).includes('ChatGPT OAuth') && stats?.calls?.length === 3
+      && reports.filter((report) => report.phase === 'start').length === 3,
+      'ChatGPT OAuth 時 animated:true 直接拒絕，不會 spawn 也不會回報 start');
     ok(stats?.calls?.[0]?.sandbox === 'read-only'
       && stats?.calls?.[0]?.extraArgs?.includes('shell_tool')
       && !stats?.calls?.[0]?.extraArgs?.includes('--enable')
       && String(stats?.calls?.[0]?.workdir).endsWith(path.join('state', 'discord-imagegen-work')),
       'execute 真的把唯讀、關 shell、安全 workdir 傳給 Codex，靜態生圖不加 --enable');
+    ok(stats?.calls?.length === 3 && stats.calls.every((call) => call.model === 'gpt-6.10-luna'),
+      'execute 把最新 Luna 的模型名傳給 Codex');
     const multiArgs = stats?.calls?.[2]?.extraArgs ?? [];
     const expectedArgs = [
       '-i', fs.realpathSync(draw.characterImage(draw.resolveCharacter('claude'))),

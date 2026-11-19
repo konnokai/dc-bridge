@@ -9,9 +9,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import yaml from 'js-yaml';
+import { latestLunaModel } from './codex-models.mjs';
 import { untilText } from './discord-usage.mjs';
 
-export const CODEX_PING_MODEL = 'gpt-6-luna';
 export const CODEX_QUOTA_TTL_MS = 5 * 60_000;
 // 額度太低時先停生圖，免得畫到一半被擋或把最後一點額度用完。
 export const CODEX_DRAW_MIN_FIVE_HOUR_PERCENT = 15;
@@ -242,7 +242,7 @@ export function presetAllowsImageGen({ root, presetId }) {
  */
 export function runCodexResetPing({
   codexBin = process.env.CODEX_BIN || 'codex',
-  model = CODEX_PING_MODEL,
+  model = latestLunaModel(),
   timeoutMs = CODEX_PING_TIMEOUT_MS,
   spawnImpl = spawn,
   cwd = path.join(os.tmpdir(), 'dc-codex-reset'),
@@ -383,11 +383,12 @@ export function createCodexResetPinger({
           if (!save()) {
             log('Codex 重置狀態無法寫入，這次不送 ping');
           } else {
-            log(`Codex 5 小時窗口已重置，送出 ${CODEX_PING_MODEL} 的 test`);
+            const model = latestLunaModel();
+            log(`Codex 5 小時窗口已重置，送出 ${model} 的 test`);
             const controller = new AbortController();
             currentPing = controller;
             try {
-              await runPing({ signal: controller.signal });
+              await runPing({ model, signal: controller.signal });
               state.lastPingedResetAt = resetAt;
               state.lastPingError = null;
               log('Codex 5 小時窗口已重新開始');
