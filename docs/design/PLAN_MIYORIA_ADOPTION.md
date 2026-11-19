@@ -1,6 +1,6 @@
 # 計畫：從 Miyoria 挑出的六個改善
 
-> 狀態：**設計完成，未實作**（2026-11-19）。
+> 狀態：**M2a／M2c 已上線**（2026-11-19）；其餘工作包未實作。
 > 來源：[Miyoria](https://github.com/owenliu0924/Miyoria) 的 `docs/ARCHITECTURE.md`（v0.2）與 `docs/DECISIONS.md`。只挑適合 dc-bridge 的部分，
 > 沒有要照搬它的節點、hostd 或 module supervisor。
 > 執行方式：一次只做一個工作包。做完、測試、部署、量測，再開下一個。
@@ -11,7 +11,7 @@
 | 工作包 | 狀態 | 開始條件 | 備註 |
 | --- | --- | --- | --- |
 | M1 歷史回想分數 | ⏸️ 暫緩 | 有 recall 使用量 | 線上 0 次呼叫 |
-| M2 回合決策紀錄 | ⬜ 未開始 | — | M2c 已完成（Alloy + dashboard） |
+| M2 回合決策紀錄 | 🟡 M2a 上線 | — | M2b 未做；M2c Alloy 第二來源與 dashboard 已上線 |
 | M3 背景便宜模型 | ⏸️ 暫緩 | 背景佔比變高 | 目前約 0.25% |
 | M6 資料清冊 | ⬜ 未開始 | 可與 M2 並行 | 只改文件 |
 | M5 MCP 安全清單 | ⬜ 未開始 | 可與 M6 並行 | 目前只有自建 MCP |
@@ -114,9 +114,9 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 
 ## M2 回合決策紀錄
 
-### 現況
+### 現況（M2a 上線前）
 
-- `src/discord-bridge.js:399` 的 `LOG_RING` 只留最近的文字 log。
+- `src/discord-bridge.js` 的 `LOG_RING` 只留最近的文字 log。
 - 觸發統計只記「誰叫了 bot」，token ledger 只記花費，dev feedback 是另一本帳。
 - 沒有辦法回答「這批為什麼沒有回」「哪個閘門最常擋」「chatty 頻道回了幾成」。
 
@@ -189,7 +189,7 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 
 ### 驗收
 
-一週後能用一條查詢回答：
+2026-11-19 上線後已開始累積資料；一週後要用一條查詢回答：
 
 - 各 `decision` 的比例。
 - `chatty` 頻道的回覆率。
@@ -201,7 +201,7 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 控制台加一個唯讀「回合」分頁，顯示最近 200 筆，可依 key／decision 篩選。
 沒有要查就別做。
 
-### M2c（2026-11-19 已完成設定）
+### M2c（2026-11-19 上線）
 
 **Alloy**：
 
@@ -224,11 +224,14 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
   Token 用量 / 5m（依 model）、TTFT 平均 / 5m（依 model）。
 - 匯入檔：[deploy/grafana/dc-bridge-ops.json](../../deploy/grafana/dc-bridge-ops.json)。
 
-驗證：`{job="dc-bridge"}` 查得到 log；`MCP 記頻道筆記` 與 `MCP 存梗圖` 查不到（被 drop）。
-`{job="dc-bridge-turns"} | json | scope="batch"` 在 M2a 上線後才有資料。
-Qdrant 的 `collection_vectors`、`rest_responses_*` 面板有資料；query rate 目前是 0（recall 沒人用）。
+驗證（2026-11-19 上線後）：
 
-以下保留原設計：
+- `{job="dc-bridge"}` 查得到 log；`MCP 記頻道筆記` 與 `MCP 存梗圖` 查不到（被 drop）。
+- `{job="dc-bridge-turns"} | json` 已收到第一批真實紀錄；decision、tokens、ttftMs 都查得到。
+- Grafana dashboard `dc-bridge-ops` 版本 3、15 個面板；decision 面板已畫出 `silent`。
+- Qdrant 的 `collection_vectors`、`rest_responses_*` 面板有資料；query rate 目前是 0（recall 沒人用）。
+
+以下保留原設計（部分已被上面的實作取代）：
 
 - **Loki**：Alloy 收 `dc-bridge-out.log` / `dc-bridge-error.log`，標籤 `job="dc-bridge"`、`stream`。
   LogQL 查決策、自動壓縮、錯誤。已經上線。
@@ -236,8 +239,8 @@ Qdrant 的 `collection_vectors`、`rest_responses_*` 面板有資料；query rat
   `dc_bridge_turns_total{decision,reason}`、`dc_bridge_sends_total`、
   `dc_bridge_tokens_total{kind,model}`、`dc_bridge_ttft_seconds`、`dc_bridge_batch_size`、
   `dc_bridge_queue_depth`、`dc_bridge_dsh_up`。建議綁 127.0.0.1 的獨立埠，不要跟控制台同一個對外埠。
-- **Grafana**：三個面板就夠——營運（送出、跳過原因、錯誤、重啟）、成本（`/api/usage` 或 exporter）、
-  壓縮（`自動壓縮` 次數與丟掉的字數）。Qdrant 的 `collection_vectors`、`rest_responses_*` 已經有 scrape，可直接用。
+- **Grafana**：原本建議三個面板——營運、成本、壓縮；實作後來多了 decision、token、TTFT，共 15 個。
+  Qdrant 的 `collection_vectors`、`rest_responses_*` 已經有 scrape，可直接用。
 - **不要做**：不要把 DSH session log 送進 Loki（zstd、檔案大、含完整頻道內容）；不要把 channel id
   或人名當 Prometheus label。
 
