@@ -1,0 +1,321 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"dc-bridge\"}[5m]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Log 行數 / 5m",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"dc-bridge\"} |= \"已投遞\" [5m]))",
+          "legendFormat": "已投遞",
+          "queryType": "range",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(count_over_time({job=\"dc-bridge\"} |= \"MCP 送出\" [5m]))",
+          "legendFormat": "MCP 送出",
+          "queryType": "range",
+          "refId": "B"
+        }
+      ],
+      "title": "已投遞 vs MCP 送出 / 5m",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"dc-bridge\"} |= \"回合完成但這一輪沒有實際送出訊息\" [5m]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "未送出回合 / 5m",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"dc-bridge\", stream=\"stderr\"}[5m]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "錯誤 log / 5m",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "topk(10, sum by (reason) (count_over_time({job=\"dc-bridge\"} |= \"回合完成但這一輪沒有實際送出訊息\" | pattern \"<ts> <_> [discord] 回合完成但這一輪沒有實際送出訊息（<key>）：<reason>\" [$__range])))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "title": "未送出原因 top 10",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "topk(10, sum by (key) (count_over_time({job=\"dc-bridge\"} |= \"回合完成但這一輪沒有實際送出訊息\" | pattern \"<ts> <_> [discord] 回合完成但這一輪沒有實際送出訊息（<key>）：<reason>\" [$__range])))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "title": "各頻道未送出 top 10",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum(count_over_time({job=\"dc-bridge\"} |= \"自動壓縮\" [1h]))",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "自動壓縮次數 / 1h",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "{job=\"dc-bridge\"} |= \"回合完成但這一輪沒有實際送出訊息\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "最近未送出",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 44
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "collection_vectors{job=\"qdrant\",collection=\"dc_history\"}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Qdrant dc_history 點數",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 6,
+        "y": 44
+      },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "rate(rest_responses_total{job=\"qdrant\",endpoint=\"/collections/{collection_name}/points/query\"}[5m])",
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Qdrant query / 5m",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROM}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 44
+      },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "rest_responses_avg_duration_seconds{job=\"qdrant\",endpoint=\"/collections/{collection_name}/points/query\"}",
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Qdrant query 平均延遲",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 42,
+  "tags": [
+    "dc-bridge",
+    "discord"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "dc-bridge 營運",
+  "uid": "dc-bridge-ops",
+  "weekStart": "",
+  "id": null,
+  "__inputs": [
+    {
+      "name": "DS_LOKI",
+      "label": "loki",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "loki",
+      "pluginName": "Loki"
+    },
+    {
+      "name": "DS_PROM",
+      "label": "prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ]
+}

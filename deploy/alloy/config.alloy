@@ -1,0 +1,35 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// dc-bridge 的 pm2 log。只收穩定路徑，避免 logrotate 改名後重讀整份。
+loki.source.file "pm2" {
+  targets = [
+    {__path__ = "/pm2logs/dc-bridge-out.log", "job" = "dc-bridge", "service" = "dc-bridge", "stream" = "stdout", "host" = "mainserver"},
+    {__path__ = "/pm2logs/dc-bridge-error.log", "job" = "dc-bridge", "service" = "dc-bridge", "stream" = "stderr", "host" = "mainserver"},
+  ]
+  forward_to    = [loki.process.redact.receiver]
+  tail_from_end = false
+}
+
+// 這兩種 log 會帶頻道筆記與梗圖內容；觀測不需要，直接丟掉。
+loki.process "redact" {
+  forward_to = [loki.write.local.receiver]
+
+  stage.drop {
+    expression          = "MCP 記頻道筆記"
+    drop_counter_reason = "note_content"
+  }
+
+  stage.drop {
+    expression          = "MCP 存梗圖"
+    drop_counter_reason = "meme_content"
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}

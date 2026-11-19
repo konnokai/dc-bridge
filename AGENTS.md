@@ -2,6 +2,7 @@
 
 ## Lessons
 
+- 查這個專案的程式碼前，先跑 `graphify query`／`graphify explain`；`graphify-out/graph.json` 已經存在，不要直接從 grep 開始。要逐行確認再用 Read／Grep。
 - 改完程式碼、部署前一定先跑 `engineering-code-reviewer` 看完整 diff；review 沒過不要部署，也不要先部署再說。
 - 跑 `scripts/test-console-ui.mjs` 時，若 Playwright 或 Chromium 不在環境裡會直接中止，這不算失敗；其他檢查失敗才要查。
 - preset 結構至少跑 `node scripts/build-agent-preset-patches.mjs --check`；需要 DSH 模組的腳本用 `DSH_INSTALL_MODULES` 指向 npx 快取裡 `@deepseek-ai/dsh` 的上一層 `node_modules`。
@@ -234,3 +235,6 @@ for line in open('/tmp/session.jsonl'):
 | --- | --- | --- |
 | `dc-bridge` | `src/discord-bridge.js` | `/home/jun/dc-bridge` |
 | `dsh` | `npx -y @deepseek-ai/dsh@0.2.2-rc.3 web --no-open --port 2815 ...`（版本鎖在 `/home/jun/dsh/run.sh`） | `/home/jun/dsh` |
+
+觀測：Alloy 由 `deploy/alloy/compose.yaml` 獨立管理（不是 pm2），收 pm2 log 到 Loki；
+見 `docs/design/ADR_DEPLOYMENT.md`。Dashboard 匯入檔在 `deploy/grafana/dc-bridge-ops.json`。

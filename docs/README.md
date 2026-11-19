@@ -16,14 +16,22 @@
 | [guides/UPSTREAM_SYNC.md](guides/UPSTREAM_SYNC.md) | 上游對比基準：已對到哪個 commit、什麼要搬、什麼不搬 | ✅ 比對上游前先看 |
 | [FOLDER_MAP.md](FOLDER_MAP.md) | 目錄、腳本命名與檔案作用 | ✅ |
 
+## design/ — 設計與計畫（進版控）
+
+直接看目錄。新增的計畫：
+[design/PLAN_MIYORIA_ADOPTION.md](design/PLAN_MIYORIA_ADOPTION.md)（從 Miyoria 挑出的六個改善，依序執行）。
+部署決定：[design/ADR_DEPLOYMENT.md](design/ADR_DEPLOYMENT.md)（bridge／DSH 留在 pm2，Alloy 用獨立 compose）。
+
+可觀測性資產：[deploy/alloy/](../deploy/alloy/)（log 收集）、
+[deploy/grafana/](../deploy/grafana/)（dashboard import JSON）。
+
 ## 只在本機、不進 git
 
-`.gitignore` 排除了 `design/`、`research/`、`audits/`、`legacy/`，以及 `guides/PROJECT_GUIDE.md`、
+`.gitignore` 排除了 `research/`、`audits/`、`legacy/`，以及 `guides/PROJECT_GUIDE.md`、
 `guides/VOICE.md`（理由：裡面有真實帳號與本機路徑，見 [guides/PRIVACY.md](guides/PRIVACY.md)）。
 
 | 目錄 | 內容 |
 | --- | --- |
-| `design/` | Discord 線的計畫與設計：`PLAN_AGENT_GAPS.md`、`PLAN_SLANG.md`、`PLAN_EMOJI.md`、`PLAN_TOKEN_DASHBOARD.md`、`PLAN_STOCK.md`，另有 QQ 時代的設計文件 |
 | `research/` | 調研記錄（SnowLuma、免打擾、表情包、本地模型選型） |
 | `audits/` | 審查與體檢報告，最新的在 `AUDIT_FIXES_2026-09-20.md` |
 | `legacy/` | 已被取代的舊報告，**不要照著做** |
