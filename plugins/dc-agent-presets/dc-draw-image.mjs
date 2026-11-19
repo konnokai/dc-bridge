@@ -694,7 +694,7 @@ export function apply(ctx) {
       + 'Set animated to true only when the user asks for a GIF or animation. GIF output is experimental: it needs a Codex version with image_generation_animation, and ChatGPT/Codex OAuth is currently rejected by the server (openai/codex#59890); animated requests on OAuth are rejected immediately. Tell the user the animation feature is not ready and offer a still image. '
       + 'Returns immediately; the image arrives later in a follow-up message, then send it with send_image. '
       + 'The tool runs with shell and file writes disabled; '
-      + 'inputImage is a character code (self, gpt, qwen, ...), a user image reference (ref:#messageId/1), '
+      + 'inputImage is a character code (self, gpt, qwen, ...), a user image reference (ref:#messageId/1: an attachment, sticker, or image from a link preview/X post the user posted), '
       + 'a PRTS artwork reference (prts:<operator>/<artwork file>), several of them comma-separated, or omitted.',
     parameters: {
       type: 'object',
@@ -713,7 +713,7 @@ export function apply(ctx) {
         },
         inputImage: {
           type: 'string',
-          description: 'Character code (self, gpt, qwen, ... or a Chinese character name), ref:#messageId/n for the nth image the user attached, or prts:<operator>/<artwork file> for an official PRTS artwork. Separate several with commas, for example "self,claude", "self,ref:#k7f3ab/1", or "prts:阿米娅/立绘_阿米娅_1.png"; up to 4 total, at most 2 user images and 2 PRTS artworks. Omit for a generic image.',
+          description: 'Character code (self, gpt, qwen, ... or a Chinese character name), ref:#messageId/n for the nth image the user posted (attachments, stickers, or a link preview/X post image), or prts:<operator>/<artwork file> for an official PRTS artwork. Separate several with commas, for example "self,claude", "self,ref:#k7f3ab/1", or "prts:阿米娅/立绘_阿米娅_1.png"; up to 4 total, at most 2 user images and 2 PRTS artworks. Omit for a generic image.',
         },
       },
       required: ['prompt'],

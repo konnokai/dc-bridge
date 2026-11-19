@@ -847,8 +847,15 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   原作者刪掉就拿不到；橋接重啟後，還沒重新出現在 prompt 裡的舊 `#編號` 會查不到（見下面「#編號」）。
   `discord.media.enabled` 關掉時這條路直接拒絕。
   只收 PNG／JPEG／WebP：GIF 與影片不行（GIF 一律不收，靜態的也一樣）。
+  參考圖來源不只附件：貼圖、component 媒體、連結預覽（X／YouTube／一般網頁的預覽圖），
+  以及 `view_message` 從 X 貼文另外抓回來的圖片都行。編號順序是附件 → 貼圖 → component
+  → 連結預覽 → X 貼文圖片；`view_message` 的輸出直接列出每一張的「生圖參考：圖 N = ref:#編號/張數」。
+  X 貼文圖片的網址只存在記憶體，橋接重啟後要再 `view_message` 一次才會補回來。
+  編號用 view 當下抓到的完整貼文圖片清單算，不會因為哪張下載逾時或被去重而換位置；
+  但訊息的圖片張數在兩次查看之間變了（例如連結預覽補上或被收起來），
+  舊編號會直接拒絕並請模型再看一次，不會靜默指到別張。
   訊息改過時標記會變成 `[圖 #k7f3ab/1][已編輯]`，模型就知道張數或順序可能跟之前看到的不一樣，
-  不確定會先 `view_message` 再看一次；`view_message` 的輸出直接列出「生圖參考：圖 1 = ref:#編號/1」。
+  不確定會先 `view_message` 再看一次。
 - `plugins/dc-agent-presets/dc-draw-image.mjs` 在執行前改寫參數：角色代號換成對應的
   `assets/ai-chan-sheets/<角色>/便于查看/横版完整设定图_01_三视图_查看用.jpg`（多個角色就換成多張），`outputDir` 固定 `state/discord-images`。
   模型填路徑或亂填角色名一律拒絕；有指定角色時再補一句英文，要求維持每張設定圖的臉、髮色、服裝與配件。
@@ -1554,7 +1561,7 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   `prompt` 必填；要 GIF 時 `animated: true`（CLI 要有 `image_generation_animation`，但 Codex OAuth 這條路目前不支援 GIF，會回 `GIF output is not enabled for this request`）；
   畫指定角色時 `inputImage` 填 `"self"` 或角色代號（`gpt`、`qwen`…），
   多個角色用逗號串起來（`self,claude`，最多 4 個）；要用群友貼的圖當參考時填 `"ref:#編號/張數"`
-  （例如 `"self,ref:#k7f3ab/1"`）；要用 PRTS 立繪當參考時填 `"prts:阿米娅/立绘_阿米娅_1.png"`
+  （例如 `"self,ref:#k7f3ab/1"`；附件、貼圖、連結預覽、X 貼文圖片都算）；要用 PRTS 立繪當參考時填 `"prts:阿米娅/立绘_阿米娅_1.png"`
   （最多 2 張 PRTS 立繪，檔名先用 `operator_artwork` 的 `action=list` 拿，參考固定抓 `large`）；不指定角色就不要填。
   參數由 `dc-draw-image` 鎖死（見「畫圖」）
 - `ask_user_question`（DSH 內建）：向使用者提問，橋接轉成 Discord 訊息（見「提問與審批」）
@@ -1647,6 +1654,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   私聊不加，DSH 會話本身就有上下文。
 - **圖片**：批次裡每則訊息的圖片會標 `[圖 #編號/1]`（那則訊息的第 1 張，`#編號` 是訊息代號），
   圖片本體跟著送進模型；附件與貼圖可以拿這個編號當生圖參考圖，連結預覽與影片只標 `[圖]`、`[圖：…]`。
+  連結預覽的圖要當參考圖，先用 `view_message` 看那則訊息；那邊的「生圖參考」包含預覽圖與 X 貼文圖片。
   一則訊息最多 `media.maxCount` 張、整批也是。來源是附件、貼圖、連結預覽的圖
   （Tenor／Giphy 的 GIF 就是這種），以及**影片附件**，都只用 Discord 代理過的網址，不直接連原站。
   轉發的訊息用快照裡的附件：Discord 收到轉發時已經把檔案複製一份到這個頻道的 CDN，所以照同一套下載。

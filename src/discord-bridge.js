@@ -201,6 +201,7 @@ import {
   parseDrawRef,
   prepareMediaBlock,
   prepareVideoUrlBlock,
+  referenceImageCount,
   referenceRefsByUrl,
   resolveGeneratedImage,
   resolveReferenceImage,
@@ -1997,6 +1998,16 @@ async function main() {
   }
 
   const messageRefs = createMessageRefs();
+  // view_message 另外抓回來的 X 貼文圖片：訊息 id → { base, urls }，編號接在那則訊息本身的圖後面。
+  // 只存在記憶體；重啟後模型再 view_message 一次就會補回來。
+  const refExtras = new Map();
+
+  function rememberRefExtras(messageId, extras) {
+    if (!extras?.urls?.length) return;
+    refExtras.delete(messageId);
+    refExtras.set(messageId, extras);
+    while (refExtras.size > 500) refExtras.delete(refExtras.keys().next().value);
+  }
 
   function isChannelAllowed(key, channel) {
     const [kind, id] = key.split(':');
@@ -2683,6 +2694,8 @@ async function main() {
       resolveChannel,
       limits: cfg.discord.media,
       enabled: cfg.discord.media.enabled,
+      extras: refExtras,
+      fetchExtra: fetchTwitterImage,
     }),
     // PRTS 立繪參考圖：外掛用檔名向橋接要 large（1024px）圖片；公開資料，不需要會話。
     // get_prts_artwork 走 MCP 的 snake_case（artwork_id），外掛走 camelCase（artworkId）；
@@ -3409,6 +3422,8 @@ async function main() {
       const labelFor = (message) => (source.id === channel.id
         ? `#${messageRefs.register(key, message.id)}`
         : `頻道 ${source.id} 訊息 ${message.id}`);
+      const canRef = source.id === channel.id && cfg.discord.media.enabled;
+      const targetRef = canRef ? messageRefs.register(key, target.id) : '';
       const lines = [
         `${labelFor(target)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
         `內容：${flat(labelEmojiTags(resolveMentions(withStickers(target), target), emojiCatalogs), VIEW_TEXT_MAX) || '（沒有文字）'}`,
@@ -3477,12 +3492,13 @@ async function main() {
       if (reactions.length) lines.push(`reaction：${reactions.join(' ')}`);
       if (!targetParts.text && !self && !cfg.discord.messageContentIntent) lines.push('（沒開 Message Content 意圖，可能讀不到文字）');
 
-      // 圖片：本則與被回覆那則的附件與連結預覽、貼圖（只用 Discord 代理過的網址），
-      // 一起下載、各自失敗只少那張。
+      // 圖片：本則與被回覆那則的附件與連結預覽、貼圖、component 媒體、修復 bot 補的預覽
+      //（只用 Discord 代理過的網址），一起下載、各自失敗只少那張。
       // 同一個頻道的訊息才有 #編號，所以只有這裡的圖能當生圖參考（ref:#編號/張數）。
-      const refByUrl = source.id === channel.id && cfg.discord.media.enabled
-        ? referenceRefsByUrl([target, repliedMessage], cfg.discord.media, labelFor)
+      const refByUrl = canRef
+        ? referenceRefsByUrl([target, repliedMessage, ...fixMessages], cfg.discord.media, labelFor)
         : new Map();
+      const targetRefBase = canRef ? referenceImageCount(target, cfg.discord.media) : 0;
       const media = collectMediaAttachments(viewMediaItems({ target, replied: repliedMessage, fixMessages }), cfg.discord.media);
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
         const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media, { deadline: viewStart + 55_000 });
@@ -3529,6 +3545,12 @@ async function main() {
           if (post.ok && previewSensitive && !post.sensitive) lines.push('（連結預覽標成敏感，貼文媒體不附圖）');
           if (post.ok && cfg.discord.media.enabled && !post.sensitive && !previewSensitive) {
             const room = Math.max(0, cfg.discord.media.maxCount - images.length);
+            // 編號用貼文的完整圖片清單算，不能只算這次下載成功的：
+            // 後面再 view 一次時，只要有一張逾時或被去重，舊 ref 就會指到別張。
+            const allImages = twitterImageUrls(post, cfg.discord.media.maxCount);
+            if (canRef && allImages.length) {
+              rememberRefExtras(target.id, { base: targetRefBase, urls: allImages.map((item) => item.url) });
+            }
             // 修復 bot 的預覽可能已經附了同一張 pbs 圖；用檔名去重，別白吃名額。
             const delivered = new Set(settled.flatMap((result, index) => {
               if (result.status !== 'fulfilled') return [];
@@ -3561,8 +3583,16 @@ async function main() {
                 missed.push('X 貼文圖片（下載逾時）');
               } else {
                 for (const [index, result] of attached.entries()) {
-                  if (result.status === 'fulfilled') images.push(result.value);
-                  else missed.push(`${candidates[index].name}（${flat(result.reason?.message ?? result.reason, 80)}）`);
+                  if (result.status === 'fulfilled') {
+                    images.push(result.value);
+                    // X 貼文的圖不是訊息附件；用貼文清單裡的位置編號，之後再 view 也不會換張。
+                    const position = canRef ? allImages.findIndex((item) => item.url === candidates[index].url) : -1;
+                    if (position >= 0) {
+                      imageRefs.push(`圖 ${images.length} = ref:#${targetRef}/${targetRefBase + position + 1}`);
+                    }
+                  } else {
+                    missed.push(`${candidates[index].name}（${flat(result.reason?.message ?? result.reason, 80)}）`);
+                  }
                 }
               }
             } else if (candidates.length) {
