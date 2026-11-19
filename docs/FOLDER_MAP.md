@@ -51,6 +51,7 @@
 | `discord-gif.mjs` | GIPHY 搜尋 |
 | `discord-security.mjs` | 白名單、敏感詞 |
 | `discord-usage.mjs` | 用量統計 |
+| `discord-turns.mjs` | 回合決策紀錄（`state/discord-turns.jsonl`） |
 | `discord-codex-quota.mjs` | Codex 額度查詢與重置 ping |
 | `discord-trigger-stats.mjs` | 觸發統計 |
 | `discord-send-handler.mjs` | MCP `/send` 的送出統計 |

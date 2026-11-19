@@ -882,6 +882,25 @@ export function createTokenLedger({
     };
   }
 
+  /** 單一 (sessionId, turn) 的聚合；回合剛結束時查，取不到回 null。 */
+  function turnUsage(sessionId, turn) {
+    if (typeof sessionId !== 'string' || !sessionId) return null;
+    const n = Number(turn);
+    if (!Number.isInteger(n) || n < 0) return null;
+    // 只掃採樣、不建整本索引：這次查詢每個完成的回合都會跑一次，不能順便替所有會話計價。
+    let buckets = { ...ZERO_BUCKETS };
+    let model = null;
+    let found = false;
+    for (const sample of samples.values()) {
+      if (sample.sessionId !== sessionId || sample.turn !== n) continue;
+      buckets = addBuckets(buckets, sample.buckets);
+      if (sample.model) model = sample.model;
+      found = true;
+    }
+    if (!found) return null;
+    return { tokens: totalTokensOf(buckets), model, buckets };
+  }
+
   /** 最近采样流水（实时观察用，按时间倒序）。 */
   function recent(limit = 50) {
     const n = Math.max(1, Math.min(500, Number(limit) || 50));
@@ -957,6 +976,7 @@ export function createTokenLedger({
     conversation,
     series,
     recent,
+    turnUsage,
     stats,
     reset,
     compact,

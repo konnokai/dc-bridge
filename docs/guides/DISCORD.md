@@ -688,6 +688,20 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 控制台端點（都要 console token）：`GET /api/usage?range=24h|3d|7d|30d`、
 `GET /api/usage/turns?key=ch:<id>`、`POST /api/usage/reset`（清空帳本，不可恢復）。
 
+## 回合紀錄
+
+每個批次有結果時會 append 一行到 `state/discord-turns.jsonl`：模型有沒有送出訊息、被哪個閘門
+擋下、這批有誰叫 bot、合併了幾則、用了哪些工具、這一輪的 token 與 TTFT。只記判斷結果與 id，
+不記訊息原文或名字。
+
+- `decision`：`sent`（有送出）、`silent`（模型有回但沒送訊息）、`skipped`（被閘門或前置條件擋下）。
+- `reason`：只在 `skipped` 有值，固定是 `yield`、`media-only`、`quiet`、`ignored`、`denied`、
+  `empty`、`gate`、`ask`、`system` 其中一個。
+- 背景／提醒／回訪等內部提示記 `skipped/system`，不混進頻道回覆率；`error`／`aborted` 回合不寫。
+- 檔案同時有批次列（`turn` 有值）與單則訊息列（`turn` 是 null，例如 `ignored`、`empty`）。
+  算 decision 比例時只看批次列，或把單則訊息列當成前置閘門統計。
+- 檔案超過 20 MB 時輪替成 `discord-turns.jsonl.1`，只留一份舊檔。
+
 ## 訂閱額度
 
 控制台預設一張額度卡片；`dsh.provider` 是 `hedge` 且 `dsh.hedge.enabled` 時，
