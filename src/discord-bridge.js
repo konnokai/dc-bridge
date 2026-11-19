@@ -7163,6 +7163,11 @@ async function main() {
       memes: cfg.discord.memes,
       reactions: cfg.discord.reactions,
       memory: cfg.discord.memory,
+      // 端點與 API key 只留在 config.json；控制台只編開關與保留天數。
+      historyArchive: {
+        enabled: cfg.discord.historyArchive.enabled,
+        retentionDays: cfg.discord.historyArchive.retentionDays,
+      },
       notes: cfg.discord.notes,
       knowledge: cfg.discord.knowledge,
       followup: cfg.discord.followup,

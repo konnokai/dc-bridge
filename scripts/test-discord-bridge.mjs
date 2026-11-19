@@ -500,6 +500,11 @@ console.log('## 3. 會話鍵與 @ 判斷');
     && viewBody.includes('allImages.findIndex') && viewBody.includes('targetRefBase + position + 1'),
     'view_message 把 X 貼文圖片用貼文清單的位置記成 ref:#編號/n');
   ok(bridgeSource.includes('found.guildId !== channel.guildId'), 'view_message 不能跨伺服器讀');
+  const editableBody = bridgeSource.slice(bridgeSource.indexOf('function editableConfig()'), bridgeSource.indexOf('// ── 供應商'));
+  ok(editableBody.includes('historyArchive: {') && editableBody.includes('retentionDays: cfg.discord.historyArchive.retentionDays'),
+    '控制台回的設定包含歷史歸檔開關與保留天數');
+  ok(!editableBody.includes('historyArchive: cfg.discord.historyArchive'),
+    '控制台不回傳歷史歸檔的端點與 API key');
 
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
