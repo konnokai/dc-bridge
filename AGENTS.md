@@ -2,6 +2,7 @@
 
 ## Lessons
 
+- 連伺服器時用 `ssh-mcp-server`（`connectionName`），不要用 shell 的 `ssh`。
 - 查這個專案的程式碼前，先跑 `graphify query`／`graphify explain`；`graphify-out/graph.json` 已經存在，不要直接從 grep 開始。要逐行確認再用 Read／Grep。
 - 改完程式碼、部署前一定先跑 `engineering-code-reviewer` 看完整 diff；review 沒過不要部署，也不要先部署再說。
 - 跑 `scripts/test-console-ui.mjs` 時，若 Playwright 或 Chromium 不在環境裡會直接中止，這不算失敗；其他檢查失敗才要查。
