@@ -1020,10 +1020,11 @@ async function main() {
   /** 寫一行回合紀錄；組紀錄或寫檔失敗都只留 log，不能影響聊天。 */
   function writeTurn(key, meta, decision, {
     reason = '', turn = null, sent = 0, tools = [], tokens = null, ttftMs = null, model = null, users, job = null,
+    scope = 'batch',
   } = {}) {
     try {
       turnLog.write(turnRecord({
-        key, job, meta, decision, reason, turn, sent, tools, tokens, ttftMs, model, users,
+        key, job, meta, decision, reason, turn, sent, tools, tokens, ttftMs, model, users, scope,
       }));
     } catch (error) {
       log(`回合紀錄：組裝失敗 ${error?.message ?? error}`);
@@ -6303,7 +6304,7 @@ async function main() {
           guildId ? `ch:${message.channelId}` : `dm:${message.author.id}`,
           { chatty: isChattyChannel(cfg.discord, message.channelId) },
           'skipped',
-          { reason: 'ignored', users: [message.author.id] },
+          { reason: 'ignored', users: [message.author.id], scope: 'message' },
         );
       }
       return;
@@ -6324,7 +6325,7 @@ async function main() {
           guildId ? `ch:${message.channelId}` : `dm:${message.author.id}`,
           { chatty: isChattyChannel(cfg.discord, message.channelId) },
           'skipped',
-          { reason: 'denied', users: [message.author.id] },
+          { reason: 'denied', users: [message.author.id], scope: 'message' },
         );
       }
       return;
@@ -6338,7 +6339,7 @@ async function main() {
       silentPending.set(key, message.id);
       log(`略過 ${key} user=${message.author.id}（/blacklist 退出，只當上下文）`);
       writeTurn(key, { chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
-        reason: 'denied', users: [message.author.id],
+        reason: 'denied', users: [message.author.id], scope: 'message',
       });
       return;
     }
@@ -6380,7 +6381,7 @@ async function main() {
       if (requireMentionFor(key) && !urgentTyping.takeFollowUp(key, message.author.id)) return;
       if (isQuietBatchSkipped({ direct, quietUntil: quietAt })) {
         writeTurn(key, { direct, chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
-          reason: 'quiet', users: [message.author.id],
+          reason: 'quiet', users: [message.author.id], scope: 'message',
         });
         return;
       }
@@ -6402,7 +6403,7 @@ async function main() {
       }
       if (!direct) {
         writeTurn(key, { direct, chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
-          reason: 'empty', users: [message.author.id],
+          reason: 'empty', users: [message.author.id], scope: 'message',
         });
         return;
       }
@@ -6422,7 +6423,7 @@ async function main() {
       if (!compactFirst && hanging && text && await answerPending(hanging, text, key, isOwner, message.author.id)) {
         writeTurn(key, { direct, chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
           reason: hanging.kind === 'approval' ? 'gate' : 'ask',
-          users: [message.author.id],
+          users: [message.author.id], scope: 'message',
         });
         return;
       }

@@ -9,10 +9,12 @@ export const TURN_DECISIONS = Object.freeze(['sent', 'silent', 'skipped']);
 export const TURN_SKIP_REASONS = Object.freeze([
   'yield', 'media-only', 'quiet', 'ignored', 'denied', 'empty', 'gate', 'ask', 'system',
 ]);
+export const TURN_SCOPES = Object.freeze(['batch', 'message']);
 export const TURN_MAX_BYTES = 20 * 1024 * 1024;
 
 const DECISIONS = new Set(TURN_DECISIONS);
 const REASONS = new Set(TURN_SKIP_REASONS);
+const SCOPES = new Set(TURN_SCOPES);
 
 const nonNegative = (value) => {
   const number = Number(value);
@@ -37,6 +39,7 @@ export function turnRecord({
   ttftMs = null,
   model = null,
   users,
+  scope = 'batch',
   now = Date.now,
 } = {}) {
   const entries = job?.entries ?? [];
@@ -59,6 +62,7 @@ export function turnRecord({
     tokens: nonNegative(tokens),
     ttftMs: nonNegative(ttftMs),
     model: typeof model === 'string' && model ? model : null,
+    scope,
   };
 }
 
@@ -75,7 +79,8 @@ export function normalizeTurnRecord(record) {
   }
   const key = String(record.key ?? '');
   const at = String(record.at ?? '');
-  if (!key || !at) return null;
+  const scope = String(record.scope ?? 'batch');
+  if (!key || !at || !SCOPES.has(scope)) return null;
   const turn = Number.isInteger(record.turn) && record.turn >= 0 ? record.turn : null;
   return {
     at,
@@ -95,6 +100,7 @@ export function normalizeTurnRecord(record) {
     tokens: nonNegative(record.tokens),
     ttftMs: nonNegative(record.ttftMs),
     model: typeof record.model === 'string' && record.model ? record.model : null,
+    scope,
   };
 }
 

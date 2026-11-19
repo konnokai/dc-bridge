@@ -279,6 +279,142 @@
       ],
       "title": "Qdrant query 平均延遲",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "id": 12,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (decision) (count_over_time({job=\"dc-bridge-turns\"} | json decision=\"decision\", scope=\"scope\" | scope=\"batch\" [5m]))",
+          "legendFormat": "{{decision}}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "回合 decision / 5m（僅批次）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "id": 13,
+      "targets": [
+        {
+          "expr": "topk(10, sum by (reason) (count_over_time({job=\"dc-bridge-turns\"} | json decision=\"decision\", reason=\"reason\", scope=\"scope\" | scope=\"batch\" | decision=\"skipped\" [$__range])))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "title": "跳過原因 top 10（精確）",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (model) (sum_over_time({job=\"dc-bridge-turns\"} | json model=\"model\", tokens=\"tokens\", scope=\"scope\" | scope=\"batch\" | tokens != \"\" | unwrap tokens | __error__=\"\" [5m]))",
+          "legendFormat": "{{model}}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Token 用量 / 5m（依 model）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 58
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "avg by (model) (avg_over_time({job=\"dc-bridge-turns\"} | json model=\"model\", ttftMs=\"ttftMs\", scope=\"scope\" | scope=\"batch\" | ttftMs != \"\" | unwrap ttftMs | __error__=\"\" [5m]))",
+          "legendFormat": "{{model}}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "TTFT 平均 / 5m（依 model）",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
