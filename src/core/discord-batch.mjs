@@ -233,11 +233,14 @@ function mergeJobs(held, job, maxEntries) {
   const all = [...held.entries, ...job.entries].sort((a, b) => a.at - b.at);
   let extra = all.length - maxEntries;
   const entries = all.filter((entry) => entry.direct || extra-- <= 0);
+  const heldIds = new Set(held.entries.map((entry) => entry.id));
   return {
     ...job,
     entries,
     direct: entries.some((entry) => entry.direct),
     dropped: (held.dropped ?? 0) + (job.dropped ?? 0) + all.length - entries.length,
+    // 之前壓在佇列裡、最後真的留下來的訊息有幾則；被上限裁掉的不算。
+    merged: entries.filter((entry) => heldIds.has(entry.id)).length,
   };
 }
 

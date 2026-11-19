@@ -120,7 +120,7 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 - 觸發統計只記「誰叫了 bot」，token ledger 只記花費，dev feedback 是另一本帳。
 - 沒有辦法回答「這批為什麼沒有回」「哪個閘門最常擋」「chatty 頻道回了幾成」。
 
-### 要做（M2a，這次）
+### 要做（M2a，2026-11-19 已完成）
 
 新增 `state/discord-turns.jsonl`，每次批次有結果時 append 一行。欄位固定，之後只加不改：
 
@@ -156,6 +156,23 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 - 寫入點：批次真的送出時、模型回完時、被閘門擋下時。同一個 key 同一輪只寫一次。
 - 檔案上限 20 MB；超過就改名成 `.1`，只留一份舊檔。寫入用 append，不重寫整檔。
 
+**實作（2026-11-19）**
+
+- 寫入器在 `src/core/discord-turns.mjs`：`turnRecord()` 組紀錄、`normalizeTurnRecord()` 驗證、
+  `createTurnLog()` append 與 20 MB 輪替。不合法的 `decision`／`reason` 不寫，只留 log。
+- 掛點：
+  - 投遞前：`quiet`、`yield`、`media-only`、會話重置與 DSH 拒收（`gate`）。
+  - 回合完成：有送訊息 `sent`；只有 reaction 或沒送訊息 `silent`。
+  - 背景、提醒、回訪等內部提示記 `skipped/system`，不混進頻道回覆率。
+  - 進批次前就被擋掉的單則訊息：`ignored`、`denied`、`empty`、`quiet`。
+  - 回答掛起提問記 `skipped/ask`；回答審批記 `skipped/gate`。
+  - `tokens`／`model` 由 `token-ledger.turnUsage(sessionId, turn)` 加總同一輪所有 step；
+    `ttftMs` 是第一個 token 的實測值。`merged` 由 `mergeJobs` 記「之前壓在佇列裡的訊息數」。
+- 不寫：`error`／`aborted` 回合（原因在 log），以及 DSH Web GUI 直接開的回合（不是橋接排的批次）。
+- `sent` 只算真的送出訊息；只按 reaction 的回合算 `silent`。
+- 極端情況（prompt 已受理、連線在 `turn/start` 後才斷）可能同時留下一筆 `gate` 與該回合的
+  `sent`／`silent`；機率低。分析時用 `turn` 是否有值區分批次列與單則訊息列。
+
 ### 不做
 
 - 不改任何判斷。`decision` 只是記錄，不拿來擋。
@@ -164,9 +181,9 @@ recallRecencyWeight: 0.15   // 0 = 完全照語意，1 = 完全照新舊
 
 ### 測試
 
-- 新的 `scripts/test-discord-turn-log.mjs` 測 schema、`reason` 的允許值、檔案輪替。
-- 整合測試：一個被 `yield` 擋下的批次要寫 `skipped/yield`；一個只有圖片的 chatty 批次要寫
-  `skipped/media-only`；一個正常回覆要寫 `sent`，而且 `tokens` 對得上 ledger。
+- `scripts/test-discord-turn-log.mjs` 測 schema、`reason` 的允許值、檔案輪替。
+- 同一個測試檔涵蓋整合案例：被 `yield` 擋下的批次寫 `skipped/yield`；只有圖片的 chatty 批次寫
+  `skipped/media-only`；正常回覆寫 `sent`，而且 `tokens` 對得上 ledger。
 
 ### 驗收
 

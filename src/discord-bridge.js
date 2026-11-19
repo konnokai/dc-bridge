@@ -241,6 +241,7 @@ import { createBatcher, createTurnGate, defang, formatBatch, formatParticipation
 import { createUrgentTyping } from './core/discord-typing.mjs';
 import { askBlockReason, createAskTurn, turnsFromRecords } from './core/discord-ask.mjs';
 import { createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, usageReport } from './core/discord-usage.mjs';
+import { createTurnLog, turnRecord } from './core/discord-turns.mjs';
 import { createCodexQuota, createCodexResetPinger, formatCodexQuota, presetAllowsImageGen } from './core/discord-codex-quota.mjs';
 import { loadTriggerFile, recordTriggers, saveTriggerFile, triggerStats, triggerUserList } from './core/discord-trigger-stats.mjs';
 import { createAgentSendHandler } from './core/discord-send-handler.mjs';
@@ -286,6 +287,7 @@ const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
 const CODEX_RESET_FILE = path.join(STATE_DIR, 'discord-codex-reset.json');
 const EMOJI_USAGE_FILE = path.join(STATE_DIR, 'discord-emoji-usage.json');
 const USAGE_FILE = path.join(STATE_DIR, 'discord-usage.jsonl');
+const TURNS_FILE = path.join(STATE_DIR, 'discord-turns.jsonl');
 const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 // generate_image 的輸出目錄；dc-draw-image 會把 outputDir 固定到這裡，send_image 也只認這裡。
 const AGENT_IMAGE_DIR = path.join(STATE_DIR, 'discord-images');
@@ -1013,6 +1015,21 @@ async function main() {
     return usageReport({ ledger: usage.ledger, priceTable, nominalModel: cfg.dsh.model, range, limit });
   }
 
+  const turnLog = createTurnLog({ file: TURNS_FILE, log });
+
+  /** 寫一行回合紀錄；組紀錄或寫檔失敗都只留 log，不能影響聊天。 */
+  function writeTurn(key, meta, decision, {
+    reason = '', turn = null, sent = 0, tools = [], tokens = null, ttftMs = null, model = null, users, job = null,
+  } = {}) {
+    try {
+      turnLog.write(turnRecord({
+        key, job, meta, decision, reason, turn, sent, tools, tokens, ttftMs, model, users,
+      }));
+    } catch (error) {
+      log(`回合紀錄：組裝失敗 ${error?.message ?? error}`);
+    }
+  }
+
   // key 跟 DSH 共用同一把：DSH 的 Models 頁存在 .credentials.yaml 的 refs 裡。
   const goQuota = createGoQuota({
     getKey: () => process.env.OPENCODE_GO_API_KEY?.trim() || readDshCredential('OPENCODE_GO_API_KEY'),
@@ -1237,6 +1254,10 @@ async function main() {
   // 自由參與的回合沒有「直接叫 bot」的訊息，退而記這批最後一則，回饋才追得回上下文。
   const pendingLastMessages = new Map(); // key -> string[]（已投遞、回合還沒開始）
   const turnLastMessage = new Map(); // key -> 目前這個回合最後一則訊息 id
+  // 回合紀錄用：這批的旗標在投遞時算一次，回合開始時跟著批次取出。
+  const turnMeta = new Map(); // key -> 目前這個回合的批次旗標；null 表示不是橋接排的回合
+  const turnTools = new Map(); // key -> Set(這一輪呼叫過的工具)
+  const turnTtftMs = new Map(); // key -> 第一個 token 的毫秒數
   const emojiDir = cfg.discord.emoji.dir ? path.resolve(ROOT, cfg.discord.emoji.dir) : path.join(STATE_DIR, 'discord-emoji');
   let emojiCatalogs = loadCatalogs(emojiDir);
   let emojiLoadedAt = Date.now();
@@ -1504,6 +1525,9 @@ async function main() {
     if (activeSession) clearTtftTimer(activeSession);
     ttftTimeouts.delete(key);
     ttftAbandonedTurns.delete(key);
+    turnMeta.delete(key);
+    turnTools.delete(key);
+    turnTtftMs.delete(key);
     epochs.set(key, epochOf(key) + 1);
     // 重載提示：後續訊息要跟著新會話走。換代次後立刻改排隊批次的 epoch，
     // deliverPrompt 才不會把它們當成舊對話丟掉。
@@ -4476,6 +4500,9 @@ async function main() {
           ttftAbandonedTurns.set(key, abandoned);
         }
         collectors.delete(sessionId);
+        turnMeta.delete(key);
+        turnTools.delete(key);
+        turnTtftMs.delete(key);
         stopTyping(key);
         finishProgress(key);
         // 這一輪的票先取出來：遲到的 turn/end 走 abandoned 分支，不會再碰 gate。
@@ -4553,6 +4580,7 @@ async function main() {
       const entry = ttftTimers.get(frame.sessionId);
       if (entry) {
         const ms = Date.now() - entry.startedAt;
+        turnTtftMs.set(key, ms);
         if (ms > 10_000) log(`TTFT ${(ms / 1000).toFixed(1)} 秒（${key}）`);
       }
     }
@@ -4577,6 +4605,8 @@ async function main() {
       devFeedbackEdits.delete(key);
       slangWrites.delete(key);
       ttftTimeouts.delete(key);
+      turnTools.delete(key);
+      turnTtftMs.delete(key);
     }
     if (event.type === 'compaction/start') showCompactNotice(key);
     if (event.type === 'compaction/end') {
@@ -4625,6 +4655,12 @@ async function main() {
     // 只用來分辨日誌：模型是「試過但失敗」（令牌過期、權限不足）還是根本沒呼叫。
     if (event.type === 'tool/call') {
       const name = String(event.data?.name ?? event.data?.toolName ?? '');
+      const shortName = name.replace(/^mcp__discord__/, '');
+      if (shortName) {
+        const called = turnTools.get(key) ?? new Set();
+        called.add(shortName);
+        turnTools.set(key, called);
+      }
       if (/^mcp__discord__(send_message|send_image|send_voice|send_voice_file|send_sticker|add_reaction|remove_reaction|edit_message|delete_message|create_poll)$/.test(name)) agentSender.noteAttempt(key);
       const state = progress.get(key);
       if (state && /^mcp__discord__(send_message|send_image|send_voice|send_voice_file|send_sticker|create_poll)$/.test(name)) state.replied = true;
@@ -4658,6 +4694,8 @@ async function main() {
       const batch = queued?.length ? queued.shift() : null;
       const hadQueued = batch !== null;
       turnDirect.set(key, batch ? batch.direct : defaultDirect(key));
+      // 不是橋接排進去的回合（DSH Web GUI 直接開的）沒有 meta，結束時不寫回合紀錄。
+      turnMeta.set(key, batch?.meta ?? null);
       if (batch?.ticket !== undefined) turnTickets.set(key, { turn, ticket: batch.ticket });
       else turnTickets.delete(key);
       const queuedUsers = pendingUsers.get(key);
@@ -4695,6 +4733,13 @@ async function main() {
     finishProgress(key);
     lastActive.set(key, Date.now());
     const direct = turnDirect.get(key) ?? defaultDirect(key);
+    const loggedUsers = (turnUsers.get(key) ?? []).map((user) => user.userId);
+    const meta = turnMeta.get(key) ?? null;
+    turnMeta.delete(key);
+    const tools = [...(turnTools.get(key) ?? [])];
+    turnTools.delete(key);
+    const measuredTtft = turnTtftMs.get(key) ?? null;
+    turnTtftMs.delete(key);
     turnDirect.delete(key);
     turnUsers.delete(key);
     sandboxRuns.delete(key);
@@ -4710,6 +4755,19 @@ async function main() {
     ttftTimeouts.delete(key);
     if (reason.kind === 'completed') {
       const { sent, reacted, unreacted, removed, attempted } = agentSender.finishTurn(key);
+      if (meta) {
+        const turnUsage = usage.ledger.turnUsage(frame.sessionId, ended.turn);
+        writeTurn(key, meta, meta.internal ? 'skipped' : (sent > 0 ? 'sent' : 'silent'), {
+          reason: meta.internal ? 'system' : '',
+          turn: ended.turn,
+          sent,
+          tools,
+          tokens: turnUsage?.tokens ?? null,
+          ttftMs: measuredTtft,
+          model: turnUsage?.model ?? null,
+          users: loggedUsers,
+        });
+      }
       // 只按／收回 reaction 或只收回訊息也算回應了，不是「忘了用工具」。
       if (sent > 0 || reacted > 0 || unreacted > 0 || removed > 0) return;
       // 沒有呼叫工具就真的不送。回合文字可能只是思考，不是要發出去的內容，
@@ -4840,6 +4898,9 @@ async function main() {
         pendingLastMessages.clear();
         turnLastMessage.clear();
         turnTriggerRecorded.clear();
+        turnMeta.clear();
+        turnTools.clear();
+        turnTtftMs.clear();
         clearAllTtftTimers();
         // 斷線期間的 turn/end 收不到了：壓住的批次直接放行，不要等保險計時器。
         turnGate.releaseAll();
@@ -4929,12 +4990,14 @@ async function main() {
             // 回訪與提醒進離線佇列會被後面的批次合併掉（mergeJobs 只看 entries）；時間過了就放棄。
             if (job.followup || job.reminder) {
               log(`DSH 暫時不可用，放棄${job.reminder ? '提醒' : '回訪'} (${key})`);
+              writeTurn(key, { chatty: isChattyChannel(cfg.discord, job.channel?.id) }, 'skipped', { reason: 'gate', job });
               return;
             }
             enqueueOffline(key, job);
             return;
           }
           log(`投遞失敗 (${key})：${error?.message ?? error}`);
+          writeTurn(key, { chatty: isChattyChannel(cfg.discord, job.channel?.id) }, 'skipped', { reason: 'gate', job });
           if (job.direct) {
             // preset 的安裝細節（可用清單、setup 指令）只寫 log，不貼到公開頻道。
             const publicMessage = error?.code === 'preset-missing' || error?.code === 'preset-broken'
@@ -5307,8 +5370,19 @@ async function main() {
   /** @returns 有沒有排出一個模型回合（沒有就不會有 turn/end，閘門要自己放行） */
   async function deliverPrompt(key, job, ticket) {
     const { epoch } = job;
+    const chatty = isChattyChannel(cfg.discord, job.channel?.id);
+    const batchMeta = {
+      direct: Boolean(job.direct),
+      named: job.entries.some((entry) => isBotNamed(entry.rawText)),
+      chatty,
+      mediaOnly: isMediaOnlyBatch(job.entries),
+      yielded: false,
+      merged: job.merged ?? 0,
+      internal: Boolean(job.system || job.reminder || job.followup),
+    };
     if (epoch !== epochOf(key)) {
       log(`排隊期間會話已重置，丟棄 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
       return false;
     }
     // 批次排隊期間才設的安靜也要生效：沒叫 bot 的不進模型，省下這一輪。
@@ -5319,23 +5393,35 @@ async function main() {
       log(job.followup
         ? `安靜期間延後回訪 ${key}`
         : `安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'quiet', job });
       return false;
     }
     // 讓位閘門所有頻道都跑（收窄成「回覆 bot 那一則」）；純媒體閘門只給 chatty。
     // 兩個都先影子模式只記 log，觀察後再真的擋。
     const gateTurn = !job.followup && !job.reminder && !job.system;
-    const chattyTurn = isChattyChannel(cfg.discord, job.channel?.id) && !job.direct && gateTurn;
-    if (gateTurn && yieldGateDecision(key, job)) {
+    const chattyTurn = chatty && !job.direct && gateTurn;
+    const yieldDecision = gateTurn && yieldGateDecision(key, job);
+    batchMeta.yielded = Boolean(yieldDecision);
+    if (yieldDecision) {
       if (YIELD_GATE_SHADOW) log(`讓位（影子，不擋）${key}（${job.entries.length} 則）${yieldLogDetail(key, job)}`);
-      else { skipSilently(key, job, '讓位跳過'); return false; }
+      else {
+        skipSilently(key, job, '讓位跳過');
+        writeTurn(key, batchMeta, 'skipped', { reason: 'yield', job });
+        return false;
+      }
     }
-    if (chattyTurn && isMediaOnlyBatch(job.entries)) {
+    if (chattyTurn && batchMeta.mediaOnly) {
       if (YIELD_GATE_SHADOW) log(`純媒體（影子，不擋）${key}（${job.entries.length} 則） batch=${job.entries.at(-1)?.id || '-'}`);
-      else { skipSilently(key, job, '純媒體跳過'); return false; }
+      else {
+        skipSilently(key, job, '純媒體跳過');
+        writeTurn(key, batchMeta, 'skipped', { reason: 'media-only', job });
+        return false;
+      }
     }
     const sessionId = await ensureSession(key);
     if (epoch !== epochOf(key)) {
       log(`投遞前會話已重置，丟棄 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
       return false;
     }
     if (job.direct) startTyping(key, job.channel);
@@ -5360,6 +5446,7 @@ async function main() {
           : await buildBatchPrompt(key, job);
     if (epoch !== epochOf(key)) {
       log(`整理批次期間會話已重置，丟棄 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
       return false;
     }
 
@@ -5378,7 +5465,7 @@ async function main() {
     const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${schedule ? `${schedule}\n` : ''}${sendHint}`;
     // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
     const queued = pendingDirect.get(key) ?? [];
-    const queuedBatch = { direct: job.direct, ticket };
+    const queuedBatch = { direct: job.direct, ticket, meta: batchMeta };
     queued.push(queuedBatch);
     pendingDirect.set(key, queued);
     const users = triggerUsers(job.entries);
@@ -5428,6 +5515,7 @@ async function main() {
       unqueue();
       stopTyping(key);
       log(`DSH 把批次當成斜線命令，沒有開回合 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
       return false;
     }
     // 還有「只當背景」的訊息沒被上下文涵蓋時不要標記，下一批會再重帶一次。
@@ -6200,8 +6288,6 @@ async function main() {
 
   async function handleMessage(message) {
     if (!message || message.author?.bot || message.webhookId) return;
-    // 模型自己的不理名單：@ 也不處理，沒有例外。管理員永遠不受這份名單影響。
-    if (ignoredUser(message.author.id)) return;
     const guildId = message.guildId ?? null;
     const ids = {
       guildId,
@@ -6209,12 +6295,40 @@ async function main() {
       parentId: message.channel?.isThread?.() ? message.channel.parentId : null,
       userId: message.author.id,
     };
+    // 模型自己的不理名單：@ 也不處理，沒有例外。管理員永遠不受這份名單影響。
+    if (ignoredUser(message.author.id)) {
+      // 頻道白名單外不記：bot 看得到全部頻道，全記會灌爆檔案。
+      if (isConversationAllowed(cfg.discord, ids)) {
+        writeTurn(
+          guildId ? `ch:${message.channelId}` : `dm:${message.author.id}`,
+          { chatty: isChattyChannel(cfg.discord, message.channelId) },
+          'skipped',
+          { reason: 'ignored', users: [message.author.id] },
+        );
+      }
+      return;
+    }
     const mentioned = message.mentions?.users ? [...message.mentions.users.keys()] : [];
     const repliedUserId = message.mentions?.repliedUser?.id ?? null;
     // 自己用 /blacklist 退出的人：@bot 或回覆 bot 才照正常流程，其他訊息只當頻道背景。
     const addressedToBot = Boolean(guildId)
       && shouldHandleGuildMessage({ mentionedUserIds: mentioned, repliedUserId }, client.user.id, true);
-    if (!isConversationAllowed(cfg.discord, ids)) return;
+    if (!isConversationAllowed(cfg.discord, ids)) {
+      // 頻道白名單外的訊息不記：bot 看得到全部頻道，全記會灌爆檔案。
+      // 私聊只有使用者這一層；伺服器頻道另外用空的使用者 id 判斷頻道本身是否允許。
+      const id = String(message.author.id);
+      const blocked = cfg.discord.deny.users.includes(id) || (!guildId && cfg.discord.deny.self.includes(id));
+      const channelAllowed = guildId ? isConversationAllowed(cfg.discord, { ...ids, userId: '' }) : blocked;
+      if (blocked && channelAllowed) {
+        writeTurn(
+          guildId ? `ch:${message.channelId}` : `dm:${message.author.id}`,
+          { chatty: isChattyChannel(cfg.discord, message.channelId) },
+          'skipped',
+          { reason: 'denied', users: [message.author.id] },
+        );
+      }
+      return;
+    }
     const key = conversationKeyFor(ids);
     // 讓位緩衝：所有允許的訊息都記，含 ⊘ 與 //；讓位要看到誰插話。
     noteHuman(key, message);
@@ -6223,6 +6337,9 @@ async function main() {
       primedKeys.delete(key);
       silentPending.set(key, message.id);
       log(`略過 ${key} user=${message.author.id}（/blacklist 退出，只當上下文）`);
+      writeTurn(key, { chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
+        reason: 'denied', users: [message.author.id],
+      });
       return;
     }
     // 發言頻率：這則在 handleMessage 最前面就記，早於 // 與空訊息的 return。
@@ -6261,7 +6378,12 @@ async function main() {
       if (!quietAt && text) await maybeReact(message, key, rawText).catch((error) => log(`表情反應失敗：${error?.message ?? error}`));
       // @ 模式：叫過 bot 的人 60 秒內，補句照收（不用再 @）；別人照舊丟掉。
       if (requireMentionFor(key) && !urgentTyping.takeFollowUp(key, message.author.id)) return;
-      if (isQuietBatchSkipped({ direct, quietUntil: quietAt })) return;
+      if (isQuietBatchSkipped({ direct, quietUntil: quietAt })) {
+        writeTurn(key, { direct, chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
+          reason: 'quiet', users: [message.author.id],
+        });
+        return;
+      }
     }
 
     const stickers = stickerLabel(parts.stickers);
@@ -6278,7 +6400,12 @@ async function main() {
         await sendLong(key, audioOnly ? '這則是語音或音訊，我聽不到；打字告訴我內容好嗎' : `附件沒有送進模型：${reason}`);
         return;
       }
-      if (!direct) return;
+      if (!direct) {
+        writeTurn(key, { direct, chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
+          reason: 'empty', users: [message.author.id],
+        });
+        return;
+      }
     }
 
     const isOwner = ownerIds.has(message.author.id);
@@ -6292,7 +6419,13 @@ async function main() {
       const hanging = pending.get(key);
       // 提問回答優先；只有管理員明確打 /compact 時先執行壓縮。
       const compactFirst = slashName === 'compact' && isOwner;
-      if (!compactFirst && hanging && text && await answerPending(hanging, text, key, isOwner, message.author.id)) return;
+      if (!compactFirst && hanging && text && await answerPending(hanging, text, key, isOwner, message.author.id)) {
+        writeTurn(key, { direct, chatty: isChattyChannel(cfg.discord, message.channelId) }, 'skipped', {
+          reason: hanging.kind === 'approval' ? 'gate' : 'ask',
+          users: [message.author.id],
+        });
+        return;
+      }
     }
     const slashAction = slashInputAction({
       text,
