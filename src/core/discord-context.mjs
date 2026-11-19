@@ -5,7 +5,8 @@
 // 取資料用 Discord 的 channel.messages.fetch（Read Message History 權限），
 // 不需要 Message Content 特權意圖，也不用自己維護 ring buffer。
 import { describeAge } from './discord-time.mjs';
-import { defang, visibleName } from './discord-batch.mjs';
+import { stripBotMention } from './discord-core.mjs';
+import { defang, resolveMentions, visibleName } from './discord-batch.mjs';
 
 const clean = (value) => String(value ?? '')
   .replace(/[\u0000-\u001f\u007f]/g, ' ')
@@ -50,6 +51,17 @@ export function messageParts(message) {
     stickers: list.flatMap((entry) => values(entry?.stickers)),
     hasImage: attachments.some(isMediaAttachment),
   };
+}
+
+/**
+ * 批次裡給模型看的內文：本則的 @bot 寫成 `@你`，模型才看得到自己被 @ 在哪
+ * （刪光的話只剩 ★，模型會以為標錯人而跳過）。轉發快照裡的 @bot 照舊刪掉：
+ * 那是原作者以前打的，不是轉發的人在叫 bot。
+ */
+export function promptBody(parts, message, botUserId) {
+  const content = stripBotMention(parts.content, botUserId, '@你');
+  const forwarded = stripBotMention(parts.forwarded, botUserId);
+  return resolveMentions([content, forwarded].filter(Boolean).join(' '), message);
 }
 
 // Discord 的 component embed 與 Components V2 訊息把文字、圖片、按鈕放在 components 裡。

@@ -29,7 +29,7 @@ export function archiveCollectionName(value, fallback = ARCHIVE_DEFAULT_COLLECTI
 
 /**
  * 這則值不值得 embed：去掉提及、emoji、連結之後少於 4 個字的（「笑死」「+1」、純貼圖）
- * 跟任何查詢都像，只會洗掉搜尋結果。
+ * 跟任何查詢都像，只會洗掉搜尋結果。要傳原文（mention 還是 `<@id>`）；已經換成 `@暱稱` 的剝不掉。
  */
 export function worthArchiving(text, min = 4) {
   const body = String(text ?? '')

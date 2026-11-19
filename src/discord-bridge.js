@@ -62,7 +62,7 @@ import {
   normalizeEffort,
   PROVIDER_KEY_REFS,
 } from './core/discord-core.mjs';
-import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, replyTargetId, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
+import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, promptBody, referencedMessage, replyTargetId, visibleAttachments, warmMemberCache } from './core/discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, orderSearchHits, scanHistoryMessages, SEARCH_PAGE_MAX } from './core/discord-history.mjs';
 import { createRefusalTracker, formatIgnoreUntil, ignoreList, isIgnoring, isRefusalMessage, loadIgnoreFile, saveIgnoreFile, setIgnored, unignore, IGNORE_MAX_MINUTES, IGNORE_MAX_USERS } from './core/discord-ignore.mjs';
 import { createActivityTracker, formatActivityLine } from './core/discord-activity.mjs';
@@ -610,10 +610,14 @@ async function main() {
   const archiveState = { lastFlushAt: 0, lastError: '', flushed: 0 };
   let archiveCount = { at: 0, count: 0, error: '' };
 
-  function queueArchive(entry) {
+  /**
+   * 值不值得 embed 看原文：mention 在原文裡還是 `<@id>`，`worthArchiving` 才剝得掉。
+   * 存進去的文字是換成名字的版本（recall_history 要看得出在叫誰）。
+   */
+  function queueArchive(entry, raw = entry?.text) {
     if (!archive) return;
     const text = String(entry?.text ?? '').trim();
-    if (!text || !worthArchiving(text)) return;
+    if (!text || !worthArchiving(raw)) return;
     if (archiveQueue.length >= ARCHIVE_QUEUE_MAX) archiveQueue.shift();
     archiveQueue.push({ ...entry, text });
     if (archiveQueue.length >= cfg.discord.historyArchive.batch) void flushArchive();
@@ -6356,14 +6360,17 @@ async function main() {
     const text = resolveMentions(rawText, message);
     // 轉發的文字是別人貼進來的內容：給模型看，但不當成這一位群友說的話（黑話、提問回答、斜線指令都不算）。
     const fullText = resolveMentions(stripBotMention(parts.text, client.user.id), message);
+    // 給模型看的內文保留 @你的位置：只剩 ★ 的話，模型會以為標錯人而跳過（2026-11-19 實際遇過）。
+    const promptText = fullText ? promptBody(parts, message, client.user.id) : '';
     // `\//`（畫面顯示 `//`）開頭＝這則只給人看。標記優先於 @ 和提問回答。
     if (isSkippedMessage(message.content, client.user.id)) {
       log(`跳過 ${key} user=${message.author.id}（// 標記）`);
       return;
     }
     // 歷史歸檔掛在 // 之後：@ 模式的頻道沒 @ 的訊息（下面會 return）也要收，
-    // 但 // 與 /blacklist 退出的人不收。
-    if (archive && guildId) queueArchive(archiveEntry(message, flat(fullText, 1000)));
+    // 但 // 與 /blacklist 退出的人不收。文字跟編輯後重存用同一種寫法（bot 的名字留著），
+    // 不然同一則在 recall_history 會有兩種長相。
+    if (archive && guildId) queueArchive(archiveEntry(message, flat(resolveMentions(parts.text, message), 1000)), parts.text);
     // 有沒有在叫 bot：私聊一律算；頻道看 @ 或回覆。自由參與時沒叫 bot 的訊息也會進批次，
     // 但提問的回答只認叫 bot 的訊息。
     const direct = !guildId || addressedToBot;
@@ -6453,7 +6460,7 @@ async function main() {
       guildId,
       userId: message.author.id,
       author,
-      text: [labelEmojiTags(fullText, emojiCatalogs), stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
+      text: [labelEmojiTags(promptText, emojiCatalogs), stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       // 黑話比對用原文：表情描述是目錄產生的字，不該被當成群友講的話。
       rawText: [fullText, stickers, emptyDirect ? '[沒有文字，只有叫你]' : ''].filter(Boolean).join(' '),
       direct,
@@ -6777,7 +6784,8 @@ async function main() {
   client.on(Events.MessageCreate, (message) => {
     // bot 自己的訊息在 handleMessage 第一行就被擋掉；歸檔另外收，聊天紀錄才看得到自己說過什麼。
     if (archive && message.guildId && message.author?.id === client.user?.id) {
-      queueArchive(archiveEntry(message, flat(resolveMentions(messageParts(message).text, message), 1000)));
+      const parts = messageParts(message);
+      queueArchive(archiveEntry(message, flat(resolveMentions(parts.text, message), 1000)), parts.text);
     }
     handleMessage(message).catch((error) => log(`處理訊息失敗：${error?.stack ?? error}`));
   });
@@ -6786,7 +6794,8 @@ async function main() {
     if (!archive || !message?.guildId || !message.content) return;
     if (message.author?.bot && message.author?.id !== client.user?.id) return;
     if (isSkippedMessage(message.content, client.user.id)) return;
-    queueArchive(archiveEntry(message, flat(resolveMentions(messageParts(message).text, message), 1000)));
+    const parts = messageParts(message);
+    queueArchive(archiveEntry(message, flat(resolveMentions(parts.text, message), 1000)), parts.text);
   });
   client.on(Events.MessageDelete, (message) => {
     if (!archive || !message?.guildId) return;

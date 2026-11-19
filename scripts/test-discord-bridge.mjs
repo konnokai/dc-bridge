@@ -93,7 +93,7 @@ import {
   videoLinks,
 } from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
-import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, referencedMessage, warmMemberCache } from '../src/core/discord-context.mjs';
+import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, promptBody, referencedMessage, warmMemberCache } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked } from '../src/core/discord-quiet.mjs';
@@ -509,6 +509,22 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(stripBotMention(`<@${BOT}> 你好`, BOT) === '你好', '去掉 <@id>');
   ok(stripBotMention(`<@!${BOT}>   你好`, BOT) === '你好', '去掉 <@!id> 並收斂空白');
   ok(stripBotMention(`嗨 <@${BOT}> 你好`, BOT).replace(/\s+/g, ' ') === '嗨 你好', '只去 mention、不動其他內容');
+  ok(stripBotMention(`<@${BOT}> 穿嗎`, BOT, '@你') === '@你 穿嗎', '@bot 換成 @你，模型看得到自己被標在哪');
+  const otherMentions = {
+    mentions: {
+      users: new Map([['111', { id: '111', displayName: '奶油本人' }]]),
+      members: new Map([['111', { displayName: '奶油本人' }]]),
+    },
+  };
+  ok(promptBody({ content: `<@111> <@${BOT}> 穿嗎`, forwarded: '' }, otherMentions, BOT) === '@奶油本人 @你 穿嗎',
+    '批次內文保留 @你 的位置，不會只剩別人的名字');
+  ok(promptBody({ content: '看這個', forwarded: `[轉發] 以前 <@${BOT}> 叫我` }, otherMentions, BOT)
+    .replace(/\s+/g, ' ') === '看這個 [轉發] 以前 叫我', '轉發裡的 @bot 照舊刪掉，不寫成 @你');
+  ok(bridgeSource.includes('promptBody(parts, message, client.user.id)'),
+    '批次送給模型的是 promptBody 的內文');
+  ok((bridgeSource.match(/queueArchive\(archiveEntry\(message, flat\(resolveMentions\(parts\.text, message\), 1000\)\), parts\.text\)/g) ?? []).length === 3,
+    '三條歸檔路徑存換好名字的文字，雜訊判斷吃原文');
+  ok(bridgeSource.includes('worthArchiving(raw)'), '值不值得 embed 看原文，mention 還沒換名字');
 
   ok(isSkippedMessage('\\//hi', BOT), '\\// 開頭 → 跳過');
   ok(isSkippedMessage('//hi', BOT), '// 開頭 → 跳過');

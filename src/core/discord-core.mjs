@@ -918,10 +918,14 @@ export function shouldHandleGuildMessage({ mentionedUserIds, repliedUserId }, bo
   return repliedUserId !== null && repliedUserId !== undefined && String(repliedUserId) === bot;
 }
 
-/** 去掉訊息裡的 @bot，避免把 mention 原文送進模型。 */
-export function stripBotMention(content, botUserId) {
+/**
+ * 去掉訊息裡的 @bot，避免把 mention 原文送進模型。
+ * replacement 換掉 @bot 的位置；給模型看的內文傳 '@你'，刪光的話模型只看到 ★、
+ * 找不到自己被 @ 在哪，會把 ★ 當成橋接標錯人（2026-11-19 實際遇過）。
+ */
+export function stripBotMention(content, botUserId, replacement = ' ') {
   if (!/^\d+$/.test(String(botUserId))) throw new TypeError('botUserId 必須是數字字串');
-  return String(content ?? '').replace(new RegExp(`<@!?${botUserId}>`, 'g'), ' ').trim();
+  return String(content ?? '').replace(new RegExp(`<@!?${botUserId}>`, 'g'), replacement).trim();
 }
 
 /**
