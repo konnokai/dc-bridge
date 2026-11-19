@@ -13,6 +13,7 @@ description: Discord 媒體處理：語音訊息分類、行程級媒體佇列�
 - Alpha 保留策略：壓縮迴圈第一輪留 PNG（保 alpha），壓不進上限時改 JPEG 並在透明區鋪白底（避免深色字掉進黑底）；切換編碼時不降低長邊，避免截圖文字糊掉。有 alpha 的 1080p RGBA 截圖在 1280 長邊仍約 2.1MB PNG，但 JPEG 約 100KB，能進 1MB 上限。白底測試做過變異檢查（拿掉鋪白底就失敗）；伺服器 ffmpeg 7.1 實測 2.48MB RGBA -> 1280×720 JPEG 98,930 bytes，字幕清楚（2026-11-07）。相關回饋 df_mw65pyem53b0b6（2026-11-07）。
 - GIF 解析：`parseGif()`（`src/media-normalize.js`）直接掃描 GIF 區塊鏈，不呼叫 ffprobe；回傳 frames/durationMs/alpha。`planAnimation()` 固定取 6 格、版面查表（6→3×2），時間均勻重取樣，輸出 JPEG 單幀並附「动图 N 帧」說明。delay 全 0 的 GIF 以「幀數 × 100ms」估算時長。Discord 路徑的 `gifFrames` 固定寫 6（`src/core/discord-media.mjs`），不跟 config。
 - 連結預覽圖：`embedImages()`（`src/core/discord-media.mjs`）把訊息 embed 的 `image`／`thumbnail`（走 `proxyURL`）收成附件形狀交給 `collectImageAttachments`；Tenor／Giphy 的 GIF 就是這種。同一 embed 的 thumbnail 常是 image 的縮小版，只取一張避免重複下載。代理網址常無副檔名，先標成圖，下載後再認格式。批次與 `view_message` 都納入；批次在 flush 時讀 `entry.message.embeds`（Discord 後補 embed，messageCreate 當下常為空），不必拖慢批次。`media.maxCount` 對「一則訊息」與「整批」各算一次（不是只整批）。`view_message` 也讀 embed 圖。
+- 2026-11-19 起，`referenceRefsByUrl()` 也替 component／連結預覽圖與 X 貼文圖片建立生圖參考對照。X 貼文圖片接在訊息本身的圖片後，編號沿用完整貼文媒體清單（不是只計入下載成功的圖片）。相關路徑：`src/core/discord-media.mjs`、`src/discord-bridge.js`。
 - component embed／Components V2 的 media、敏感 flags、type 11 fallback、attachment alt 與 spoiler 見 [[discord-message-preview]]。
 
 相關：[[discord-video-subtitles]]、[[discord-message-preview]]。

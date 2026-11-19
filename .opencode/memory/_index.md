@@ -4,20 +4,25 @@
 
 ## Codex 與生圖
 
-- [[codex-imagegen-internals]] — `image_gen` 參數、GIF 選項、`generated_images` 路徑、`image_generation_animation` 在 0.166～0.170 的差異、生圖實際用的模型
+- [[codex-imagegen-internals]] — `image_gen` 參數、GIF feature 與 OAuth 限制、spritesheet + ffmpeg 替代方案、輸出路徑與模型
 
 ## 開發流程
 
 - [[gh-read-remote-file]] — `gh api … --jq .content` 在 PowerShell 解 base64 的正確寫法
 - [[dc-bridge-tests]] — 測試套件結構、輸出重定向到檔案再讀、preset patch 重生
 - [[discord-turn-gate]] — createTurnGate 的 ticket、DSH turn 配對、漏接 turn/start 補救與重連舊事件防護
-- [[discord-deploy]] — `npm ci`、文件排除、部署完成標記、修復流程與 DSH 重啟範圍
+- [[discord-deploy]] — `npm ci`、文件排除、部署標記與修復流程、遠端 checkout 衝突、Alloy 啟用、MCP／plugin 匯入圖與 DSH 重啟
 - [[discord-dsh-setup]] — setup-dsh 清理舊 bundle 時的共用 profile 副作用與實體目錄保護
 - [[discord-console-config]] — 控制台欄位白名單、即時生效、config.json 寫回與 provider 憑證端點安全
 - [[discord-agent-gaps-plan]] — PLAN_AGENT_GAPS 執行慣例：熱點檔案、三條線、新增 MCP 工具 9 處 checklist、完成條件
 - [[discord-dream-safety]] — Dream agent 早期誤觸原始碼的未提交改動與清理提醒（2026-11-07）
 - [[discord-upstream-sync]] — 上游對齊基準（b145a83）、空合併清 behind、安全批次吸收、固定決策
 - [[discord-hindsight-evaluation]] — Hindsight 不取代現有記憶的評估、長期歸檔限制與 oMLX／Qdrant 現況（2026-11-17）
+- [[graphify-query]] — `graphify query` 結果會截斷；用 `graphify explain` 導航，並以來源碼確認呼叫關係
+
+## 維運與觀測
+
+- [[discord-observability]] — Alloy 獨立 Compose 收集 PM2 log、Grafana `dc-bridge-ops` 可攜匯入檔、LogQL 與隱私界線（2026-11-19）
 
 ## Discord 橋接
 
@@ -31,7 +36,7 @@
 - [[discord-dsh-opencode-console]] — DSH 內建 `opencode-go` provider 與 OpenCode Console workspace 整合的差異（2026-11-18）
 - [[discord-message-preview]] — component embed、embed.author、完整 URL、component media、敏感 embed
 - [[discord-view-message]] — view_message 找修復 bot、連結路徑比對、bot 訊息可見性、每日摘要、跨頻道直讀（2026-11-07）
-- [[discord-media-handling]] — 語音訊息分類、行程級媒體佇列（2 個 ffmpeg）、view_message 預算、影片抽格時間戳、PNG sBIT 全丟與 alpha 鋪白底策略、連結預覽圖（embedImages）
+- [[discord-media-handling]] — 媒體分類與佇列、view_message 預算、影片抽格、PNG 修復、連結預覽／X 圖片生圖參考
 - [[discord-meme-plan]] — 自製表情包（meme）功能：規格、工具設計、opus 審查與修正；2026-11-11 全域共用設計、部署及驗證
 - [[discord-mention-names]] — mention 轉名字、回覆標記、id 不外洩
 - [[discord-memory]] — 群友記憶的名稱欄位（visibleName 依序取）、keying、互動次數與衍生側寫生命週期

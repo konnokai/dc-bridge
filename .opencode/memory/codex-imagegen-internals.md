@@ -48,6 +48,9 @@ GIF preview 權限，Codex OAuth 這條路目前沒開（openai/codex#59890、CL
 現在 `codexUsesChatGptAuth()` 會讀 `codex login status`（結果在 stderr），ChatGPT 登入時 `animated:true` 直接拒絕、
 不 spawn Codex。要 GIF 得改走 API key 的 Images API。
 
+替代方案曾實測可行但未接入：用靜態 2×2 spritesheet，裁成四格後以 ffmpeg 的 `palettegen`／`paletteuse`
+編成 4 幀、5 fps GIF。這是近似動圖，效果取決於模型分鏡是否對齊；目前依決定維持 OAuth GIF 直接拒絕（2026-11-19）。
+
 ## 模型與額度
 
 `dc-draw-image` 傳 `--ignore-user-config`，`~/.codex/config.toml` 的 `model` 被忽略；沒指定模型時

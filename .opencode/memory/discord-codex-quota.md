@@ -21,7 +21,7 @@ description: Codex（ChatGPT 方案）額度查詢、生圖守門、5 小時窗�
 
 ## 5 小時窗口重置 ping
 
-- `createCodexResetPinger()`：到 `resetsAt + 30s`（`CODEX_RESET_GRACE_MS`）後送一則 `test` 把新窗口打開，模型用最新的 Luna（`latestLunaModel()`，讀不到清單才退回 `gpt-6-luna`）、low reasoning、ephemeral、read-only、關 shell/unified_exec/view_image，逾時 90 秒。
+- `createCodexResetPinger()`：到 `resetsAt + 30s`（`CODEX_RESET_GRACE_MS`）後送一則 `test` 把新窗口打開；每次送出前解析一次最新 Luna（`latestLunaModel()`，讀不到清單才退回 `gpt-6-luna`），同一個模型值寫入 log 並傳給 `runPing({ model, signal })`。其餘參數是 low reasoning、ephemeral、read-only、關 shell/unified_exec/view_image，逾時 90 秒。
 - 狀態存 `state/discord-codex-reset.json`（`lastPingedResetAt`、`lastAttemptAt`、`lastPingError`）；橋接重啟不會對同一個 resetsAt 重送；失敗 15 分鐘（`CODEX_RESET_RETRY_MS`）後再試；每週額度用完（usedPercent ≥ 100）時不 ping；狀態檔讀寫失敗就停 ping。
 - 輪詢間隔取 `min(5 分鐘, 下次重置時間)`，至少 1 秒。
 

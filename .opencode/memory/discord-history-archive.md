@@ -7,10 +7,10 @@ description: Qdrant 語意歷史歸檔的資料範圍、設定、查詢與安全
 
 - `discord.historyArchive.enabled` 預設關閉。開啟前需填 `embedUrl`；預設 collection 是 `dc_history`，拒絕使用現有服務的 `personal_memory_v2`。oMLX 模型為 `bge-m3-mlx-fp16`，已驗證輸出 1024 維。
 - Qdrant collection 使用 1024 維 Cosine、int8 scalar quantization，原始向量與 HNSW 放磁碟；既有 collection 會檢查維度與距離。訊息 snowflake 超過 JavaScript 安全整數範圍，point id 用訊息 id 雜湊成穩定 UUID，重送／編輯可覆寫同一點。
-- 只收 guild 頻道的訊息；`//` 訊息、自己 `/blacklist` 退出者與其他 bot 不收，bot 自己的訊息另行收錄。短於 4 個有效字元的內容（移除提及、emoji、標點、連結後）不做 embedding。編輯用 upsert；刪除與批次刪除移除對應點。
+- 只收 guild 頻道的訊息；`//` 訊息、自己 `/blacklist` 退出者與其他 bot 不收，bot 自己的訊息另行收錄。短於 4 個有效字元的內容（從原文移除 mention、emoji、標點、連結後）不做 embedding；歸檔文字則先把 mention 換成名字，三條寫入路徑一致。編輯用 upsert；刪除與批次刪除移除對應點。
 - `recall_history` 是語意搜尋，和關鍵字 `search_history` 分開；只查目前頻道，查詢時再用 `canReadMessage` 過濾目前的封鎖／不理名單。部署版最低相似度是 0.55，取代初期設計的 0.62；結果帶 `#編號`，可交給 `view_message` 看完整訊息。它與 `read_history`、`search_history` 共用每回合 3 次配額，詳見 [[discord-history-quota]]。
 - `/forget` 會清除該使用者尚未送出的佇列項目、等待正在進行的 flush，再刪掉其本人發出的歸檔訊息。它不會刪除其他人提到他的訊息或 bot 回覆；刪除失敗須在回覆中明說。
-- 控制台「設定」只開放歸檔開關與保留天數。Qdrant／embedding endpoint、模型、collection 與 `apiKey` 留在 `config.json`，避免瀏覽器可改連線目標或接觸憑證。客戶端在啟動時建立，變更需重啟才生效。狀態卡顯示集合、近似點數（30 秒快取）、佇列、最後成功 flush、累計寫入與最近錯誤。
+- 控制台「設定」只開放歸檔開關與保留天數。`editableConfig()` 必須回傳 `historyArchive.enabled` 與 `retentionDays`；漏掉欄位會讓表單顯示預設關閉，下一次存其他設定時可能把歸檔關掉。Qdrant／embedding endpoint、模型、collection 與 `apiKey` 留在 `config.json`，避免瀏覽器可改連線目標或接觸憑證。客戶端在啟動時建立，變更需重啟才生效。狀態卡顯示集合、近似點數（30 秒快取）、佇列、最後成功 flush、累計寫入與最近錯誤。
 - 控制台「記憶」頁的歸檔卡可看最新訊息、按頻道篩選、語意搜尋及刪除；瀏覽每頁 20 則，頻道清單用 Qdrant facet，名稱從 Discord channel cache 補上。搜尋由 Enter／按鈕送出，未選頻道時可跨頻道；模型共用的 `search()` 預設仍限制目前頻道，只有控制台明確傳 `anyChannel` 才放寬。控制台搜尋取前 20 筆，不設相似度門檻。
 - 控制台會顯示所有歸檔頻道的原文；權限只有控制台 bearer token，沒有額外的頻道授權。畫面有明確提示。Qdrant 本身仍是所有介面可達且無認證，直接呼叫 Qdrant 不受控制台 token 保護。
 - Qdrant 1.19.1 的 scroll `order_by` 要用單一物件，且不能靠 `offset` 分頁（`next_page_offset` 為 null）。瀏覽游標使用 `{ before, skip }`：`start_from` 包含時間邊界，`must_not.has_id` 排除該時間已回傳的點；額外抓一筆判斷是否還有下一頁。`skip` 最多 500 個點；同一毫秒超過 500 筆時可能無法完整翻頁。每次 `ensure()` 都補送 `channelId`、`authorId`、`at` payload index；索引失敗不擋寫入，但瀏覽可能失敗。

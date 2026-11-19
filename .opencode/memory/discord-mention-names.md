@@ -6,7 +6,7 @@ description: 批次與歷史查詢中的 @/#/role mention 轉名字、回覆標�
 Discord 訊息裡的 mention 在送進模型前會換成名字，id 不外洩。
 
 - 轉換：`<@id>`、`<@!id>` → `@暱稱`，`<#id>` → `#頻道名`，`<@&id>` → `@身分組名`。
-- @bot 的那個在【新訊息】寫成 `@你`（`stripBotMention(…, '@你')`），不是刪掉。2026-11-19 實際遇過：訊息同時 @ 了別人與 bot，bot 的 mention 被刪光，模型只看到 ★ 和別人的名字，判斷「橋接標錯人」而跳過 ★。`【最近頻道訊息】` 與歷史查詢照常寫 bot 的名字（bot 自己講的話另外標「（你）」）。
+- 批次給模型的內文由 `promptBody()` 組成：本則訊息的 @bot 寫成 `@你`，避免只留下 ★ 和其他人的名字；轉發快照裡的 @bot 則刪掉，因為那是原作者舊訊息，不是轉發者在叫 bot。這只影響模型看到的內文；觸發判斷等仍用去掉 @bot 的 `fullText`。`【最近頻道訊息】` 與歷史查詢照常寫 bot 的名字（bot 自己講的話另外標「（你）」）。
 - 名字只從該則訊息的 `mentions` 取，不打 API；查不到寫 `@未知`／`#未知`，不把數字 id 留給模型。
 - `resolveMentions`（`src/core/discord-batch.mjs`）做轉換；名字會過 `defang`／`visibleName`，避免偽造 `★`、`【管理員】`。
 - 回覆：沒有引用內容時顯示 `↪回覆 X`；有引用內容時維持 `[引用 X：…]`。persona 規則：`↪回覆 X` 表示在回 X，不是在叫模型。
@@ -16,4 +16,4 @@ Discord 訊息裡的 mention 在送進模型前會換成名字，id 不外洩。
 - 黑話語料：歷史路徑改用 `resolveMentions(entry.content, entry)`；`maybeReact` 仍吃原始文字，避免影響表情關鍵字比對。
 - 重啟後名稱掉回全域名稱：bot 沒開 GuildMembers 意圖，`channel.messages.fetch()` 是 REST，回來的訊息沒有 `member`；`Message#member` 是 getter，查 `guild.members.cache`。新增 `warmMemberCache(guild, messages)`（`src/core/discord-context.mjs`）對快取缺的成員逐一 `guild.members.fetch(id)`（單一成員端點不需特權意圖）。現在跳過 bot／webhook；只有 Discord 回 10007（Unknown Member）或 10013（Unknown User）才記住「已離開」，其他錯誤下一批照樣重試。補抓路徑從只有【最近頻道訊息】擴到引用、`read_history`／`search_history`、`view_message`、`ignore_user`、每日頻道摘要；`fixMessages` 那條拿掉（全是 bot，本來就跳過）。每日摘要先篩選再補抓，不為 24 小時前、黑名單、不理名單的人打 API。沒 ★ 的批次標頭改成「這批沒有 ★（沒有人 @你或回覆你）」，叫名字算不算在叫它留給 persona，不跟它打架。
 
-相關：[[discord-message-preview]]、[[discord-history-quota]]。
+相關：[[discord-message-preview]]、[[discord-history-quota]]、[[discord-history-archive]]。
