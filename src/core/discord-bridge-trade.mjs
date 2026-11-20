@@ -1,10 +1,10 @@
 // 模擬股票：服務建立、結算、Bot 交易員與復盤排程。
 // 拆自 discord-bridge.js 的 main()；trade 相關的 let 由模組持有，
-// 控制台改設定走 applyConfig，agentTools 拿 tradeService／botActiveRun 走 getter。
+// 控制台改設定走 applyTradeConfig，agentTools 拿 tradeService／botActiveRun 走 getter。
 import { MessageFlags } from 'discord.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { splitDiscordMessage, requireMentionForChannel } from './discord-core.mjs';
+import { splitDiscordMessage } from './discord-core.mjs';
 import { findSymbol } from './trade-symbols.mjs';
 import {
   buildBotPrompt,
@@ -25,16 +25,12 @@ import { findSensitive, formatSensitiveHit } from './discord-security.mjs';
 export function createTradeRuntime({
   cfg,
   log,
-  api,
   client,
-  sessions,
-  ownerIds,
   agentSecrets,
   stripPublicLinks,
   STATE_DIR,
   botTokenSink,
   runBackgroundPrompt,
-  registerSlashCommands,
 }) {
   // 模擬股票：交易域獨立 SQLite；報價、結算與 Bot 排程都在 login 之後才啟動。
   let tradeDb = null;
@@ -421,28 +417,14 @@ export function createTradeRuntime({
 
   /** 控制台改 discord.trade 設定：重建 service 讓新費率／上限立刻生效。 */
   function applyTradeConfig(next) {
-  if (!next.trade.enabled) {
-    if (tradeDb) {
-      if (!tradeQuotes) tradeQuotes = createQuoteProvider({ log });
-      if (!tradeInstitutional) tradeInstitutional = createInstitutionalProvider({ log });
-      if (!tradeMaterial) tradeMaterial = createMaterialProvider({ log });
-      tradeService = createTradeService({
-        db: tradeDb,
-        config: next.trade,
-        quotes: tradeQuotes,
-        botId: client.user.id,
-        log,
-      });
-    } else {
-      tradeService = null;
-    }
-    stopTradeJobs();
-    if (tradeService) scheduleTradeJobs();
-    writeTradeLimits();
-  } else {
-    if (!tradeService) initTrade();
-    else {
-      try {
+    // 交易設定改了：用同一個 DB 重建 service，讓新費率／上限立刻生效；已建立的訂單
+    // 各自記著下單當時的費率，不會被新設定影響。關閉時保留 service（enabled=false）
+    // 讓已排隊的單繼續結算，只是不再接受新單。
+    if (!next.trade.enabled) {
+      if (tradeDb) {
+        if (!tradeQuotes) tradeQuotes = createQuoteProvider({ log });
+        if (!tradeInstitutional) tradeInstitutional = createInstitutionalProvider({ log });
+        if (!tradeMaterial) tradeMaterial = createMaterialProvider({ log });
         tradeService = createTradeService({
           db: tradeDb,
           config: next.trade,
@@ -450,13 +432,30 @@ export function createTradeRuntime({
           botId: client.user.id,
           log,
         });
-        writeTradeLimits();
-      } catch (error) {
+      } else {
         tradeService = null;
-        log(`模擬股票：套用新設定失敗：${error?.message ?? error}`);
       }
-    }
-    scheduleTradeJobs();
+      stopTradeJobs();
+      if (tradeService) scheduleTradeJobs();
+      writeTradeLimits();
+    } else {
+      if (!tradeService) initTrade();
+      else {
+        try {
+          tradeService = createTradeService({
+            db: tradeDb,
+            config: next.trade,
+            quotes: tradeQuotes,
+            botId: client.user.id,
+            log,
+          });
+          writeTradeLimits();
+        } catch (error) {
+          tradeService = null;
+          log(`模擬股票：套用新設定失敗：${error?.message ?? error}`);
+        }
+      }
+      scheduleTradeJobs();
   }
   }
 

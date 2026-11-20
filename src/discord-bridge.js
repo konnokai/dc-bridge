@@ -1840,16 +1840,12 @@ async function main() {
   const tradeRuntime = createTradeRuntime({
     cfg,
     log,
-    api,
     client,
-    sessions,
-    ownerIds,
     agentSecrets,
     stripPublicLinks,
     STATE_DIR,
     botTokenSink,
     runBackgroundPrompt,
-    registerSlashCommands,
   });
   const {
     initTrade,
@@ -1858,7 +1854,6 @@ async function main() {
     applyTradeConfig,
     forgetTradeAccount,
     getTradeService,
-    getBotActiveRun,
   } = tradeRuntime;
 
   client.once(Events.ClientReady, (ready) => {
@@ -2774,6 +2769,7 @@ async function main() {
             const tradeSvc = getTradeService();
             if (!tradeSvc) return { enabled: false, reason: '模擬股票沒有開啟或啟動失敗' };
             const data = await tradeSvc.overview();
+            // 設定檔只存 uid；控制台要看得懂是誰，這裡補顯示名稱。
             // 先查快取，再查 guild member／user 快取，都沒有才打一次 REST；同一個 uid 快取 10 分鐘。
             const nameOf = async (userId, guildId = '') => {
               const key = `${guildId}:${userId}`;
