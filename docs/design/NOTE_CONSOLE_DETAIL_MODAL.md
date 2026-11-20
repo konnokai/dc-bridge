@@ -1,6 +1,6 @@
 # 控制台放大彈窗（detail modal）
 
-> 狀態：**已實作**（branch `feat/knowledge-modal`，尚未 commit／部署）。
+> 狀態：**已實作**（2026-11 前端改成 Vite + Vue；`public/discord-console.html` 是產物，原始碼在 `console/src/`）。
 > 這份記的是設計與還沒做的取捨；使用者面向的說明在 `docs/guides/DISCORD.md`。
 
 ## 目的
@@ -58,9 +58,11 @@
 
 ## 相關位置
 
-- `public/discord-console.html`
+- `console/src/components/DetailModal.vue`
   - `.modal` / `.modal-card` / `.detail-image` / `.modal-head`（sticky）
-  - `openDetail()` / `closeDetail()` / `showKnowledgeModal()` / `openMemeDetail()` / `openOrderDetail()`
-  - `fetchMemeThumb()` / `loadMemeThumb()`
-- `src/discord-bridge.js`：控制台 `trade` handler 補 `accountName`
+  - 開啟、Esc／背景關閉、focus 回收
+- `console/src/store.js`：`openDetail()` / `closeDetail()` / `openMemeDetail()` / `fetchMemeThumb()`
+- `console/src/tabs/KnowledgeTab.vue`：`showDetail()`
+- `console/src/tabs/TradeTab.vue`：`openOrderDetail()`
+- `src/core/discord-bridge-console.mjs`：控制台 `trade` handler 補 `accountName`
 - `scripts/test-console-ui.mjs`：放大、Esc／背景關閉、刷新不換內容、梗圖 404、訂單 index、手機寬度

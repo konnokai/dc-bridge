@@ -100,7 +100,8 @@
 | --- | --- |
 | `dsh/agent-presets/` | preset 的權威源：`dc-chat`、`dc-chat-open`、`dc-learner`、`dc-trader` |
 | `plugins/` | DSH 插件：`dc-agent-presets`、`dsh-llm-hedge` |
-| `public/` | `discord-console.html`（控制台，預設 3110） |
+| `public/` | `discord-console.html`（控制台產物，預設 3110；由 `console/` 建置，不要手改） |
+| `console/` | 控制台前端原始碼（Vite + Vue）：`npm run build:console` 產出單一檔案 |
 | `assets/` | 圖片等資源；`ai-chan-sheets/` 是 AI 娘三視圖與設定圖 |
 | `docs/` | 全部文件，見 [README.md](README.md) |
 | `deploy/alloy/` | Loki 收集器（Alloy）的獨立 compose、設定與操作說明 |

@@ -1,1 +1,6 @@
 graphify-out/graph.json merge=graphify
+
+# 控制台原始碼與產物固定 LF。scripts/build-console.mjs --check 的指紋是算工作目錄
+# 內容的；沒固定換行的話，core.autocrlf 會讓新 clone／切分支後的指紋變掉。
+console/** text eol=lf
+public/discord-console.html text eol=lf

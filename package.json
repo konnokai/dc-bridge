@@ -13,6 +13,8 @@
     "start:discord": "node src/discord-bridge.js",
     "setup:discord": "node scripts/setup-dsh.mjs",
     "build:emojis": "node scripts/build-discord-emojis.mjs",
+    "build:console": "node scripts/build-console.mjs",
+    "dev:console": "vite --config console/vite.config.mjs",
     "test:discord": "node scripts/test-discord-all.mjs",
     "deploy:discord": "node scripts/deploy-discord.mjs",
     "test:discord-memory": "node scripts/test-discord-memory.mjs",
@@ -49,7 +51,11 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.11",
     "eslint-scope": "^9.1.2",
-    "espree": "^11.2.0"
+    "espree": "^11.2.0",
+    "vite": "^8.3.8",
+    "vite-plugin-singlefile": "^2.3.4",
+    "vue": "^3.5.45"
   }
 }
