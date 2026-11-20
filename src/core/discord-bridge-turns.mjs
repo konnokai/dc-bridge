@@ -2,7 +2,24 @@
 //
 // 這一段是「DSH 問問題／要審批 → 貼到頻道 → 等人回答 → 回覆 DSH」，加上事件流本身。
 // 只有它會碰 pending 這個 Map，所以搬出來仍然只有一個寫入者。
-import { canAnswerPending, describeToolCall, parseApprovalAnswer, questionAnswersFor, questionAudience, shouldAutoCompact } from './discord-core.mjs';
+import { canAnswerPending, describeToolCall, isChattyChannel, isSilentMessage, isSkippedMessage, parseApprovalAnswer, questionAnswersFor, questionAudience, requireMentionForChannel, shouldAutoCompact } from './discord-core.mjs';
+import { formatMemoryBlock, pruneStaleGuesses } from './discord-memory.mjs';
+import { formatNotesBlock, pruneNotes } from './discord-notes.mjs';
+import { formatKnowledgeBlock } from './discord-knowledge.mjs';
+import { memeHint } from './discord-memes.mjs';
+import { buildSlangHint, buildStyleHint, onceInSession } from './discord-slang.mjs';
+import { buildEmojiHint, buildEmojiIndex, labelEmojiTags, retrieveEmojis } from './discord-emoji.mjs';
+import { OPENING_HINT, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, messageParts, referencedMessage, replyTargetId, warmMemberCache } from './discord-context.mjs';
+import { formatActivityLine } from './discord-activity.mjs';
+import { formatBatch, formatParticipationHint, imageRefTag, isBotNamed, isMediaOnlyBatch, repliedName, resolveMentions, shouldYield, triggerUsers } from './discord-batch.mjs';
+import { formatFollowupDelay, formatFollowupPrompt, formatFollowupStatus } from './discord-followup.mjs';
+import { formatReactionInbox } from './discord-feedback.mjs';
+import { formatQuietUntil, isQuietBatchSkipped } from './discord-quiet.mjs';
+import { describeSkipped, embedImages, fetchDiscordMedia, prepareMediaBlock } from './discord-media.mjs';
+import { formatReloadSummary, peekReloadSummary, takeReloadSummary } from './discord-reload.mjs';
+
+const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
+const MEMORY_REFRESH_MS = 30 * 60 * 1000; // 同一會話隔這麼久再帶一次（DSH 可能已經壓縮掉了）
 
 export function createTurns(deps) {
   const {
@@ -31,7 +48,6 @@ export function createTurns(deps) {
     botTokenSink,
     clearAbandonedTurn,
     defaultDirect,
-    enqueuePrompt,
     epochOf,
     finishCeobeTurn,
     finishProgress,
@@ -88,6 +104,45 @@ export function createTurns(deps) {
     typingTimers,
     voicePerTurn,
     turnGate,
+    YIELD_GATE_SHADOW,
+    activity,
+    authorName,
+    client,
+    collectSlangSample,
+    embedPreview,
+    getEmojiCatalogs,
+    emojiUsage,
+    ensureSession,
+    flat,
+    followups,
+    ignoredUser,
+    knowledgeStore,
+    markMemoryDirty,
+    markNotesDirty,
+    memeStore,
+    memoryStore,
+    messageRefs,
+    notesStore,
+    reactionInbox,
+    reactionLastAt,
+    reactionTimes,
+    refreshEmojiCatalogs,
+    reloadStore,
+    saveReloadStore,
+    slangStore,
+    triggerStore,
+    withStickers,
+    memoryShown,
+    notesShown,
+    knowledgeShown,
+    slangShown,
+    primedKeys,
+    silentPending,
+    botLastByUser,
+    recentHumans,
+    offlineQueue,
+    offlineHintAt,
+    needsOpening,
   } = deps;
 
   async function cancelPendingEntry(entry) {
@@ -735,6 +790,628 @@ export function createTurns(deps) {
   // 事件流最後一幀的時間：控制台要看得到「事件流是不是還活著」。
   let lastFrameAt = 0;
 
+  // 這兩個只有訊息入口在用（一批帶幾個人的記憶、多久重帶一次）。
+
+  // 離線重試：這兩個會被重新賦值，所以由模組自己持有，不從 deps 解構。
+  let offlineTimer = null;
+  let offlineFlushing = false;
+
+  function scheduleOfflineFlush() {
+    if (offlineTimer) return;
+    offlineTimer = setTimeout(() => {
+      offlineTimer = null;
+      void flushOffline();
+    }, cfg.discord.queue.retryMs);
+    offlineTimer.unref?.();
+  }
+
+  function enqueueOffline(key, job) {
+    const items = offlineQueue.get(key) ?? [];
+    if (items.length >= cfg.discord.queue.max) {
+      items.shift();
+      log(`離線佇列已滿（${cfg.discord.queue.max}），丟棄最舊一則 (${key})`);
+    }
+    items.push(job);
+    offlineQueue.set(key, items);
+    log(`DSH 暫時不可用，訊息排隊 (${key})：${items.length} 條`);
+    const now = Date.now();
+    // 沒人叫 bot 的那批不提示：自由參與時，那等於對著整個頻道廣播系統狀態。
+    if (job.direct && (offlineHintAt.get(key) ?? 0) + 60_000 < now) {
+      offlineHintAt.set(key, now);
+      void sendLong(key, '⏳ 系統服務暫時不可用，訊息已排隊，恢復後會自動送出。').catch(() => {});
+    }
+    scheduleOfflineFlush();
+  }
+
+  async function flushOffline() {
+    if (offlineFlushing || offlineQueue.size === 0) return;
+    offlineFlushing = true;
+    try {
+      // 先用一個便宜的一元 RPC 探活；通了才把整批丟回去。
+      await api.callUnary('settings/describe', {});
+    } catch {
+      scheduleOfflineFlush();
+      return;
+    } finally {
+      offlineFlushing = false;
+    }
+    const pending = [...offlineQueue.entries()];
+    offlineQueue.clear();
+    let count = 0;
+    for (const [key, jobs] of pending) {
+      for (const job of jobs) {
+        count += 1;
+        enqueuePrompt(key, job);
+      }
+    }
+    log(`DSH 恢復，重新投遞 ${count} 條排隊訊息`);
+  }
+
+  function enqueuePrompt(key, job) {
+    turnGate.submit(key, job);
+  }
+
+  // 沒開 Message Content 意圖時，Discord 只會把 @bot 的訊息內容送來，所以強制走 @ 模式。
+  const requireMentionInGuild = () => cfg.discord.requireMentionInGuild || !cfg.discord.messageContentIntent;
+  // 單頻道覆寫優先；私聊一律算 direct。
+  const requireMentionFor = (key) => !key.startsWith('ch:') || requireMentionForChannel(cfg.discord, key.slice(3));
+
+  /**
+   * 一批訊息 → prompt 文字與圖片。附件、引用、上下文都在投遞時才抓：
+   * 這樣排在同一條佇列裡，順序不會亂；任何一項失敗只略過那一項。
+   */
+  async function buildBatchPrompt(key, job) {
+    const guild = Boolean(job.guildId);
+    const quietAt = quietUntil(key);
+    // 上一次送出的訊息收到的 reaction：只在這批 prompt 出現一次，不另外開回合。
+    const feedbackEntries = reactionInbox.peek(key);
+    const feedback = formatReactionInbox(
+      feedbackEntries,
+      (id) => messageRefs.register(key, id),
+    );
+    const entries = [];
+    const images = [];
+    const skipped = [];
+    for (const entry of job.entries) {
+      skipped.push(...(entry.media?.skipped ?? []));
+      const entryRef = messageRefs.register(key, entry.id, { authorId: entry.userId, at: entry.at });
+      // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
+      // 到這裡才讀 message.embeds：批次至少等過幾秒（有人 @ 時 8 秒），多半拿到了。沒有就只剩網址。
+      // 轉發的預覽圖在快照裡，一起算。
+      const attachments = entry.media?.accepted ?? [];
+      const items = cfg.discord.media.enabled
+        ? [...attachments, ...embedImages(messageParts(entry.message).embeds)]
+        : [];
+      for (const item of items.slice(cfg.discord.media.maxCount)) {
+        skipped.push({ name: item.name, reason: `一則訊息最多 ${cfg.discord.media.maxCount} 張` });
+      }
+      const imageTags = [];
+      for (const [index, item] of items.slice(0, cfg.discord.media.maxCount).entries()) {
+        if (images.length >= cfg.discord.media.maxCount) {
+          skipped.push({ name: item.name, reason: `一批最多 ${cfg.discord.media.maxCount} 張` });
+          continue;
+        }
+        // 附件與貼圖可以拿 #編號/張數 當生圖參考；連結預覽的圖不是那則訊息的附件，只標 [圖]。
+        // GIF 一律不標：參考圖拒收 GIF，標了只會讓模型白試一次。
+        const refTag = index < attachments.length && item.mime !== 'image/gif' && !item.mime?.startsWith('video/')
+          ? imageRefTag(entryRef, index + 1)
+          : '';
+        try {
+          const buffer = await fetchDiscordMedia(item.url, cfg.discord.media);
+          const prepared = await prepareMediaBlock(buffer, item.name, cfg.discord.media);
+          if (prepared.block) {
+            images.push(prepared.block);
+            // 影片的 note 要讓模型看到：它得知道只抽了前幾十秒、這是一張格子圖。
+            const note = item.mime?.startsWith('video/') ? flat(prepared.note, 80) : '';
+            imageTags.push(refTag || (note ? `[圖：${note}]` : '[圖]'));
+            if (prepared.note) log(`圖片 ${item.name}：${prepared.note}`);
+          } else {
+            skipped.push({ name: item.name, reason: prepared.error });
+          }
+        } catch (error) {
+          skipped.push({ name: item.name, reason: error?.message ?? String(error) });
+        }
+      }
+      // 編輯過的訊息，圖片張數或順序可能跟模型記得的不一樣；標一下，叫它不確定就再看一次。
+      if (entry.message?.editedAt && imageTags.some((tag) => tag.startsWith('[圖 #'))) imageTags.push('[已編輯]');
+      let quote = '';
+      try {
+        const referenced = await referencedMessage(entry.message);
+        // 引用是 REST 抓的，重啟後一樣要補成員才拿得到伺服器暱稱。
+        if (referenced) await warmMemberCache(job.channel?.guild, [referenced]);
+        // 引用是群友貼進來的公開內容，原作者退出或被封鎖時照樣帶；少了它模型看不懂在回什麼。
+        // 模型自己不理的人例外：他的話不進來，只留回覆對象的名字。
+        if (referenced && !ignoredUser(referenced.author?.id)
+          && (referenced.author?.bot || !isSkippedMessage(referenced.content, client.user.id))) {
+          quote = formatQuote({
+            ref: messageRefs.register(key, referenced.id, { authorId: referenced.author?.id, at: referenced.createdTimestamp }),
+            author: authorName(referenced),
+            content: labelEmojiTags(resolveMentions(withStickers(referenced), referenced), getEmojiCatalogs()),
+            hasImage: messageParts(referenced).hasImage,
+            silent: isSilentMessage(cfg.discord, referenced, client.user.id),
+          });
+        }
+      } catch (error) {
+        log(`讀取引用訊息失敗：${error?.message ?? error}`);
+      }
+      entries.push({
+        author: entry.author,
+        text: entry.text,
+        rawText: entry.rawText ?? entry.text,
+        direct: entry.direct,
+        // 已退出的人 @ 你／回覆你時照常進批次，讓 formatBatch 標「可以回」。
+        muted: cfg.discord.deny.self.includes(String(entry.userId)),
+        isOwner: entry.isOwner,
+        ref: entryRef,
+        quote,
+        preview: embedPreview(entry.message),
+        // 引用內容看不到時（抓不到或被回覆的那則沒內容），至少寫出在回誰。
+        replyName: quote ? '' : repliedName(entry.message),
+        imageTags,
+        hasImage: entry.hasImage,
+      });
+    }
+    if (images.length > 0) log(`附加 ${images.length} 張圖 (${key})`);
+
+    // 頻道上下文：預設模式每批都帶（模型看不到沒叫它的訊息）；自由參與只在會話的第一批帶，
+    // 之後每一則都已經進過會話，再帶只是重複燒 token。例外是 /blacklist 退出的人說話後，
+    // 下一批要再帶一次，才不會漏掉他們的訊息（silentPending）。
+    let context = '';
+    const wantContext = guild && cfg.discord.context.enabled && cfg.discord.context.messages > 0
+      && (requireMentionFor(key) || quietAt || !primedKeys.has(key));
+    if (wantContext) {
+      try {
+        // 從最後一則往前抓，再扣掉批次自己的訊息：@ 模式下兩則 @ 之間的閒聊也要看得到。
+        const batchIds = new Set(job.entries.map((entry) => entry.id));
+        const boundary = job.entries.at(-1).id;
+        const fetched = await job.channel.messages.fetch({
+          limit: Math.min(100, cfg.discord.context.messages + job.entries.length),
+          before: boundary,
+        });
+        // 有 // 標記的訊息不進上下文，也不收黑話樣本。bot 自己的訊息不套這個規則。
+        // 管理員封鎖與模型不理的人不進上下文；自己退出（deny.self）的人要進來，只是標成 ⊘、不回。
+        const history = [...fetched.values()].filter((entry) => !batchIds.has(entry.id)
+          && !cfg.discord.deny.users.includes(String(entry.author?.id ?? ''))
+          && !ignoredUser(entry.author?.id)
+          && (entry.author?.bot || !isSkippedMessage(entry.content, client.user.id)));
+        // 歷史訊息是用 REST 抓的，不帶 member；重啟後成員快取是空的，
+        // 名稱會掉回全域名稱。先補抓，之後 authorName 才拿得到伺服器暱稱。
+        await warmMemberCache(job.channel?.guild, history);
+        // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）；退出的人不收。
+        for (const entry of history) {
+          if (!entry.author?.bot && entry.content && !cfg.discord.deny.self.includes(String(entry.author.id))) {
+            collectSlangSample(entry, resolveMentions(entry.content, entry));
+          }
+        }
+        // 退出的人那則已經落在這次抓的範圍（比批次最後一則舊），算帶到了；還在後面的留給下一批。
+        const pending = silentPending.get(key);
+        if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);
+        context = formatRecentContext(
+          history.reverse().map((entry) => ({
+            ref: messageRefs.register(key, entry.id, { authorId: entry.author?.id, at: entry.createdTimestamp }),
+            author: authorName(entry),
+            content: labelEmojiTags(resolveMentions(withStickers(entry), entry), getEmojiCatalogs()),
+            replyName: repliedName(entry),
+            bot: entry.author?.id === client.user.id,
+            hasImage: messageParts(entry).hasImage,
+            silent: isSilentMessage(cfg.discord, entry, client.user.id),
+          })),
+          cfg.discord.context,
+        );
+      } catch (error) {
+        log(`讀取頻道上下文失敗：${error?.message ?? error}`);
+      }
+    }
+
+    // 群友記憶：這一批說話的人（有沒有 ★ 都算，★ 的排前面），最多 5 位；同一會話沒變就不重複帶。
+    let memory = '';
+    if (cfg.discord.memory.enabled && guild) {
+      const speakers = new Map();
+      for (const entry of [...job.entries].sort((a, b) => Number(b.direct) - Number(a.direct))) {
+        if (speakers.size < MEMORY_USERS_PER_BATCH && !speakers.has(entry.userId)) {
+          speakers.set(entry.userId, { userId: entry.userId, name: entry.author });
+        }
+      }
+      if (!memoryShown.has(key)) memoryShown.set(key, new Map());
+      if (pruneStaleGuesses(memoryStore) > 0) markMemoryDirty();
+      memory = formatMemoryBlock(memoryStore, {
+        users: [...speakers.values()],
+        maxChars: cfg.discord.memory.maxChars,
+        shown: memoryShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+        // 互動次數：回過他幾回合、最後一次多久前。沒有記憶的人也會多這一句。
+        relationOf: (userId) => {
+          const stats = triggerStore.users?.[userId];
+          if (!stats || !stats.count) return null;
+          const days = stats.lastAt > 0 ? Math.floor((Date.now() - stats.lastAt) / 86_400_000) : null;
+          return {
+            text: `你回過他 ${stats.count} 回合`
+              + `${days === null ? '' : `，最後一次 ${days < 1 ? '今天' : `${days} 天前`}`}`,
+            at: stats.lastAt || Date.now(),
+          };
+        },
+      });
+    }
+
+    // 頻道筆記：最近幾條；同一會話帶過、沒變的不重複帶。
+    let notesHint = '';
+    if (cfg.discord.notes.enabled && guild) {
+      if (pruneNotes(notesStore) > 0) markNotesDirty();
+      if (!notesShown.has(key)) notesShown.set(key, new Map());
+      notesHint = formatNotesBlock(notesStore, {
+        channelId: job.channel.id,
+        injectMax: cfg.discord.notes.injectMax,
+        maxChars: cfg.discord.notes.maxChars,
+        shown: notesShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+      });
+    }
+
+    // 已確認的黑話與頻道風格：只有管理員在控制台按過「確認」的才會進來；同一會話帶過的不重複帶。
+    // 黑話全部伺服器共用，這批訊息講到的詞優先。
+    let slangHint = '';
+    let styleHint = '';
+    if (cfg.discord.slang.enabled && guild) {
+      if (!slangShown.has(key)) slangShown.set(key, new Map());
+      slangHint = buildSlangHint(slangStore, {
+        text: entries.map((entry) => `${entry.rawText ?? entry.text}\n${entry.quote}`).join('\n'),
+        max: cfg.discord.slang.injectMax,
+        maxChars: cfg.discord.slang.maxChars,
+        shown: slangShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+      });
+      styleHint = buildStyleHint(slangStore, {
+        channelId: job.channel.id,
+        shown: slangShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+      });
+    }
+
+    // 群知識：管理員確認過的長期資料。關鍵字命中或 always 才帶；工具用的在生圖那邊另外附。
+    let knowledgeHint = '';
+    if (cfg.discord.knowledge.enabled && guild) {
+      if (!knowledgeShown.has(key)) knowledgeShown.set(key, new Map());
+      knowledgeHint = formatKnowledgeBlock(knowledgeStore, {
+        guildId: job.guildId,
+        channelId: job.channel.id,
+        text: entries.map((entry) => `${entry.rawText ?? entry.text}\n${entry.quote}`).join('\n'),
+        shown: knowledgeShown.get(key),
+        refreshMs: MEMORY_REFRESH_MS,
+        maxChars: cfg.discord.knowledge.maxChars,
+        guildNameOf: (guildId) => client.guilds.cache.get(guildId)?.name ?? '',
+      });
+    }
+
+    // 表情：本伺服器前 8 個＋跨伺服器前 4 個，加上本伺服器其餘表情的情緒索引。
+    // 兩段各自去重（同會話帶過、沒變就不重帶），索引才不會被常用表情的排序拖著每批重送。
+    let emojiHint = '';
+    if (cfg.discord.emoji.enabled && guild) {
+      if (!emojiShown.has(key)) emojiShown.set(key, new Map());
+      const shown = emojiShown.get(key);
+      const hintText = buildEmojiHint(getEmojiCatalogs(), {
+        guildId: job.guildId,
+        usage: emojiUsage,
+        maxChars: cfg.discord.emoji.maxChars,
+      });
+      const indexText = buildEmojiIndex(getEmojiCatalogs(), {
+        guildId: job.guildId,
+        // 從常用表情的文字反推名字，索引不重複列；格式改了這裡要跟著改。
+        exclude: new Set([...hintText.matchAll(/^- (.+?)：/gm)].map((match) => match[1])),
+      });
+      emojiHint = [
+        onceInSession(shown, 'emoji', hintText, Date.now(), MEMORY_REFRESH_MS),
+        onceInSession(shown, 'emoji-index', indexText, Date.now(), MEMORY_REFRESH_MS),
+      ].filter(Boolean).join('\n');
+    }
+
+    // 梗圖：依使用次數取前幾張（所有伺服器共用），只帶名稱與使用情境（模型不會自己想到去搜）。
+    // 同一會話沒變就不重帶；清單變了（存了新的、用次數改了排序）才會再帶一次。
+    let memeHintText = '';
+    if (cfg.discord.memes.enabled && guild) {
+      if (!emojiShown.has(key)) emojiShown.set(key, new Map());
+      memeHintText = onceInSession(emojiShown.get(key), 'meme',
+        memeHint(memeStore, { max: cfg.discord.memes.max }), Date.now(), MEMORY_REFRESH_MS);
+    }
+
+    // 回合太長、壓住的訊息超過上限時，最舊的閒聊被丟掉了；讓模型知道可以自己去翻。
+    const dropped = job.dropped ? `\n（模型回合期間訊息太多，略過了較早的 ${job.dropped} 則；需要的話用 read_history 看）` : '';
+    // 名單每批重算：模型會把舊 prompt 或壓縮摘要裡的 ⊘ 當成現在，這一行負責校正。
+    // 只列這個伺服器的成員，名字取法跟【最近頻道訊息】一致，模型才對得上。
+    // 這批標 ★ 的退出者要從 ⊘ 名單移出，不然模型會同時看到「只看不回」和「可以回」。
+    // 用 id 比對：合批期間改暱稱時名字會對不上，兩份名單就又同時出現。
+    const starredIds = new Set(job.entries
+      .filter((entry) => entry.direct && cfg.discord.deny.self.includes(String(entry.userId)))
+      .map((entry) => String(entry.userId)));
+    const blacklistStatus = guild
+      ? formatBlacklistStatus(
+        guildBlacklistNames(cfg.discord.deny.self.filter((id) => !starredIds.has(String(id))), job.channel.guild),
+        { stars: guildBlacklistNames([...starredIds], job.channel.guild) },
+      )
+      : '';
+    const batch = formatBatch(entries, { guild }) + dropped + describeSkipped(skipped);
+    // chatty 頻道不看發言比例：連數字都不給，模型才不會自己算「講太多了先不接」。
+    const chatty = isChattyChannel(cfg.discord, job.channel.id);
+    const time = [
+      formatTimeContext({ messageAt: job.entries[0].at }),
+      quietAt ? `（你設了安靜到 ${formatQuietUntil(quietAt)}；★ 只按 reaction，不送文字）` : '',
+      chatty ? '' : formatActivityLine(activity.stats(key)),
+    ].filter(Boolean).join('\n');
+    return {
+      text: [feedback, context, slangHint, styleHint, knowledgeHint, notesHint, memory, emojiHint, memeHintText, formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled }), blacklistStatus, batch, time].filter(Boolean).join('\n'),
+      images,
+      feedbackEntries,
+    };
+  }
+
+  /** bot 回給 T 之後，還有沒有回過別人。 */
+  function botRepliedOthersAfter(key, userId, targetId) {
+    const perUser = botLastByUser.get(key);
+    if (!perUser || !targetId) return false;
+    let target;
+    try { target = BigInt(targetId); } catch { return false; }
+    for (const [otherId, record] of perUser) {
+      if (String(otherId) === String(userId)) continue;
+      try {
+        if (record.ids.some((id) => BigInt(id) > target)) return true;
+      } catch { /* 非數字 id 略過 */ }
+    }
+    return false;
+  }
+
+  /** 讓位閘門：T 回覆 bot 回給他的那一則，中間有人插話，而且 bot 也回過插話的人。 */
+  function yieldGateDecision(key, job) {
+    const last = job.entries.at(-1);
+    const userId = String(last?.userId ?? '');
+    const batch = job.entries.map((entry) => ({
+      id: String(entry.id ?? ''),
+      userId: String(entry.userId ?? ''),
+    }));
+    // 只看原始文字：text 可能含表情目錄描述，描述裡剛好有「肥魚」不該算叫名字。
+    const named = job.entries.some((entry) => isBotNamed(entry.rawText));
+    // 同批還有別人 @bot：那一則不能被一起丟掉。
+    const othersStar = job.entries.some((entry) => entry.direct && String(entry.userId) !== userId);
+    const replyToId = replyTargetId(last?.message) ?? '';
+    return shouldYield({
+      botLast: botLastByUser.get(key)?.get(userId) ?? null,
+      recent: recentHumans.get(key) ?? [],
+      batch,
+      // 只認「回覆 bot 那一則」；轉發、討論串起點與單純接話都不算。
+      replyToId,
+      named,
+      othersStar,
+      botAfter: botRepliedOthersAfter(key, userId, replyToId),
+    });
+  }
+
+  /** 影子模式的 log 要能和 session log 對照：只記 id，不記內文。 */
+  function yieldLogDetail(key, job) {
+    const lastEntry = job.entries.at(-1);
+    const userId = String(lastEntry?.userId ?? '');
+    const target = botLastByUser.get(key)?.get(userId) ?? null;
+    const replyToId = replyTargetId(lastEntry?.message) ?? '';
+    const othersStar = job.entries.filter((entry) => entry.direct && String(entry.userId) !== userId).length;
+    const recent = (recentHumans.get(key) ?? []).slice(-6).map((entry) => `${entry.id}:${entry.authorId}`).join(',');
+    return ` bot=${target?.ids?.join('/') || '-'} reply=${replyToId || '-'} botAfter=${botRepliedOthersAfter(key, userId, replyToId) ? 1 : 0} others★=${othersStar} T=${userId || '-'} batch=${lastEntry?.id || '-'} recent=${recent || '-'}`;
+  }
+
+  /** 跳過一批但不讓它消失：下一批的【最近頻道訊息】會把它帶進來。 */
+  function skipSilently(key, job, reason) {
+    primedKeys.delete(key);
+    const lastId = job.entries.at(-1)?.id;
+    if (lastId) silentPending.set(key, lastId);
+    log(`${reason} ${key}（${job.entries.length} 則）`);
+  }
+
+  /** @returns 有沒有排出一個模型回合（沒有就不會有 turn/end，閘門要自己放行） */
+  async function deliverPrompt(key, job, ticket) {
+    const { epoch } = job;
+    const chatty = isChattyChannel(cfg.discord, job.channel?.id);
+    const batchMeta = {
+      direct: Boolean(job.direct),
+      named: job.entries.some((entry) => isBotNamed(entry.rawText)),
+      chatty,
+      mediaOnly: isMediaOnlyBatch(job.entries),
+      yielded: false,
+      merged: job.merged ?? 0,
+      internal: Boolean(job.system || job.reminder || job.followup),
+      ceobe: job.ceobe ?? null,
+    };
+    if (epoch !== epochOf(key)) {
+      log(`排隊期間會話已重置，丟棄 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
+      return false;
+    }
+    // 批次排隊期間才設的安靜也要生效：沒叫 bot 的不進模型，省下這一輪。
+    // 背景生圖完成是系統訊息，不能因為頻道剛好安靜就把圖丟掉。
+    if (isQuietBatchSkipped({ direct: job.direct, quietUntil: quietUntil(key), system: Boolean(job.system) })) {
+      // 回訪排隊期間才設的安靜：放回去，安靜結束後再送（額度已算過，不重扣）。
+      if (job.followup) followups.restore(job.followup);
+      log(job.followup
+        ? `安靜期間延後回訪 ${key}`
+        : `安靜期間丟棄 ${key}（${job.entries.length} 則，沒叫 bot）`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'quiet', job });
+      return false;
+    }
+    // 讓位閘門所有頻道都跑（收窄成「回覆 bot 那一則」）；純媒體閘門只給 chatty。
+    // 兩個都先影子模式只記 log，觀察後再真的擋。
+    const gateTurn = !job.followup && !job.reminder && !job.system;
+    const chattyTurn = chatty && !job.direct && gateTurn;
+    const yieldDecision = gateTurn && yieldGateDecision(key, job);
+    batchMeta.yielded = Boolean(yieldDecision);
+    if (yieldDecision) {
+      if (YIELD_GATE_SHADOW) log(`讓位（影子，不擋）${key}（${job.entries.length} 則）${yieldLogDetail(key, job)}`);
+      else {
+        skipSilently(key, job, '讓位跳過');
+        writeTurn(key, batchMeta, 'skipped', { reason: 'yield', job });
+        return false;
+      }
+    }
+    if (chattyTurn && batchMeta.mediaOnly) {
+      if (YIELD_GATE_SHADOW) log(`純媒體（影子，不擋）${key}（${job.entries.length} 則） batch=${job.entries.at(-1)?.id || '-'}`);
+      else {
+        skipSilently(key, job, '純媒體跳過');
+        writeTurn(key, batchMeta, 'skipped', { reason: 'media-only', job });
+        return false;
+      }
+    }
+    const sessionId = await ensureSession(key);
+    if (epoch !== epochOf(key)) {
+      log(`投遞前會話已重置，丟棄 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
+      return false;
+    }
+    if (job.direct) startTyping(key, job.channel);
+
+    const prompt = job.text
+      ? { text: job.text, images: [], feedbackEntries: [] }
+      : job.reminder
+        ? { text: job.reminder, images: [], feedbackEntries: [] }
+        : job.followup
+          ? {
+            // 回訪沒有【新訊息】，只有這幾行：先校正黑名單，再給回訪提示。
+            // 少了黑名單，模型會拿舊 prompt 的名單去 @ 已經退出的人。
+            // 回訪可能隔好幾天，沒有【現在】模型就判斷不出「比賽是不是今天」。
+            text: [
+              job.channel?.guild ? formatBlacklistStatus(guildBlacklistNames(cfg.discord.deny.self, job.channel.guild)) : '',
+              formatFollowupPrompt(job.followup, { openTopic: isChattyChannel(cfg.discord, job.channel?.id) }),
+              formatTimeContext(),
+            ].filter(Boolean).join('\n'),
+            images: [],
+            feedbackEntries: [],
+          }
+          : await buildBatchPrompt(key, job);
+    if (epoch !== epochOf(key)) {
+      log(`整理批次期間會話已重置，丟棄 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
+      return false;
+    }
+
+    // 令牌由 DSH 外掛自動帶入，不再寫進 prompt：模型看不到，被注入也抄不走。
+    // 每輪還是要提醒一次「文字不會自動送出」，壓縮過上下文之後也不能忘。
+    const sendHint = '【發送】要說話就呼叫 send_message，想回覆某則就加 reply_to=#編號。token 由系統自動帶入，不要自己填。不呼叫就是這次不說話；直接輸出文字不會送出。';
+    // 換 system prompt 後的第一次發言：先把上一段對話的記憶放在最前面。
+    const reload = peekReloadSummary(reloadStore, key);
+    // 新會話的第一批，而且這批真的有人叫 bot（★）：給一句「先看話題接不接得上」。
+    // 不要求它一定要說話；沒 ★ 的批次連提示都不帶，避免自由參與頻道被催著開口。
+    // 只看「是不是新會話」：安靜結束也會清掉 primedKeys（為了重帶上下文），
+    // 拿它判斷開場會在每次安靜後再叫模型主動說話一次。
+    const opening = needsOpening.has(key) && job.direct ? `\n${OPENING_HINT}` : '';
+    // 回訪清單只給「會說話的回合」：NO_TOOL 提醒與系統訊息不需要，多一行只是雜訊。
+    const schedule = job.reminder || job.system ? '' : formatFollowupStatus(followups.list(key));
+    const text = `${reload ? `${formatReloadSummary(reload)}\n` : ''}${prompt.text}${opening}\n${schedule ? `${schedule}\n` : ''}${sendHint}`;
+    // 先排進去：這一批的 turn/start 可能比 prompt 的回應更早到。沒產生回合時再拿掉。
+    const queued = pendingDirect.get(key) ?? [];
+    const queuedBatch = { direct: job.direct, ticket, meta: batchMeta };
+    queued.push(queuedBatch);
+    pendingDirect.set(key, queued);
+    const users = triggerUsers(job.entries);
+    const queuedUsers = pendingUsers.get(key) ?? [];
+    queuedUsers.push(users);
+    pendingUsers.set(key, queuedUsers);
+    const directMessages = job.entries
+      .filter((entry) => entry.direct)
+      .map((entry) => ({ userId: entry.userId, id: entry.id }));
+    const queuedMessages = pendingDirectMessages.get(key) ?? [];
+    queuedMessages.push(directMessages);
+    pendingDirectMessages.set(key, queuedMessages);
+    const lastMessageId = job.entries.at(-1)?.id ?? '';
+    const queuedLast = pendingLastMessages.get(key) ?? [];
+    const lastEntry = { id: lastMessageId };
+    queuedLast.push(lastEntry);
+    pendingLastMessages.set(key, queuedLast);
+    const unqueue = () => {
+      const index = queued.lastIndexOf(queuedBatch);
+      if (index >= 0) queued.splice(index, 1);
+      const userIndex = queuedUsers.lastIndexOf(users);
+      if (userIndex >= 0) queuedUsers.splice(userIndex, 1);
+      const messageIndex = queuedMessages.lastIndexOf(directMessages);
+      if (messageIndex >= 0) queuedMessages.splice(messageIndex, 1);
+      const lastIndex = queuedLast.lastIndexOf(lastEntry);
+      if (lastIndex >= 0) queuedLast.splice(lastIndex, 1);
+    };
+    let accepted;
+    try {
+      accepted = await api.sessions.prompt({
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text }, ...prompt.images],
+      });
+    } catch (error) {
+      unqueue();
+      throw error;
+    }
+    if (!accepted.result?.ok) {
+      unqueue();
+      stopTyping(key);
+      const error = accepted.result?.error;
+      throw new Error(`${error?.code ?? '未知錯誤'}${error?.message ? `：${error.message}` : ''}`);
+    }
+    if (accepted.result.value?.command) {
+      // DSH 把它當斜線命令吃掉，不會開回合；放掉這一筆，免得閘門等到 5 分鐘保險絲。
+      unqueue();
+      stopTyping(key);
+      log(`DSH 把批次當成斜線命令，沒有開回合 (${key})`);
+      writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
+      return false;
+    }
+    // 還有「只當背景」的訊息沒被上下文涵蓋時不要標記，下一批會再重帶一次。
+    // 純系統訊息（例如重啟後的【生圖完成】）沒有批次，也不能算這個會話已經帶過上下文。
+    if (!silentPending.has(key) && (job.entries?.length ?? 0) > 0) primedKeys.add(key);
+    // 第一批 prompt 真的進模型了才算用掉；送失敗不算。
+    // 第一批沒 ★（沒帶開場）也一樣用掉：開場只給新會話的第一批，不留到後面的 ★ 批次。
+    needsOpening.delete(key);
+    // prompt 真的進 DSH 了才用掉交接摘要；送失敗時下一則還會再帶一次。
+    if (reload && takeReloadSummary(reloadStore, key)) {
+      saveReloadStore();
+      log(`帶入交接摘要 ${key}（${reload.text.length} 字）`);
+    }
+    // prompt 真的進 DSH 了，反應區塊才算送達；失敗重試時還會再帶一次。
+    reactionInbox.clear(key, prompt.feedbackEntries);
+    log(job.reminder
+      ? `已投遞提醒 ${key}`
+      : job.followup
+        ? `已投遞回訪 ${key}（${formatFollowupDelay(job.followup.minutes)}）`
+        : `已投遞 ${key}（${job.entries.length} 則${job.direct ? '，有人叫 bot' : ''}${job.dropped ? `，略過 ${job.dropped} 則` : ''}）`);
+    if (job.direct && cfg.discord.ackMessage) await sendLong(key, cfg.discord.ackMessage).catch(() => {});
+    return true;
+  }
+
+  async function maybeReact(message, key, text) {
+    const conf = cfg.discord.reactions;
+    if (!conf.enabled || !message.guildId) return false;
+    if (/^[!/]/.test(text)) return false;
+    // 有圖片（附件、轉發快照、連結預覽或 component media）的訊息不自動按：
+    // 戰績圖、截圖、梗圖先交給模型判斷，避免只憑文字亂按。
+    const parts = messageParts(message);
+    if (parts.hasImage || embedImages(parts.embeds).length > 0
+      || parts.embeds.some(embedIsSensitive)) return false;
+
+    const now = Date.now();
+    if ((reactionLastAt.get(key) ?? 0) + conf.cooldownMs > now) return false;
+    while (reactionTimes.length > 0 && now - reactionTimes[0] > 3_600_000) reactionTimes.shift();
+    if (reactionTimes.length >= conf.maxPerHour) return false;
+
+    refreshEmojiCatalogs();
+    const candidates = retrieveEmojis(getEmojiCatalogs(), { guildId: message.guildId, text, k: 5, maxChars: 600 });
+    const best = candidates
+      .filter((entry) => (entry.keywordScore ?? 0) >= conf.minKeywordScore)
+      .sort((a, b) => (b.keywordScore ?? 0) - (a.keywordScore ?? 0))[0];
+    if (!best) return false;
+    if (Math.random() > conf.probability) return false;
+
+    try {
+      await message.react(`<${best.animated ? 'a' : ''}:${best.name}:${best.id}>`);
+      reactionTimes.push(now);
+      reactionLastAt.set(key, now);
+      log(`加了 reaction ${best.name}（${key}，score ${best.keywordScore}）`);
+      return true;
+    } catch (error) {
+      // 最常見：bot 沒有 Add Reactions 權限（或頻道權限覆蓋）。
+      log(`reaction 失敗（${key}）：${error?.message ?? error}`);
+      return false;
+    }
+  }
+
   return {
     lastFrameAt: () => lastFrameAt,
     cancelPendingEntry,
@@ -749,5 +1426,12 @@ export function createTurns(deps) {
     handleSessionEvent,
     handleFrame,
     pumpEvents,
+    enqueueOffline,
+    flushOffline,
+    enqueuePrompt,
+    requireMentionInGuild,
+    requireMentionFor,
+    deliverPrompt,
+    maybeReact,
   };
 }

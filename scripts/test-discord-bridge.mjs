@@ -5592,6 +5592,84 @@ console.log('## TTFT 計時器');
   }
 }
 
+console.log('## 訊息入口');
+{
+  // 行為測試：離線佇列真的有上限、真的會重投；單頻道 @ 規則走的是同一個函式。
+  const build = (overrides = {}) => {
+    const sent = [];
+    const submitted = [];
+    const logs = [];
+    const deps = {
+      cfg: {
+        discord: {
+          queue: { max: 2, retryMs: 60_000 },
+          requireMentionInGuild: true,
+          requireMentionInChannel: { 555: false },
+          messageContentIntent: true,
+        },
+      },
+      log: (message) => logs.push(String(message)),
+      sendLong: async (key, text) => { sent.push({ key, text }); },
+      api: { callUnary: async () => ({}) },
+      turnGate: { submit: (key, job) => submitted.push({ key, job }) },
+      offlineQueue: new Map(),
+      offlineHintAt: new Map(),
+      ...overrides,
+    };
+    return { turns: createTurns(deps), deps, sent, submitted, logs };
+  };
+
+  {
+    const { turns, deps, logs } = build();
+    turns.enqueueOffline('ch:1', { direct: false, id: 'a' });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'b' });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'c' });
+    const kept = deps.offlineQueue.get('ch:1') ?? [];
+    ok(kept.length === 2 && kept.map((job) => job.id).join(',') === 'b,c',
+      '離線佇列：超過上限丟最舊一則');
+    ok(logs.some((line) => line.includes('離線佇列已滿')), '離線佇列：滿了要記 log');
+  }
+
+  {
+    const { turns, sent } = build();
+    turns.enqueueOffline('ch:1', { direct: true, id: 'a' });
+    turns.enqueueOffline('ch:1', { direct: true, id: 'b' });
+    ok(sent.length === 1 && sent[0].text.includes('排隊'), '離線佇列：直接叫 bot 的批次才提示，而且 60 秒只提示一次');
+  }
+
+  {
+    const { turns, submitted } = build();
+    turns.enqueueOffline('ch:1', { direct: false, id: 'a' });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'b' });
+    await turns.flushOffline();
+    ok(submitted.length === 2, '離線佇列：DSH 恢復後把排隊的訊息重投，一則一次');
+    ok(submitted[0].job.id === 'a' && submitted[1].job.id === 'b', '離線佇列：重投照原本順序');
+  }
+
+  {
+    const { turns, deps } = build({ api: { callUnary: async () => { throw new Error('DSH 掛了'); } } });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'a' });
+    await turns.flushOffline();
+    ok((deps.offlineQueue.get('ch:1') ?? []).length === 1, '離線佇列：探活失敗時保留佇列，等下一次排程');
+  }
+
+  {
+    const { turns } = build();
+    ok(turns.requireMentionInGuild() === true, '單頻道規則：guild 預設要 @bot');
+    ok(turns.requireMentionFor('dm:9') === true, '單頻道規則：私聊不套頻道覆寫（一律回 true，呼叫端另有 DM 分支）');
+    ok(turns.requireMentionFor('ch:555') === false, '單頻道規則：頻道覆寫關掉就自由參與');
+    ok(turns.requireMentionFor('ch:777') === true, '單頻道規則：沒有覆寫就跟著 guild 預設');
+  }
+
+  {
+    const { turns } = build({
+      cfg: { discord: { queue: { max: 2, retryMs: 60_000 }, requireMentionInGuild: false, requireMentionInChannel: {}, messageContentIntent: false } },
+    });
+    ok(turns.requireMentionInGuild() === true, '單頻道規則：沒開 Message Content 意圖時強制 @bot');
+    ok(turns.requireMentionFor('ch:777') === true, '單頻道規則：沒開意圖時頻道覆寫也不能關掉 @');
+  }
+}
+
 console.log('## 檔案 store');
 {
   // 行為測試：真的建一個 store、真的觸發存檔路徑，不是檢查原始碼有沒有那行字。

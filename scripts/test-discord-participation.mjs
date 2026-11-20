@@ -86,7 +86,13 @@ console.log('## 5. 回訪的每日額度（chatty 跟一般一樣）');
 
 console.log('## 6. 橋接有接上');
 {
-  const bridge = fs.readFileSync(path.resolve('src/discord-bridge.js'), 'utf8');
+  // 拆檔後 buildBatchPrompt 在 src/core/discord-bridge-*.mjs，所以讀入口加模組的合併文字。
+  const bridge = [
+    path.resolve('src/discord-bridge.js'),
+    ...fs.readdirSync(path.resolve('src/core'))
+      .filter((name) => /^discord-bridge-.+\.mjs$/.test(name)).sort()
+      .map((name) => path.resolve('src/core', name)),
+  ].map((file) => fs.readFileSync(file, 'utf8')).join('\n');
   ok(bridge.includes('formatParticipationHint(chatty, { followup: cfg.discord.followup.enabled })'), '批次 prompt 會帶【參與度】');
   ok(/chatty \? '' : formatActivityLine\(activity\.stats\(key\)\)/.test(bridge), 'chatty 頻道不印發言頻率');
   ok(bridge.includes('shouldYield({'), '讓位閘門有接上');
