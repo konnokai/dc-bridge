@@ -75,6 +75,7 @@
 | `discord-bridge-agent-tools.mjs` | 智能體工具：`agentHandlers`／`apiHandlers`、`createAgentSender` 接線與生圖工作 handler |
 | `discord-bridge-background.mjs` | 背景工作：黑話學習、小刻食堂輪詢、回訪排程、每日摘要與群友側寫、後台提問與背景會話 |
 | `discord-bridge-trade.mjs` | 模擬股票：服務建立、結算、Bot 交易員與復盤排程；控制台改設定走 `applyTradeConfig` |
+| `discord-bridge-inbound.mjs` | Discord 入口事件：訊息、reaction、typing 與 slash 命令的准入分派 |
 
 ### 共用工具
 
