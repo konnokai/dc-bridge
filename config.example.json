@@ -138,6 +138,10 @@
     "followup": {
       "enabled": false
     },
+    "ceobe": {
+      "enabled": false,
+      "channels": {}
+    },
     "sandbox": {
       "enabled": false,
       "channels": [],

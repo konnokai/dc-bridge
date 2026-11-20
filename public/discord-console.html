@@ -149,6 +149,13 @@
   .provider-key { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 2fr) auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
   .provider-key:first-child { border-top: 0; }
   @media (max-width: 720px) { .provider-key { grid-template-columns: 1fr; } }
+  /* 小刻食堂：一個頻道一張小卡；來源清單可摺疊，桌機兩欄、手機一欄。 */
+  .ceobe-target { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+  .ceobe-target .row { flex-wrap: wrap; }
+  .ceobe-channel { min-width: 200px; flex: 1; }
+  .ceobe-source-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 10px; max-height: 180px; overflow: auto; padding: 6px 0; }
+  .ceobe-source-list label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+  .ceobe-source-list input[type="checkbox"] { width: auto; margin: 0; flex: none; }
 </style>
 </head>
 <body>
@@ -390,6 +397,29 @@
       </div>
     </form>
     <p class="muted" style="margin:10px 0 0">數值超出範圍會由 config 驗證擋下並顯示原因。改完立即生效，不需要重啟。</p>
+  </section>
+
+  <section class="card">
+    <h2>小刻食堂（餅）</h2>
+    <form id="ceobe-form" class="grid" novalidate>
+      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+        <input id="ceobe-enabled" type="checkbox" style="width:auto;margin:0;flex:none">
+        ceobe.enabled：把小刻食堂的新餅投給下面列出的頻道
+      </label>
+      <p class="muted" style="grid-column:1/-1;margin:0;font-size:12px">
+        每個頻道可以勾選要接收的資料源。第一次加入的頻道或來源只從加入之後的新餅開始，不會補推舊的。
+        頻道要同時在 allow 名單裡，bot 也要有「查看頻道」與「傳送訊息」權限。
+        餅會送進該頻道的 DSH 會話，由人格整理後發文；原文連結由模型保留，漏掉時橋接會補。
+      </p>
+      <div id="ceobe-targets" style="grid-column:1/-1"></div>
+      <div class="row" style="grid-column:1/-1">
+        <button type="button" id="ceobe-add" class="ghost">新增頻道</button>
+        <button type="button" id="ceobe-load" class="ghost">載入資料源</button>
+        <button type="submit">儲存</button>
+        <span id="ceobe-msg" class="msg"></span>
+      </div>
+    </form>
+    <p id="ceobe-status" class="muted" style="margin:10px 0 0;font-size:12px"></p>
   </section>
 
   <section class="card">
@@ -2206,6 +2236,129 @@
     return patch;
   }
 
+  // ── 小刻食堂（餅） ────────────────────────────────────────────────────────
+  let ceobeSources = null;
+
+  function ceobeSelected(row) {
+    const boxes = [...row.querySelectorAll('.ceobe-source-list input[type="checkbox"]')];
+    if (boxes.length > 0) return boxes.filter((box) => box.checked).map((box) => box.value);
+    try { return JSON.parse(row.dataset.sources || '[]'); } catch { return []; }
+  }
+
+  function ceobeSyncRow(row) {
+    const selected = ceobeSelected(row);
+    row.dataset.sources = JSON.stringify(selected);
+    const summary = row.querySelector('summary');
+    if (summary) summary.textContent = `來源（已選 ${selected.length} 個）`;
+  }
+
+  function fillCeobeSourceList(row) {
+    const list = row.querySelector('.ceobe-source-list');
+    if (!list) return;
+    const selected = ceobeSelected(row);
+    list.replaceChildren();
+    if (!ceobeSources) {
+      list.append(el('p', { className: 'muted', style: 'margin:0;font-size:12px' }, '按下面的「載入資料源」取得清單。'));
+      ceobeSyncRow(row);
+      return;
+    }
+    const addBox = (value, label, checked) => {
+      const box = el('input', { type: 'checkbox', value });
+      box.checked = checked;
+      box.addEventListener('change', () => ceobeSyncRow(row));
+      list.append(el('label', {}, box, label));
+    };
+    const known = new Set();
+    for (const source of ceobeSources) {
+      known.add(source.unique_id);
+      addBox(
+        source.unique_id,
+        `${source.nickname || source.unique_id}（${source.platform || source.datasource || '未知'}）`,
+        selected.includes(source.unique_id),
+      );
+    }
+    // 上游暫時拿掉的來源照樣留著，使用者才不會在重新載入清單時被靜靜刪掉。
+    for (const uniqueId of selected.filter((value) => !known.has(value))) {
+      addBox(uniqueId, `${uniqueId}（目錄裡找不到）`, true);
+    }
+    ceobeSyncRow(row);
+  }
+
+  function ceobeConfigFromDom() {
+    const channels = {};
+    const problems = [];
+    const seen = new Set();
+    for (const row of document.querySelectorAll('#ceobe-targets .ceobe-target')) {
+      const id = row.querySelector('.ceobe-channel')?.value.trim() ?? '';
+      if (!id) continue;
+      if (!/^\d{5,25}$/.test(id)) {
+        problems.push(`頻道 ID 不是數字：${id}`);
+        continue;
+      }
+      if (seen.has(id)) {
+        problems.push(`頻道 ID 重複：${id}`);
+        continue;
+      }
+      seen.add(id);
+      const sources = ceobeSelected(row);
+      if (sources.length === 0) {
+        problems.push(`頻道 ${id} 還沒勾來源`);
+        continue;
+      }
+      channels[id] = sources;
+    }
+    return { enabled: $('ceobe-enabled').checked, channels, problems };
+  }
+
+  function ceobeTargetRow(channelId = '', sources = []) {
+    const row = el('div', { className: 'ceobe-target' });
+    row.dataset.sources = JSON.stringify(sources);
+    const head = el('div', { className: 'row' });
+    const input = el('input', { type: 'text', className: 'ceobe-channel', placeholder: '頻道 ID', value: channelId });
+    input.setAttribute('inputmode', 'numeric');
+    const remove = el('button', { type: 'button', className: 'ghost danger', textContent: '刪除' });
+    remove.addEventListener('click', () => row.remove());
+    head.append(el('label', {}, '頻道 ID ', input), remove);
+    const details = el('details');
+    const summary = el('summary', {}, '來源');
+    const list = el('div', { className: 'ceobe-source-list' });
+    details.append(summary, list);
+    row.append(head, details);
+    fillCeobeSourceList(row);
+    return row;
+  }
+
+  function renderCeobeTargets(config = {}) {
+    const rows = Object.entries(config.channels ?? {}).map(([id, sources]) => ceobeTargetRow(id, sources));
+    if (rows.length === 0) {
+      rows.push(el('p', { className: 'muted', style: 'margin:0;font-size:12px' }, '還沒有頻道。按「新增頻道」開始。'));
+    }
+    $('ceobe-targets').replaceChildren(...rows);
+  }
+
+  function setCeobeStatus(text) {
+    $('ceobe-status').textContent = text;
+  }
+
+  function renderCeobeStatus(status) {
+    if (!status) return;
+    const at = status.lastPollAt ? fmtAgo(status.lastPollAt) : '還沒輪詢';
+    const error = status.lastError ? `；最近錯誤：${status.lastError}` : '';
+    setCeobeStatus(status.enabled
+      ? `輪詢中，上次 ${at}，目前列表 ${status.cookies ?? 0} 則${error}`
+      : '功能關閉');
+  }
+
+  async function loadCeobeSources({ refresh = false } = {}) {
+    const data = await api('/api/ceobe' + (refresh ? '?refresh=1' : ''));
+    ceobeSources = Array.isArray(data.sources) ? data.sources : [];
+    // 只補來源清單，不重建列：剛填好的頻道 ID 不會不見。
+    for (const row of document.querySelectorAll('#ceobe-targets .ceobe-target')) fillCeobeSourceList(row);
+    renderCeobeStatus(data.status);
+    if (data.sourceError) setCeobeStatus(`資料源清單讀取失敗：${data.sourceError}`);
+    else if (ceobeSources.length === 0) setCeobeStatus('資料源清單是空的。');
+  }
+
   function fillConfig(c) {
     const join = (v) => (v || []).join('\n');
     $('allow-guilds').value = join(c.allow.guilds);
@@ -2258,6 +2411,15 @@
     $('trade-bot-review-enabled').checked = review.enabled !== false;
     $('trade-bot-review-after').value = review.after ?? '19:10';
     renderFeatureFields(c);
+    const conf = c.ceobe ?? { enabled: false, channels: {} };
+    $('ceobe-enabled').checked = conf.enabled === true;
+    renderCeobeTargets(conf);
+    if (!ceobeSources) {
+      setCeobeStatus('按「載入資料源」取得可選的來源。');
+      if (conf.enabled || Object.keys(conf.channels ?? {}).length > 0) {
+        void loadCeobeSources().catch(() => setCeobeStatus('資料源清單讀取失敗，按「載入資料源」再試。'));
+      }
+    }
   }
 
   // ── 供應商 ────────────────────────────────────────────────────────────────
@@ -3134,6 +3296,50 @@
       msg.textContent = '已儲存（立即生效）';
       msg.className = 'msg ok';
       await refresh();
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  $('ceobe-add').addEventListener('click', () => {
+    const host = $('ceobe-targets');
+    if (!host.querySelector('.ceobe-target')) host.replaceChildren();
+    host.append(ceobeTargetRow());
+  });
+
+  $('ceobe-load').addEventListener('click', async () => {
+    const msg = $('ceobe-msg');
+    msg.textContent = '載入中…';
+    msg.className = 'msg';
+    try {
+      await loadCeobeSources({ refresh: true });
+      msg.textContent = '資料源已更新';
+      msg.className = 'msg ok';
+    } catch (error) {
+      msg.textContent = error.message;
+      msg.className = 'msg err';
+    }
+  });
+
+  $('ceobe-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const msg = $('ceobe-msg');
+    const config = ceobeConfigFromDom();
+    if (config.problems.length > 0) {
+      msg.textContent = config.problems.join('；');
+      msg.className = 'msg err';
+      return;
+    }
+    msg.textContent = '儲存中…';
+    msg.className = 'msg';
+    try {
+      const payload = { enabled: config.enabled, channels: config.channels };
+      const result = await api('/api/config', { method: 'POST', body: JSON.stringify({ ceobe: payload }) });
+      fillConfig(result.config);
+      void loadCeobeSources().catch(() => {});
+      msg.textContent = '已儲存（立即生效）';
+      msg.className = 'msg ok';
     } catch (error) {
       msg.textContent = error.message;
       msg.className = 'msg err';

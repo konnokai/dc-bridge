@@ -23,6 +23,7 @@ const tests = [
   'test-discord-notes.mjs',
   'test-discord-dev-feedback.mjs',
   'test-discord-followup.mjs',
+  'test-discord-ceobe.mjs',
   'test-discord-slang.mjs',
   'test-discord-trigger-stats.mjs',
   // 令牌帳本／價目表（純函數）。

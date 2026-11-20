@@ -37,6 +37,7 @@
 | `discord-feedback.mjs` | 自己訊息收到的 reaction |
 | `discord-dev-feedback.mjs` | 模型送給開發者的功能申請與意見 |
 | `discord-followup.mjs` | 回訪排程 |
+| `discord-ceobe.mjs` | 小刻食堂（餅）輪詢、分派與已讀水位 |
 | `discord-notes.mjs` | 頻道筆記與每日摘要 |
 | `discord-memes.mjs` | 梗圖庫 |
 | `discord-reload.mjs` | `/reload-system-prompt` 的交接摘要 |
@@ -93,7 +94,7 @@
 | `docs/` | 全部文件，見 [README.md](README.md) |
 | `deploy/alloy/` | Loki 收集器（Alloy）的獨立 compose、設定與操作說明 |
 | `deploy/grafana/` | `dc-bridge 營運` dashboard 的 import JSON 與說明 |
-| `state/` | 執行時資料（會話映射、會話 preset 映射、筆記、回訪、回饋、帳本、鎖、生圖與股票資料）。`.gitignore` 排除，**不要刪** |
+| `state/` | 執行時資料（會話映射、會話 preset 映射、筆記、回訪、回饋、帳本、餅的已讀、鎖、生圖與股票資料）。`.gitignore` 排除，**不要刪** |
 | `config.json` | 真實設定，不入庫；模板是 `config.example.json` |
 
 ## 四、`scripts/` 命名

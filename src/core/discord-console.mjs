@@ -74,7 +74,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, archive, followups, deleteFollowup, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, archive, followups, deleteFollowup, ceobe, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -333,6 +333,10 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
         } catch (error) {
           sendJson(res, 400, { error: String(error?.message ?? error) });
         }
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === '/api/ceobe') {
+        sendJson(res, 200, await handlers.ceobe({ refresh: url.searchParams.get('refresh') === '1' }));
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/config') {

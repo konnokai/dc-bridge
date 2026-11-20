@@ -1102,6 +1102,73 @@ try {
     }
   });
 
+  if (!original) await test('Discord 控制台：小刻食堂可新增頻道、載入來源後不丟輸入', async () => {
+    const posts = [];
+    let current = {
+      allow: {}, deny: {}, ownerIds: [], media: {},
+      ceobe: { enabled: true, channels: { '111111111111111111': ['uid-a'] } },
+    };
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        sessions: () => [],
+        config: () => current,
+        updateConfig: async (body) => {
+          posts.push(body);
+          current = { ...current, ceobe: body.ceobe };
+          return current;
+        },
+        ceobe: async () => ({
+          sources: [
+            { unique_id: 'uid-a', nickname: '來源 A', platform: 'bilibili', datasource: 'bilibili:dynamic-by-uid' },
+            { unique_id: 'uid-b', nickname: '來源 B', platform: 'weibo', datasource: 'weibo:dynamic-by-uid' },
+          ],
+          sourceError: '',
+          status: { enabled: true, polling: false, lastPollAt: Date.now(), lastError: '', cookies: 2 },
+        }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 1204, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#settings`);
+      await p.waitForSelector('#ceobe-targets .ceobe-target');
+      assert.match(await p.locator('#ceobe-targets').textContent(), /來源 A/, '已設定的來源要出現在勾選清單');
+
+      await p.locator('#ceobe-add').click();
+      const second = p.locator('#ceobe-targets .ceobe-target').nth(1);
+      await second.locator('.ceobe-channel').fill('222222222222222222');
+      const refreshed = p.waitForResponse(r => new URL(r.url()).pathname === '/api/ceobe');
+      await p.locator('#ceobe-load').click();
+      await refreshed;
+      assert.equal(await second.locator('.ceobe-channel').inputValue(), '222222222222222222', '載入來源不會清掉剛填的頻道 ID');
+      assert.match(await second.textContent(), /來源 B/, '新列也要有來源可勾');
+
+      await second.locator('summary').click();
+      await second.locator('input[type="checkbox"][value="uid-b"]').check();
+      const saved = p.waitForResponse(r => new URL(r.url()).pathname === '/api/config' && r.request().method() === 'POST');
+      await p.locator('#ceobe-form button[type="submit"]').click();
+      await saved;
+      assert.deepEqual(posts.at(-1).ceobe.channels, {
+        '111111111111111111': ['uid-a'],
+        '222222222222222222': ['uid-b'],
+      }, '兩列頻道與勾選的來源都要送出');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   if (!original) await test('Discord 控制台：回饋分頁列出意見、可跳到觸發訊息、不執行模型寫的 HTML', async () => {
     let items = [{
       id: 'df1',

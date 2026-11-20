@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { splitForCharLimit } from '../md-to-plain.js';
+import { normalizeCeobeConfig } from './discord-ceobe.mjs';
 import { normalizeSandboxConfig } from './discord-sandbox.mjs';
 
 /** Discord 一則訊息的上限。 */
@@ -301,6 +302,7 @@ export function normalizeDiscordConfig(raw) {
       // 回訪：模型自己排「N 分鐘後回來看」。預設關閉（時間到了會多一個模型回合）。
       enabled: src.followup?.enabled === true,
     },
+    ceobe: normalizeCeobeConfig(src.ceobe),
     sandbox: normalizeSandboxConfig(src.sandbox),
     trade: normalizeTradeConfig(src.trade),
     slang: {

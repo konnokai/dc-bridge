@@ -173,6 +173,8 @@ pm2 logs dc-bridge
 | `historyArchive.retentionDays` | 保留幾天，預設 360（1~3650）；每天清一次 |
 | `historyArchive.flushMs` / `batch` | 幾毫秒或累積幾則送一批，預設 60000／32 |
 | `followup.enabled` | 回訪開關，預設 `false`（時間到了會多一個模型回合）。`chattyChannels` 裡的頻道靠它自己開新話題，關掉就只剩被動接話 |
+| `ceobe.enabled` | 小刻食堂（餅）投遞開關，預設 `false`。打開後橋接每 60 秒輪詢一次，把新餅送進 `ceobe.channels` 指定的頻道會話 |
+| `ceobe.channels` | 接收餅的頻道與來源：`{ "頻道ID": ["來源 unique_id", ...] }`。控制台「設定」的「小刻食堂（餅）」卡片可以勾選；第一次加入的頻道／來源只從加入後的新餅開始 |
 | `sandbox.enabled` | 是否開放 `run_script`（一次性在 Docker 容器裡跑模型寫的程式），預設 `false`。橋接主機要有 Docker，image 要先 pull；見「執行程式」 |
 | `sandbox.channels` | 允許執行的頻道 id（字串陣列）。只有這些頻道能跑；預設空（全關） |
 | `sandbox.pythonImage` | Python 用的 image，預設 `python:3.12-alpine` |
@@ -641,6 +643,8 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
     欄位在區內自動排成 1～3 欄；存檔後立即生效並寫回
     `config.json`；格式與範圍由 `normalizeDiscordConfig` 驗證，錯誤會直接顯示在卡片上。
     `tts.baseUrl`、`videoLinks.ytDlpPath`、`emoji.dir` 這類會連網址或執行程式的欄位刻意只在 `config.json` 改
+  - **小刻食堂（餅）**：`ceobe.enabled` 與每個頻道的來源勾選。先按「載入資料源」取得清單，再新增頻道；
+    存檔後立即生效並寫回 `config.json`
   - **供應商**：主模型與備援（provider、model、reasoningEffort、`enabled`、`afterMs`）。
     備援設定存在 `config.json` 的 `dsh.hedge`，橋接啟動與 DSH 重連時推給 DSH 的
     `llm-hedge` settings 命名空間（`plugins/dsh-llm-hedge`）；主模型存回 `config.json` 的 `dsh.*`。
@@ -1283,6 +1287,40 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
 ```json
 "followup": { "enabled": true }
 ```
+
+## 小刻食堂（餅，選用）
+
+小刻食堂是聚合站：B 站、微博、官網、遊戲公告由它抓，橋接只訂閱它的餅列表。
+打開之後，橋接每 60 秒問一次「有沒有新餅」，有新內容就送進指定頻道的 DSH 會話，
+由該頻道的人格整理後發文；原文連結由模型帶著，模型漏掉時橋接補在下一行。
+
+```json
+"ceobe": {
+  "enabled": true,
+  "channels": {
+    "123456789012345678": ["7d23708b-e424-418b-b4c4-43c370c3b6d0"]
+  }
+}
+```
+
+- **設定**：控制台「設定」→「小刻食堂（餅）」。先按「載入資料源」抓清單，再新增頻道、勾選來源。
+  一個頻道可以選多個來源，同一個來源也可以給多個頻道。
+- **只送新餅**：每個（頻道, 來源）有自己的水位。第一次加入的頻道／來源只從加入之後開始，不會把目前的列表倒出來。
+  功能從關到開（控制台存檔，或改 `config.json` 後重啟）也會重設水位，停用期間的餅不補。
+- **去重**：`item.id` 加上來源一起算，已讀寫在 `state/discord-ceobe.json`，重啟不會重推。
+  排進回合閘門就標已讀（at-most-once）：之後 `/reset`、DSH 掛掉或模型沒送出，那一則就當漏掉，不重複洗版。
+- **頻道條件**：頻道要在白名單、bot 有「查看頻道」與傳送訊息權限（討論串看「在討論串傳送訊息」），而且不在安靜期間。
+  不符合就跳過，下一輪再試。
+- **一次三則**：每輪最多 3 則、單則內文 800 字，多的下一分鐘再送。餅會留在頻道會話的上下文裡，之後每一輪都要重算 token。
+- **模型沒送出**：回合結束時，模型完全沒有送出任何訊息就由橋接送一則保底訊息（來源、第一行、原文連結）；
+  有送出但漏掉連結時，只補一行 `-# 原文：…`。回合出錯或被取消（包含 TTFT 超時）也會走保底。
+- **外部內容**：餅的內文用 nonce 邊界包起來，`【】`、`★`、零寬與 bidi 字元都會先洗掉，URL 只收 `http(s)`。
+  這個回合只開放 `send_message` 與 reaction（加／收回）；記憶、筆記、知識、回訪、生圖、語音、沙箱、安靜一律拒絕。
+  生圖外掛走沒有會話令牌的 `/imageJob`，橋接用 `sessionId` 反查回合後擋掉 `start`；唯讀的聯網搜尋不經過橋接，仍可使用。
+- **限制**：不抓圖片，圖片交給原文連結的預覽；官網與公告頁的截圖不支援。上游列表的 `next_page_id` 沒有處理。
+  事件流延遲時，工具呼叫可能比 `turn/start` 早到，那一輪的工具白名單與連結保底會失準；正常事件流是照順序的，這只在重連或事件積壓時發生。
+
+上游文件快照與移植對照：[design/REF_CEOBECANTEEN.md](../design/REF_CEOBECANTEEN.md)。
 
 ## 黑話學習（選用）
 

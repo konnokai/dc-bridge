@@ -20,6 +20,7 @@
 
 直接看目錄。新增的計畫：
 [design/PLAN_MIYORIA_ADOPTION.md](design/PLAN_MIYORIA_ADOPTION.md)（從 Miyoria 挑出的六個改善，依序執行）。
+小刻食堂（餅）的上游文件快照與移植對照：[design/REF_CEOBECANTEEN.md](design/REF_CEOBECANTEEN.md)。
 部署決定：[design/ADR_DEPLOYMENT.md](design/ADR_DEPLOYMENT.md)（bridge／DSH 留在 pm2，Alloy 用獨立 compose）。
 
 可觀測性資產：[deploy/alloy/](../deploy/alloy/)（log 收集）、

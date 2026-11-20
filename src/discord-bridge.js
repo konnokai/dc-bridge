@@ -76,6 +76,20 @@ import { findSymbol } from './core/trade-symbols.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked, QUIET_MAX_MINUTES } from './core/discord-quiet.mjs';
 import { loadStatusFile, parseStatusText, saveStatusFile } from './core/discord-status.mjs';
 import { createFollowupStore, formatFollowupDelay, formatFollowupPrompt, formatFollowupStatus, loadFollowupFile, saveFollowupFile } from './core/discord-followup.mjs';
+import {
+  CEOBE_POLL_MS,
+  ceobeFinishPlan,
+  ceobeHandlerBlocked,
+  createCeobeClient,
+  createCeobeNonce,
+  createCeobeState,
+  dispatchCeobeCookies,
+  formatCeobeFallback,
+  formatCeobePrompt,
+  loadCeobeState,
+  saveCeobeState,
+  selectCeobeBatch,
+} from './core/discord-ceobe.mjs';
 import { createReactionInbox, formatReactionInbox } from './core/discord-feedback.mjs';
 import {
   DEV_FEEDBACK_EDITS_PER_TURN,
@@ -282,6 +296,7 @@ const SLANG_TRIAGE_FILE = path.join(STATE_DIR, 'discord-slang-triage.jsonl');
 const NOTES_FILE = path.join(STATE_DIR, 'discord-notes.json');
 const KNOWLEDGE_FILE = path.join(STATE_DIR, 'discord-knowledge.json');
 const FOLLOWUPS_FILE = path.join(STATE_DIR, 'discord-followups.json');
+const CEOBE_FILE = path.join(STATE_DIR, 'discord-ceobe.json');
 const DEV_FEEDBACK_FILE = path.join(STATE_DIR, 'discord-dev-feedback.json');
 const RELOAD_FILE = path.join(STATE_DIR, 'discord-reload-summaries.json');
 const CODEX_RESET_FILE = path.join(STATE_DIR, 'discord-codex-reset.json');
@@ -1237,6 +1252,37 @@ async function main() {
     },
   });
   const reactionInbox = createReactionInbox(); // key -> 自己的訊息收到的 reaction（下一批提示）
+  const ceobeLoaded = loadCeobeState(CEOBE_FILE);
+  if (ceobeLoaded.warning) log(`⚠️ 小刻食堂：${ceobeLoaded.warning}`);
+  // 餅的已讀與水位：排進回合閘門就標已讀，寧可漏一則也不要重複洗版。
+  const ceobeState = createCeobeState({
+    saved: ceobeLoaded.saved,
+    onChange: (snapshot) => {
+      try {
+        saveCeobeState(CEOBE_FILE, snapshot);
+      } catch (error) {
+        log(`小刻食堂狀態存檔失敗：${error?.message ?? error}`);
+      }
+    },
+  });
+  const ceobeClient = createCeobeClient();
+  let ceobeSources = null; // { at, list }
+  let ceobeComb = { key: '', id: '' };
+  let ceobeList = { cookieId: '', cookies: [] };
+  let ceobePolling = false;
+  let ceobeLastPollAt = 0;
+  let ceobeLastError = '';
+  let ceobeErrorAt = 0;
+  const ceobeSkipLogAt = new Map(); // key -> 上次寫「跳過這個頻道」的時間
+  // 手改 config.json 後重啟：新 pair 從現在開始算，移除的 pair 清掉；停用期間的餅不補。
+  ceobeState.pruneChannels(cfg.discord.ceobe.channels);
+  if (cfg.discord.ceobe.enabled) {
+    if (!ceobeState.isEnabled()) ceobeState.resetSince();
+    for (const [channelId, sourceIds] of Object.entries(cfg.discord.ceobe.channels)) {
+      for (const sourceId of sourceIds) ceobeState.ensurePair(channelId, sourceId);
+    }
+  }
+  ceobeState.setEnabled(cfg.discord.ceobe.enabled);
 
   /** 安靜到什麼時候；剛結束就把 primedKeys 拿掉，下一批重新帶上下文。 */
   function quietUntil(key) {
@@ -1261,6 +1307,8 @@ async function main() {
   const turnLastMessage = new Map(); // key -> 目前這個回合最後一則訊息 id
   // 回合紀錄用：這批的旗標在投遞時算一次，回合開始時跟著批次取出。
   const turnMeta = new Map(); // key -> 目前這個回合的批次旗標；null 表示不是橋接排的回合
+  // 餅的回合要檢查模型送出的文字有沒有帶原文連結，這裡記這一輪送出的內容。
+  const turnSentTexts = new Map(); // key -> string[]
   const turnTools = new Map(); // key -> Set(這一輪呼叫過的工具)
   const turnTtftMs = new Map(); // key -> 第一個 token 的毫秒數
   const emojiDir = cfg.discord.emoji.dir ? path.resolve(ROOT, cfg.discord.emoji.dir) : path.join(STATE_DIR, 'discord-emoji');
@@ -2923,6 +2971,12 @@ async function main() {
       if (refusal?.replaced) return refusal.replaced;
       // 梗圖不是畫出來的，不計繪圖次數。
       const result = await sendMessage(body, { draw: !freshSpeech });
+      // 餅的回合要知道模型到底有沒有把原文連結帶出去；只記真的送出的文字。
+      if (turnMeta.get(key)?.ceobe && typeof body.content === 'string' && body.content.trim()) {
+        const texts = turnSentTexts.get(key) ?? [];
+        texts.push(body.content);
+        turnSentTexts.set(key, texts);
+      }
       // 真的送出成功才累加：第一則失敗時，下一次仍然是第一次拒絕。
       if (refusal?.note) refusals.note(refusal.note.key, refusal.note.userId);
       return result;
@@ -4168,6 +4222,32 @@ async function main() {
     },
   };
 
+  // 餅的 prompt 來自公開網站，不是群友寫的。這個回合只准輸出，不准寫記憶、筆記、
+  // 知識、回訪、花錢或改安靜；模型被內文騙去呼叫時會在邊界擋下來。
+  // imageJob 走的是沒有 token 的外掛路徑，要用 sessionId 反查回合。
+  const apiHandlers = Object.fromEntries(Object.entries(agentHandlers).map(([name, handler]) => [
+    name,
+    async (body, ...rest) => {
+      let key = '';
+      if (name === 'imageJob' && typeof body?.sessionId === 'string') {
+        key = reverse.get(body.sessionId) ?? '';
+      } else if (typeof body?.token === 'string') {
+        try {
+          ({ key } = await agentSender.resolve(body.token));
+        } catch { /* 令牌本來就壞掉：交給原 handler 回一致的錯誤 */ }
+      }
+      if (ceobeHandlerBlocked({
+        name,
+        hasToken: typeof body?.token === 'string',
+        ceobeTurn: Boolean(key && turnMeta.get(key)?.ceobe),
+        phase: typeof body?.phase === 'string' ? body.phase : '',
+      })) {
+        throw toolError('這個回合在轉述外部餅內容，不能用這個工具', 403);
+      }
+      return handler(body, ...rest);
+    },
+  ]));
+
   // 同一會話短時間內的訊息合成一批，一批只開一個模型回合。
   const batcher = createBatcher({
     debounceMs: () => cfg.discord.batch.debounceMs,
@@ -4710,6 +4790,7 @@ async function main() {
       turnStartedAt.set(key, Date.now());
       turnFollowupTaken.delete(key);
       turnFollowupHeld.delete(key);
+      turnSentTexts.delete(key);
       sandboxRuns.delete(key);
       const queuedLast = pendingLastMessages.get(key);
       turnLastMessage.set(key, queuedLast?.length ? (queuedLast.shift()?.id ?? '') : '');
@@ -4741,6 +4822,10 @@ async function main() {
     const loggedUsers = (turnUsers.get(key) ?? []).map((user) => user.userId);
     const meta = turnMeta.get(key) ?? null;
     turnMeta.delete(key);
+    const sentTexts = turnSentTexts.get(key) ?? [];
+    turnSentTexts.delete(key);
+    // 出錯或被取消時拿不到 agentSender 的 sent 計數，用「有沒有文字送出」判斷要不要保底。
+    const spoke = sentTexts.length > 0 ? 1 : 0;
     const tools = [...(turnTools.get(key) ?? [])];
     turnTools.delete(key);
     const measuredTtft = turnTtftMs.get(key) ?? null;
@@ -4760,12 +4845,15 @@ async function main() {
     ttftTimeouts.delete(key);
     if (reason.kind === 'completed') {
       const { sent, reacted, unreacted, removed, attempted } = agentSender.finishTurn(key);
+      // 餅的回合：模型漏掉的原文連結由橋接補；完全沒送出才發保底訊息。
+      const ceobeAdded = meta?.ceobe ? await finishCeobeTurn(key, meta.ceobe, sentTexts, sent) : 0;
+      const totalSent = sent + ceobeAdded;
       if (meta) {
         const turnUsage = usage.ledger.turnUsage(frame.sessionId, ended.turn);
-        writeTurn(key, meta, meta.internal ? 'skipped' : (sent > 0 ? 'sent' : 'silent'), {
-          reason: meta.internal ? 'system' : '',
+        writeTurn(key, meta, meta.internal && !meta.ceobe ? 'skipped' : (totalSent > 0 ? 'sent' : 'silent'), {
+          reason: meta.ceobe ? 'ceobe' : (meta.internal ? 'system' : ''),
           turn: ended.turn,
-          sent,
+          sent: totalSent,
           tools,
           tokens: turnUsage?.tokens ?? null,
           ttftMs: measuredTtft,
@@ -4774,7 +4862,7 @@ async function main() {
         });
       }
       // 只按／收回 reaction 或只收回訊息也算回應了，不是「忘了用工具」。
-      if (sent > 0 || reacted > 0 || unreacted > 0 || removed > 0) return;
+      if (totalSent > 0 || reacted > 0 || unreacted > 0 || removed > 0) return;
       // 沒有呼叫工具就真的不送。回合文字可能只是思考，不是要發出去的內容，
       // 所以這裡不代送；只留一行日誌方便追「模型忘了用工具」。
       const text = String(ended.text ?? '').trim();
@@ -4792,11 +4880,13 @@ async function main() {
     if (reason.kind === 'error') {
       const message = String(reason.error?.message ?? '未知錯誤').slice(0, 500);
       log(`agent 出錯 (${key})：${message}`);
+      if (meta?.ceobe) await finishCeobeTurn(key, meta.ceobe, sentTexts, spoke);
       // 沒人叫 bot 的那批出錯只記日誌：頻道裡沒人在等回覆，貼錯誤只會吵到人。
       if (direct) await sendLong(key, `⚠️ agent 處理出錯：${message}`);
       return;
     }
     if (reason.kind === 'aborted') {
+      if (meta?.ceobe) await finishCeobeTurn(key, meta.ceobe, sentTexts, spoke);
       if (direct) {
         await sendLong(key, ttftMs
           ? `⚠️ 模型這次想太久（超過 ${Math.round(ttftMs / 1000)} 秒），先取消這一輪；可以再問一次。`
@@ -5384,6 +5474,7 @@ async function main() {
       yielded: false,
       merged: job.merged ?? 0,
       internal: Boolean(job.system || job.reminder || job.followup),
+      ceobe: job.ceobe ?? null,
     };
     if (epoch !== epochOf(key)) {
       log(`排隊期間會話已重置，丟棄 (${key})`);
@@ -5978,6 +6069,200 @@ async function main() {
       title: 'Discord 黑話學習',
     });
     return parseExtractionJson(text, { max: 5 });
+  }
+
+  // ── 小刻食堂（餅） ────────────────────────────────────────────────────────
+  // 橋接自己輪詢，不是讓模型拉：模型只要在頻道會話裡把餅轉述出去。
+  let ceobeTimer = null;
+
+  function ceobeSkip(key, message) {
+    const now = Date.now();
+    if (now - (ceobeSkipLogAt.get(key) ?? 0) < 60 * 60_000) return;
+    ceobeSkipLogAt.set(key, now);
+    log(`餅：${message}（${key}）`);
+  }
+
+  async function ensureCeobeSources({ refresh = false } = {}) {
+    const cached = ceobeSources && Date.now() - ceobeSources.at < 24 * 60 * 60_000;
+    if (!refresh && cached) return ceobeSources.list;
+    const list = await ceobeClient.listSources();
+    ceobeSources = { at: Date.now(), list };
+    return list;
+  }
+
+  /** 餅回合的收尾：補連結，或模型完全沒送時發保底。回傳橋接自己補了幾則。 */
+  async function finishCeobeTurn(key, ceobeMeta, sentTexts, sentCount) {
+    if (quietUntil(key)) {
+      log(`餅：安靜中，略過收尾（${key}）`);
+      return 0;
+    }
+    const plan = ceobeFinishPlan({ sentCount, sentTexts, urls: ceobeMeta?.urls ?? [] });
+    if (plan.fallback) {
+      if (!ceobeMeta?.fallback) return 0;
+      try {
+        await sendLong(key, ceobeMeta.fallback);
+        return 1;
+      } catch (error) {
+        log(`餅：保底訊息送出失敗（${key}）：${error?.message ?? error}`);
+        return 0;
+      }
+    }
+    if (plan.missing.length === 0) return 0;
+    try {
+      await sendLong(key, plan.missing.map((url) => `-# 原文：${url}`).join('\n'));
+      return 1;
+    } catch (error) {
+      log(`餅：補原文連結失敗（${key}）：${error?.message ?? error}`);
+      return 0;
+    }
+  }
+
+  async function pollCeobe() {
+    const conf = cfg.discord.ceobe;
+    if (!conf.enabled || ceobePolling) return;
+    const channels = Object.entries(conf.channels);
+    if (channels.length === 0) return;
+    ceobePolling = true;
+    try {
+      const sources = await ensureCeobeSources();
+      // 控制台存檔會換掉整個 ceobe 物件；中途改設定就放棄這一輪，避免用舊的清單投遞。
+      const stale = () => cfg.discord.ceobe !== conf;
+      if (stale()) return;
+      const sourceByUniqueId = new Map(sources.map((source) => [String(source.unique_id), source]));
+      // 只把有訂閱的來源放進組合：上游回來的列表才不會被沒訂閱的資料源擠到第二頁。
+      const union = [...new Set(channels.flatMap(([, sourceIds]) => sourceIds))].sort();
+      const combKey = union.join(',');
+      if (!ceobeComb.id || ceobeComb.key !== combKey) {
+        ceobeComb = { key: combKey, id: await ceobeClient.getCombId(union) };
+        if (stale()) return;
+      }
+      let latest;
+      try {
+        latest = await ceobeClient.getLatestCookieId(ceobeComb.id);
+      } catch (error) {
+        // comb id 過期或暫時讀不到：下一次重新算一組再試。
+        ceobeComb = { key: '', id: '' };
+        throw error;
+      }
+      if (stale()) return;
+      if (!latest) throw new Error('小刻食堂沒有回傳 cookie id');
+      if (latest !== ceobeList.cookieId) {
+        // 列表留在記憶體：重啟後抓一次，靠 seen 去重，不用多存一個 cookie id。
+        ceobeList = { cookieId: latest, cookies: await ceobeClient.getCookies(ceobeComb.id, latest) };
+        if (stale()) return;
+      }
+      const { byChannel } = dispatchCeobeCookies(ceobeList.cookies, { channels: conf.channels, sources });
+      const now = Date.now();
+      for (const [channelId, sourceIds] of channels) {
+        if (stale()) break;
+        // 新的（頻道, 來源）先建水位；這一輪不送，下一輪才開始算新餅。
+        for (const sourceId of sourceIds) ceobeState.ensurePair(channelId, sourceId);
+        const items = byChannel.get(channelId) ?? [];
+        if (items.length === 0) continue;
+        const { take, expired } = selectCeobeBatch({ items, channelId, state: ceobeState, now });
+        if (expired.length > 0) ceobeState.markSeen(channelId, expired.map((key) => ({ key, at: now })));
+        if (take.length === 0) continue;
+        const key = `ch:${channelId}`;
+        if (quietUntil(key)) continue;
+        let channel;
+        try {
+          // 不用 resolveChannel 的快取：頻道刪掉後快取還留著，會一直投給不存在的頻道。
+          channel = await client.channels.fetch(channelId);
+          channelCache.set(key, channel);
+        } catch (error) {
+          ceobeSkip(key, `找不到頻道：${error?.message ?? error}`);
+          continue;
+        }
+        if (!channel?.isTextBased?.()) {
+          ceobeSkip(key, '不是文字頻道');
+          continue;
+        }
+        if (!isChannelAllowed(key, channel)) {
+          ceobeSkip(key, '不在白名單');
+          continue;
+        }
+        const permissions = channel.permissionsFor?.(client.user);
+        // 討論串看的是 SendMessagesInThreads，不是 SendMessages。
+        const sendPermission = channel.isThread?.() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages;
+        if (!permissions?.has(PermissionFlagsBits.ViewChannel) || !permissions.has(sendPermission)) {
+          ceobeSkip(key, '沒有查看或傳送訊息的權限');
+          continue;
+        }
+        // 抓頻道是 async，期間可能有人設了安靜或改了設定。
+        if (stale()) break;
+        if (quietUntil(key)) continue;
+        const promptItems = take.map(({ cookie, uniqueId }) => ({ cookie, uniqueId }));
+        const { text, urls } = formatCeobePrompt({
+          items: promptItems,
+          sourceByUniqueId,
+          nonce: createCeobeNonce(),
+        });
+        const fallback = formatCeobeFallback(take.map(({ cookie, uniqueId }) => ({
+          cookie,
+          uniqueId,
+          source: sourceByUniqueId.get(uniqueId),
+        })));
+        enqueuePrompt(key, {
+          channel,
+          guildId: channel.guildId ?? null,
+          entries: [],
+          direct: false,
+          system: true,
+          epoch: epochOf(key),
+          text,
+          ceobe: { urls, fallback },
+        });
+        // at-most-once：排進閘門就標已讀。之後 /reset 或 DSH 掛掉丟掉這一輪，寧可漏也不要重複。
+        ceobeState.markSeen(channelId, take.map(({ seenKey }) => ({ key: seenKey, at: now })));
+        log(`已投遞餅 ${key}（${take.length} 則）`);
+      }
+    } catch (error) {
+      ceobeLastError = String(error?.message ?? error);
+      if (Date.now() - ceobeErrorAt > 10 * 60_000) {
+        ceobeErrorAt = Date.now();
+        log(`小刻食堂輪詢失敗：${ceobeLastError}`);
+      }
+    } finally {
+      ceobePolling = false;
+      ceobeLastPollAt = Date.now();
+    }
+  }
+
+  function scheduleCeobeCheck(delay = 15_000) {
+    if (ceobeTimer) return;
+    setTimeout(() => { void pollCeobe(); }, delay).unref?.();
+    ceobeTimer = setInterval(() => { void pollCeobe(); }, CEOBE_POLL_MS);
+    ceobeTimer.unref?.();
+  }
+
+  async function ceobeInfo({ refresh = false } = {}) {
+    let sources = [];
+    let sourceError = '';
+    try {
+      sources = await ensureCeobeSources({ refresh });
+    } catch (error) {
+      sourceError = String(error?.message ?? error);
+    }
+    return {
+      sources: sources.map((source) => ({
+        unique_id: String(source.unique_id ?? ''),
+        nickname: String(source.nickname ?? ''),
+        platform: String(source.platform ?? ''),
+        datasource: String(source.datasource ?? ''),
+        avatar: String(source.avatar ?? ''),
+        jump_url: String(source.jump_url ?? ''),
+      })),
+      sourceError,
+      status: {
+        enabled: cfg.discord.ceobe.enabled,
+        polling: ceobePolling,
+        lastPollAt: ceobeLastPollAt || null,
+        lastError: ceobeLastError,
+        sourcesCachedAt: ceobeSources?.at ?? null,
+        cookieId: ceobeList.cookieId || null,
+        cookies: ceobeList.cookies.length,
+      },
+    };
   }
 
   // ── 回訪（工作包 I） ──────────────────────────────────────────────────────
@@ -7253,7 +7538,7 @@ async function main() {
     // 上次橋接被砍掉時，容器可能還留著；背景清掉，不能讓 docker 卡住拖慢聊天。
     void cleanupStaleContainers({ log });
   }
-  agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: agentHandlers, log });
+  agentApiHandle = await startAgentApi({ file: AGENT_ENDPOINT_FILE, handlers: apiHandlers, log });
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
   // 外掛失聯（DSH 重啟、當掉、連不上）：不會再有 poll 或 done，等 2 分鐘就收掉並告訴頻道。
   const imageJobSweep = setInterval(() => {
@@ -7279,6 +7564,7 @@ async function main() {
   imageJobSweep.unref?.();
   scheduleSummaryCheck();
   scheduleFollowupCheck();
+  scheduleCeobeCheck();
   codexResetPinger?.start();
 
   // ── 控制台 ───────────────────────────────────────────────────────────────
@@ -7314,6 +7600,7 @@ async function main() {
       notes: cfg.discord.notes,
       knowledge: cfg.discord.knowledge,
       followup: cfg.discord.followup,
+      ceobe: cfg.discord.ceobe,
       slang: cfg.discord.slang,
       videoLinks: cfg.discord.videoLinks,
       typing: cfg.discord.typing,
@@ -7528,6 +7815,12 @@ async function main() {
       },
       knowledge: pick(cfg.discord.knowledge, patch?.knowledge, ['enabled', 'maxChars', 'toolMaxChars']),
       followup: pick(cfg.discord.followup, patch?.followup, ['enabled']),
+      // 控制台一次送整份 channels；只送 enabled 時不要把已設定的頻道蓋掉。
+      ceobe: {
+        ...cfg.discord.ceobe,
+        ...(patch?.ceobe ?? {}),
+        channels: patch?.ceobe?.channels ?? cfg.discord.ceobe.channels,
+      },
       slang: {
         ...pick(cfg.discord.slang, patch?.slang, ['enabled', 'injectMax', 'maxChars']),
         jev: pick(cfg.discord.slang.jev, patch?.slang?.jev, ['mode', 'confirmAt', 'rejectBelow']),
@@ -7597,7 +7890,7 @@ async function main() {
     };
     // 新區塊只在這次真的送了才寫回：/blacklist、/mention 不該把 tts、reactions 等
     // 整份 normalize 後的預設值一起寫進 config.json。
-    for (const key of ['tts', 'context', 'batch', 'security', 'emoji', 'memes', 'reactions', 'memory', 'notes', 'knowledge', 'followup', 'slang', 'videoLinks', 'historyArchive']) {
+    for (const key of ['tts', 'context', 'batch', 'security', 'emoji', 'memes', 'reactions', 'memory', 'notes', 'knowledge', 'followup', 'ceobe', 'slang', 'videoLinks', 'historyArchive']) {
       if (patch?.[key] !== undefined) doc.discord[key] = next[key];
     }
     for (const key of ['typing', 'sendDelayMs', 'maxMessageChars', 'ackMessage', 'autoCompactTokens', 'ttftTimeoutMs']) {
@@ -7640,6 +7933,23 @@ async function main() {
     cfg.discord.notes = next.notes;
     cfg.discord.knowledge = next.knowledge;
     cfg.discord.followup = next.followup;
+    // 餅的設定改了：清掉組合與列表快取，下一輪重算；新頻道／新來源靠水位擋住舊餅。
+    const ceobeChanged = JSON.stringify(cfg.discord.ceobe) !== JSON.stringify(next.ceobe);
+    if (next.ceobe.enabled && !ceobeState.isEnabled()) ceobeState.resetSince();
+    cfg.discord.ceobe = next.ceobe;
+    ceobeState.setEnabled(next.ceobe.enabled);
+    if (ceobeChanged) {
+      ceobeState.pruneChannels(next.ceobe.channels);
+      // 新 pair 在存檔當下就建水位，不要等到第一次輪詢成功才開始算。
+      if (next.ceobe.enabled) {
+        for (const [channelId, sourceIds] of Object.entries(next.ceobe.channels)) {
+          for (const sourceId of sourceIds) ceobeState.ensurePair(channelId, sourceId);
+        }
+      }
+      ceobeSources = null;
+      ceobeComb = { key: '', id: '' };
+      ceobeList = { cookieId: '', cookies: [] };
+    }
     cfg.discord.slang = next.slang;
     cfg.discord.videoLinks = next.videoLinks;
     cfg.discord.typing = next.typing;
@@ -7698,7 +8008,7 @@ async function main() {
       scheduleTradeJobs();
     }
 
-    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，chatty ${next.chattyChannels.length}，政治開放 ${next.openPoliticsChannels.length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}`);
+    log(`更新設定：allow ${next.allow.guilds.length}/${next.allow.channels.length}/${next.allow.users.length}，ownerIds ${next.ownerIds.length}，${requireMentionInGuild() ? '頻道要 @bot' : '自由參與'}，頻道覆寫 ${Object.keys(next.requireMentionInChannel).length}，chatty ${next.chattyChannels.length}，政治開放 ${next.openPoliticsChannels.length}，sandbox ${next.sandbox.enabled ? `開（${next.sandbox.channels.length} 個頻道）` : '關'}，餅 ${next.ceobe.enabled ? `開（${Object.keys(next.ceobe.channels).length} 個頻道）` : '關'}`);
     warnChattyChannels();
     return editableConfig();
   }
@@ -7888,6 +8198,7 @@ async function main() {
             if (removed) log(`控制台取消回訪 ${id}`);
             return removed;
           },
+          ceobe: ceobeInfo,
           notes: () => ({
             enabled: cfg.discord.notes.enabled,
             notes: notesOverview(notesStore).map((note) => ({

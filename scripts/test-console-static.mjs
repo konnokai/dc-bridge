@@ -48,6 +48,10 @@ console.log('## Discord 控制台');
     && /api\('\/api\/archive\/delete'/.test(dc) && /api\('\/api\/archive\/channels'/.test(dc),
   '歷史歸檔卡片接上瀏覽、搜尋、刪除與頻道端點');
   ok(/confirm\(`從歸檔刪掉這則/.test(dc), '歸檔刪除要二次確認');
+  ok(/id="ceobe-targets"/.test(dc) && /id="ceobe-form"/.test(dc), '小刻食堂卡片有頻道表單');
+  ok(/api\('\/api\/ceobe'/.test(dc), '小刻食堂卡片接上資料源端點');
+  ok(/cfg\.discord\.ceobe = next\.ceobe/.test(fs.readFileSync(path.join(ROOT, 'src', 'discord-bridge.js'), 'utf8')),
+    '餅的設定會套用到記憶體');
   ok(/table\s*\{[^}]*table-layout:\s*fixed/.test(dc), '所有表格固定欄寬');
   ok(/\.entry-table\s*\{[^}]*min-width/.test(dc) && /\.entry-table tbody td\s*\{[^}]*height:\s*84px/.test(dc), '黑話／頻道表固定列高');
   const dcScript = [...dc.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])[0] ?? '';
