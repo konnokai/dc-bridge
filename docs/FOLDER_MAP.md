@@ -28,7 +28,7 @@
 | `discord-agent.mjs` | token 解析、每輪額度、`send` 守衛 |
 | `discord-batch.mjs` | 批次器、回合佇列（含指令排隊與 hold/rebase）與 batch prompt 組裝 |
 | `discord-typing.mjs` | @ 模式的補句窗口 |
-| `discord-context.mjs` | 頻道上下文 |
+| `discord-context.mjs` | 頻道上下文，以及共用的文字整形（`flat`／`authorName`／`withStickers`／`embedPreview`） |
 | `discord-time.mjs` | 相對時間字串（3s／18m／2h／3d） |
 | `discord-activity.mjs` | 發言頻率 |
 | `discord-quiet.mjs` | 安靜模式 |
@@ -37,27 +37,36 @@
 | `discord-feedback.mjs` | 自己訊息收到的 reaction |
 | `discord-dev-feedback.mjs` | 模型送給開發者的功能申請與意見 |
 | `discord-followup.mjs` | 回訪排程 |
+| `discord-ask.mjs` | 後台提問（`/ask`）的回合、逾時與取消 |
 | `discord-ceobe.mjs` | 小刻食堂（餅）輪詢、分派與已讀水位 |
 | `discord-notes.mjs` | 頻道筆記與每日摘要 |
+| `discord-knowledge.mjs` | 群知識候選、確認與注入格式 |
+| `discord-status.mjs` | 自訂狀態的清洗與檔案讀寫 |
 | `discord-memes.mjs` | 梗圖庫 |
 | `discord-reload.mjs` | `/reload-system-prompt` 的交接摘要 |
 | `discord-memory.mjs` | 群友記憶與側寫 |
 | `discord-profiles.mjs` | 群友側寫的 prompt 與輸出解析 |
 | `discord-history-archive.mjs` | 歷史歸檔（Qdrant + embedding） |
+| `discord-history.mjs` | 歷史掃描、搜尋分頁與 guild 搜尋參數 |
 | `discord-slang.mjs` | 黑話收集與注入 |
+| `jev.mjs` | Jev 對話閘門、黑話候選分流與成本判斷 |
 | `discord-json.mjs` | 從模型輸出抓 JSON 陣列 |
 | `discord-emoji.mjs` | 表情目錄與使用次數 |
 | `discord-media.mjs` | 圖片與連結預覽、`send_image` 的本機生圖檔案解析 |
+| `twitter-post.mjs` | X／Twitter 貼文解析（FxEmbed）、正文與圖片 |
+| `discord-video-link.mjs` | 影片連結的 yt-dlp 字幕、章節與抽格 |
 | `prts-artwork.mjs` | PRTS 立繪解析 |
 | `discord-gif.mjs` | GIPHY 搜尋 |
 | `discord-security.mjs` | 白名單、敏感詞 |
 | `discord-usage.mjs` | 用量統計 |
 | `discord-turns.mjs` | 回合決策紀錄（`state/discord-turns.jsonl`） |
 | `discord-codex-quota.mjs` | Codex 額度查詢與重置 ping |
+| `codex-models.mjs` | Codex 模型清單查詢與預設模型 |
 | `discord-trigger-stats.mjs` | 觸發統計 |
 | `discord-send-handler.mjs` | MCP `/send` 的送出統計 |
 | `discord-image-jobs.mjs` | 背景生圖工作 |
 | `discord-voice-jobs.mjs` | 背景語音工作 |
+| `discord-tts.mjs` | TTS 合成、轉檔、語音閘門與 `send_voice` 的降級 |
 | `discord-console.mjs` | 控制台 API 的純邏輯 |
 | `discord-trade.mjs` | 模擬股票交易規則 |
 | `discord-trade-db.mjs` | 交易域 SQLite |
@@ -72,7 +81,9 @@
 | `discord-bridge-usage.mjs` | Token 帳本、回合紀錄（`writeTurn`）與三個 provider 的訂閱額度查詢 |
 | `discord-bridge-dsh-sessions.mjs` | DSH 會話層：preset 檢查、`ensureSession`、退役（`retireSession`）與交接摘要 |
 | `discord-bridge-output.mjs` | Discord 送出：會話改名、頻道解析（`resolveChannel`）與分條發送（`sendLong`） |
-| `discord-bridge-agent-tools.mjs` | 智能體工具：`agentHandlers`／`apiHandlers`、`createAgentSender` 接線與生圖工作 handler |
+| `discord-bridge-agent-tools.mjs` | 智能體工具的中控：送出、記憶、筆記、知識、梗圖、回饋等 handler、`apiHandlers` 包裝與生圖工作；讀取與交易由下面兩個模組提供 |
+| `discord-bridge-agent-read.mjs` | 讀取工具：`read_history`／`search_history`／`recall_history`／`view_message`／`user_info`／`server_info`／`daily_stats` 與它們的排版 |
+| `discord-bridge-agent-trade.mjs` | 模擬股票工具：`trade-quote`／`trade-symbols`／`trade-order`／`trade-portfolio`／`trade-leaderboard` 與 bot 下單 |
 | `discord-bridge-background.mjs` | 背景工作：黑話學習、小刻食堂輪詢、回訪排程、每日摘要與群友側寫、後台提問與背景會話 |
 | `discord-bridge-trade.mjs` | 模擬股票：服務建立、結算、Bot 交易員與復盤排程；控制台改設定走 `applyTradeConfig` |
 | `discord-bridge-inbound.mjs` | Discord 入口事件：訊息、reaction、typing 與 slash 命令的准入分派 |

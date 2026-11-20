@@ -814,6 +814,12 @@ export function viewChannelId(value) {
   return /^\d{17,20}$/.test(id) ? id : null;
 }
 
+// 控制台貼的訊息連結：抓 guild／channel／message 三段。只要完整網址，不吃裸 id。
+export function parseMessageLink(value) {
+  const match = /^(?:https?:\/\/)?(?:www\.)?(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d{5,25})\/(\d{5,25})\/(\d{5,25})\/?$/.exec(String(value ?? '').trim());
+  return match ? { guildId: match[1], channelId: match[2], messageId: match[3] } : null;
+}
+
 /** `/blacklist`：把一個人加入或移出 deny.self（自己退出的名單），其他欄位原樣保留。 */
 export function withSelfMutedUser(deny, userId, muted) {
   const id = String(userId);

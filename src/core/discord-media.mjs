@@ -469,16 +469,9 @@ async function prepareVideoUrlBlockNow(url, limits, { timeoutMs } = {}) {
 // discord.js 的 StickerFormatType：1 PNG、2 APNG、3 Lottie、4 GIF。APNG 的網址也是 .png。
 const STICKER_MIME = { 1: 'image/png', 2: 'image/png', 4: 'image/gif' };
 
-/** 訊息貼圖 → `[貼圖：名稱]`，接在文字後面，模型才知道對方送了哪一張。 */
-export function stickerLabel(stickers) {
-  return [...(stickers?.values?.() ?? [])]
-    .map((s) => `[貼圖：${String(s?.name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)}]`)
-    .join('');
-}
-
 /**
  * 訊息貼圖 → 跟附件同形狀的清單，交給 collectMediaAttachments 把關網址與張數。
- * Lottie 是向量動畫 JSON，模型看不了，只靠 stickerLabel 給名稱。
+ * Lottie 是向量動畫 JSON，模型看不了，只靠 `discord-context` 的 stickerLabel 給名稱。
  */
 export function stickerImages(stickers) {
   return [...(stickers?.values?.() ?? [])]

@@ -15,9 +15,11 @@ import {
   normalizeDiscordConfig,
   normalizeHedgeConfig,
   parseKeyAction,
+  parseMessageLink,
   validateModelChoice,
   sessionLabelFor,
 } from './discord-core.mjs';
+import { flat, textArg } from './discord-context.mjs';
 import {
   SLANG_STATUS,
   confirmSlang,
@@ -84,10 +86,8 @@ export async function createConsoleLayer({
   turns,
   applyTradeConfig,
   getTradeService,
-  flat,
   lastActive,
   localDayKey,
-  parseMessageLink,
   persistMemesNow,
   quietUntil,
   reloadSystemPrompt,
@@ -101,7 +101,6 @@ export async function createConsoleLayer({
   slangQueueInfo,
   startEmojiBuild,
   emojiBuildLogTail,
-  textArg,
   warnChattyChannels,
   markDevFeedbackDirty,
   markKnowledgeDirty,

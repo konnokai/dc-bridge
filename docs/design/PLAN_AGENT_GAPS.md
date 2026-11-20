@@ -41,7 +41,8 @@
 
 幾乎每個工作包都會改到下面這些檔案。兩個 session 同時改，一定會衝突：
 
-- `src/discord-bridge.js`（`agentHandlers`、`buildBatchPrompt`、`handleMessage`）
+- `src/discord-bridge.js`（入口接線、`buildBatchPrompt`、`handleMessage`）
+- `src/core/discord-bridge-agent-tools.mjs`（工具中控；讀取類在 `-agent-read`、交易類在 `-agent-trade`）
 - `src/mcp-discord.js`
 - `src/core/discord-agent.mjs`
 - `plugins/dc-agent-presets/dc-tool-restrict.mjs`
@@ -62,7 +63,9 @@
 ### 0.2 新增一個 MCP 工具要改的地方（每個都要改，漏一個工具就會靜默失效）
 
 1. `src/mcp-discord.js`：用 `tool()` 註冊。參數說明寫中文，照現有工具的語氣。
-2. `src/discord-bridge.js` 的 `agentHandlers`：加路由。一定要先過 `agentSender.resolve(token)`。
+2. 工具 handler：讀取類加在 `src/core/discord-bridge-agent-read.mjs`、交易類加在
+   `src/core/discord-bridge-agent-trade.mjs`、其他加在 `src/core/discord-bridge-agent-tools.mjs`。
+   handler 一定要先過 `agentSender.resolve(token)`；入口不用接線。
 3. `src/core/discord-agent.mjs`：有「一輪上限」就加進 `usedLimits`／`withQuota`。
 4. `plugins/dc-agent-presets/dc-tool-restrict.mjs` 的 `DISCORD_TOOLS`：加**完整工具名**。
    這裡沒有前綴放行，沒列進去的工具會在執行期被拒絕。

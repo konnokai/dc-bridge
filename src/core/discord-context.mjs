@@ -378,3 +378,41 @@ export function guildBlacklistNames(ids, guild) {
     return name ? [name] : [];
   });
 }
+
+/** 訊息貼圖 → `[貼圖：名稱]`，接在文字後面，模型才知道對方送了哪一張。 */
+export function stickerLabel(stickers) {
+  return [...(stickers?.values?.() ?? [])]
+    .map((s) => `[貼圖：${String(s?.name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)}]`)
+    .join('');
+}
+
+// 工具與 prompt 共用的文字整形：不依賴執行期狀態，需要的模組直接 import。
+// 工具回給模型的群友文字：去掉換行（不能偽造新的一行）與 ★／【管理員】標記。
+export const flat = (value, max) => defang(String(value ?? '')).replace(/\s+/g, ' ').trim().slice(0, max);
+export const textArg = (value, max = 100) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+export const authorName = (message, member = message.member) =>
+  visibleName(member?.displayName, message.author?.displayName, message.author?.username) || '未知';
+export const withStickers = (message) => {
+  const parts = messageParts(message);
+  return [parts.text, stickerLabel(parts.stickers)].filter(Boolean).join(' ');
+};
+
+/** batch 的一行連結預覽：標題、作者、平台。讓模型不必只憑縮圖猜。 */
+export function embedPreview(message) {
+  const previews = messageParts(message).embeds.slice(0, 2).map((embed) => {
+    const data = embed?.data ?? embed;
+    const type = String(data?.type ?? '').toLowerCase();
+    const title = flat(resolveMentions(data?.title, message), 80)
+      || flat(componentParts(data?.components).texts[0], 60);
+    const author = flat(resolveMentions(data?.author?.name, message), 40);
+    const provider = flat(data?.provider?.name, 30);
+    if (type === 'gifv' && !title && !author && !provider) return '';
+    return [
+      type === 'video' ? '影片' : type === 'gifv' ? 'GIF' : '',
+      title,
+      author && `作者 ${author}`,
+      provider,
+    ].filter(Boolean).join('｜');
+  }).filter(Boolean);
+  return previews.join('；').slice(0, 160);
+}

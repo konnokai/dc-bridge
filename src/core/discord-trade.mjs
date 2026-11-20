@@ -77,6 +77,16 @@ export function formatPct(value) {
   return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`;
 }
 
+/** 公開復盤前去掉連結，避免新聞或模型輸出變成釣魚連結／邀請連結。 */
+export function stripPublicLinks(text) {
+  return String(text ?? '')
+    .replace(/https?:\/\/(?:discord(?:app)?\.(?:gg|com\/invite))\/\S+/gi, '（邀請連結已省略）')
+    .replace(/\b(?:discord\.gg|discord(?:app)?\.com\/invite)\/\S+/gi, '（邀請連結已省略）')
+    .replace(/https?:\/\/\S+/gi, '（連結已省略）')
+    .replace(/\bwww\.\S+/gi, '（連結已省略）')
+    .replace(/@(everyone|here)/gi, '@\u200b$1');
+}
+
 /** "HH:MM" → 當日分鐘數；格式不對回 NaN。 */
 export function parseHhmm(value) {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? '').trim());

@@ -11,6 +11,7 @@ import path from 'node:path';
 import * as acorn from 'acorn';
 import * as eslintScope from 'eslint-scope';
 import * as espree from 'espree';
+import { factoryCalls, missingDeps } from './lib/factory-wiring.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ENTRY = path.join(ROOT, 'src', 'discord-bridge.js');
@@ -229,9 +230,11 @@ for (const file of [...bridgeModules, 'discord-bridge.js']) {
   ok(bad.length === 0, `${file}：import 的名字目標模組都有 export${bad.length ? `（${bad.join(', ')}）` : ''}`);
 }
 
-// ── G：factory 簽名解構的 deps，入口接線都要給 ─────────────────────
+// ── G：factory 簽名解構的 deps，呼叫端接線都要給 ─────────────────────
 // 踩過一次：withTimeout 在簽名裡、模組也用，但入口接線漏傳——範圍分析
 // 只看「有沒有宣告」（解構就算宣告），只有這項比對「接線 key」會抓到。
+// 掃描範圍含入口與所有 bridge 模組：子 factory 在模組裡組裝時漏 key，
+// 入口看不到，這項要自己進去抓。
 const factoryParams = new Map(); // createXxx -> [參數 key]
 for (const file of bridgeModules) {
   const text = fs.readFileSync(path.join(CORE, file), 'utf8');
@@ -239,18 +242,36 @@ for (const file of bridgeModules) {
   for (const node of ast.body) {
     if (node.type !== 'ExportNamedDeclaration' || node.declaration?.type !== 'FunctionDeclaration') continue;
     const name = node.declaration.id.name;
-    const param = node.declaration.params[0];
+    let param = node.declaration.params[0];
+    if (param?.type === 'AssignmentPattern') param = param.left;
+    // createXxx(deps) 在函式內 `const { ... } = deps` 的寫法：把內層解構當簽名一起檢查。
+    if (param?.type === 'Identifier') {
+      const inner = node.declaration.body.body
+        .flatMap((stmt) => (stmt.type === 'VariableDeclaration' ? stmt.declarations : []))
+        .find((d) => d.id.type === 'ObjectPattern' && d.init?.type === 'Identifier' && d.init.name === param.name);
+      param = inner?.id ?? param;
+    }
     if (param?.type !== 'ObjectPattern') { factoryParams.set(name, null); continue; }
-    const keys = param.properties.map((p) => (p.type === 'Property' ? p.key.name : p.value.name)).filter(Boolean);
+    const keys = param.properties
+      .filter((prop) => prop.type !== 'RestElement')
+      .map((prop) => (prop.type === 'Property' ? prop.key.name : prop.value?.name ?? null))
+      .filter(Boolean);
     factoryParams.set(name, keys);
   }
 }
-for (const factory of factories) {
-  const params = factoryParams.get(factory.name);
-  if (!params) continue; // 非 bridge 模組的 factory（createAgentSender 等）不在這比
-  const missing = params.filter((p) => !factory.keys.includes(p));
-  ok(missing.length === 0,
-    `${factory.name}：簽名的 deps 接線都有給${missing.length ? `（漏 ${missing.join(', ')}）` : ''}`);
+const factoryFiles = [
+  ...bridgeModules.map((file) => [file, path.join(CORE, file)]),
+  ['discord-bridge.js', ENTRY],
+];
+for (const [label, filePath] of factoryFiles) {
+  const ast = espree.parse(fs.readFileSync(filePath, 'utf8'), { ecmaVersion: 'latest', sourceType: 'module', range: true, loc: true });
+  for (const call of factoryCalls(ast)) {
+    const params = factoryParams.get(call.name);
+    if (!params || call.spread) continue; // 非 bridge 的 factory、spread 或非物件參數不比
+    const missing = missingDeps(params, call.keys);
+    ok(missing.length === 0,
+      `${label}:${call.line} ${call.name}：簽名的 deps 都有接${missing.length ? `（漏 ${missing.join(', ')}）` : ''}`);
+  }
 }
 
 // ── E：入口 import 沒有死 binding ─────────────────────────────────

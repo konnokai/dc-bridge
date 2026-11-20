@@ -75,7 +75,6 @@ import {
   resolveGeneratedImage,
   resolveReferenceImage,
   stickerImages,
-  stickerLabel,
   viewMediaItems,
 } from '../src/core/discord-media.mjs';
 import { searchGifs } from '../src/core/discord-gif.mjs';
@@ -93,7 +92,7 @@ import {
   videoLinks,
 } from '../src/core/discord-video-link.mjs';
 import { resolveConsoleToken, startConsole } from '../src/core/discord-console.mjs';
-import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, promptBody, referencedMessage, warmMemberCache } from '../src/core/discord-context.mjs';
+import { OPENING_HINT, componentParts, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, linkPaths, messageParts, parseHistoryDate, promptBody, referencedMessage, stickerLabel, warmMemberCache } from '../src/core/discord-context.mjs';
 import { scanHistoryMessages, guildSearchParams, orderSearchHits, collectSearchHits } from '../src/core/discord-history.mjs';
 import { ACTIVITY_WINDOW_MS, createActivityTracker, formatActivityLine } from '../src/core/discord-activity.mjs';
 import { createQuietState, formatQuietUntil, isQuietBatchSkipped, quietSendBlocked } from '../src/core/discord-quiet.mjs';
