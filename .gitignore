@@ -8,6 +8,7 @@ config.json
 *.log
 *.bak
 *.bak-*
+deploy/firecrawl/.env
 
 # 本地模型选型 / 硬件配置调研（内部笔记，无任何公开文档引用）
 /LOCAL_MODEL_SIZING.md

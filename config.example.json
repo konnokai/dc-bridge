@@ -242,6 +242,9 @@
     "maxUses": 5,
     "maxTokens": 4096,
     "maxResults": 8,
-    "timeoutMs": 35000
+    "timeoutMs": 35000,
+    "firecrawlURL": "",
+    "firecrawlApiKey": "",
+    "firecrawlApiKeyEnv": "FIRECRAWL_API_KEY"
   }
 }

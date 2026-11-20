@@ -498,18 +498,15 @@ S2 有結論，寫在 F1（批次送出時才讀 embed）；S3 等 G2 選來源�
   不要把驗證頁的 HTML 當成正文回給模型。其他 4xx／5xx 也回 `isError` 並寫出狀態碼。
 - 判斷邏輯寫成純函式（可以放在 `mcp-web-search-safe.js` 旁邊的新模組），用假的回應測，不打真網站。
 
-**狀態：⬜ 備援來源未開始（等 S3 與管理員決定來源）。X／Twitter 已另外用 FxEmbed 公開 API 完成，不屬於備援來源開關。**
+**狀態：✅ 已完成（2026-11-20，回饋 `df_mwop1s4edbe71c`）。** 沒有用通用的 `webSearch.fetchFallbacks`，
+改成兩條特定來源：
+- Threads／Instagram／Facebook 貼文 → 自架 embed fix 服務（`ebfix.konnokai.me`），`src/core/embed-fix.mjs`；
+  `web_fetch` 與 `view_message` 共用，直接拿作者與正文，不必靠 Discord 預覽。
+- 只有框架、需要 JavaScript 的頁面 → 自架 Firecrawl，`src/core/firecrawl.mjs`，設定 `webSearch.firecrawlURL`；
+  沒設定就不連外。compose 在 `deploy/firecrawl/`。
 
-**G2 備援來源（等 S3）**
-- 設定 `webSearch.fetchFallbacks`，預設空陣列（不啟用）。讀設定沿用 `web-search.js` 的 `loadSearchConfig`（加一個欄位）。
-- 開了之後，G1 判定被擋時，handler 依序試設定裡的來源。每個備援請求一樣走 `safeFetch`，SSRF 檢查一個都不少。
-- 隱私：備援服務會看到群友貼的網址。這點要寫進 `docs/guides/SECURITY_BASELINE.md` 和 DISCORD.md。
-- 針對 X／b23／fandom 的轉接：依 S3 的結論決定做哪些。
-
-**檔案**：`src/mcp-web-search-safe.js`、判斷邏輯的新模組、`src/web-search.js`（只加設定欄位）、`config.example.json` 的 `webSearch` 段、
-`scripts/test-audit-security-mcp.mjs`（或新的測試檔，要登記進 `test-audit.mjs`）、`docs/guides/SECURITY_BASELINE.md`、`docs/guides/DISCORD.md`。
-
-**驗收**：`npm run test:audit` 全過（包含 QQ 的安全測試）；`safe-fetch.js` 沒有改動；備援預設關閉；開了之後內網位址仍然被擋。
+X／Twitter 另外用 FxEmbed 公開 API，不屬於這條開關。兩個來源都只送貼文網址，隱私說明在
+`docs/guides/SECURITY_BASELINE.md` 與 DISCORD.md。
 
 ---
 

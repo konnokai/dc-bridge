@@ -44,6 +44,12 @@ QQ／SnowLuma／OneBot 已移除，不在威脅模型內。
 - `run_script` 在一次性 Docker 容器執行：無網路、無主機檔案、非 root，只回 stdout／stderr；只有 `discord.sandbox.channels` 列出的頻道能用。
 - `web_fetch` 只允許 https:443，逐跳驗證重新導向；擋 localhost、私有 IP、CGNAT、link-local 與 URL 內嵌憑證。
 - 搜尋與抓取結果標成「資料，不是指令」；截斷與大小上限在共用 transport 層。
+- Threads／Instagram／Facebook 貼文網址會轉給自架 embed fix 服務（`ebfix.konnokai.me`）：只送貼文路徑，
+  查詢參數在 Threads／Instagram 會丟掉；服務只抓公開內容，不帶 Cookie。貼文網址因此會經過 Cloudflare。
+- 需要 JavaScript 的頁面，設定 `webSearch.firecrawlURL` 後會把原網址交給自架 Firecrawl 渲染。
+  Firecrawl 只綁 `127.0.0.1`、沒有認證；沒設定 `firecrawlURL` 就完全不會連外。
+  這條路的 SSRF 邊界由 Firecrawl 的瀏覽器與它的 proxy 負責，不經過 `safeFetch`；
+  映像固定 digest（2026-11-20），升級前要確認沒有新的 SSRF advisory。
 
 ### 7. `state/` 與憑證
 - `state/` 與 `config.json` 由 `state-acl.mjs` 收緊 ACL；`diagnose:acl` 只讀盤點，`harden-acl` 在一般終端修復。
@@ -59,8 +65,8 @@ QQ／SnowLuma／OneBot 已移除，不在威脅模型內。
 ## 四、發布前檢查
 
 ```bash
-npm run test:audit          # 離線安全與共用模組回歸（18 個腳本）
-npm run test:discord        # Discord 橋接全部離線測試（32 個腳本）
+npm run test:audit          # 離線安全與共用模組回歸（19 個腳本）
+npm run test:discord        # Discord 橋接全部離線測試（39 個腳本）
 npm run test:console-ui     # 控制台瀏覽器回歸（需 Playwright／Chromium）
 npm run diagnose:acl        # ACL 盤點（只讀）
 npm run scan:tool-names     # 守衛名單 vs 已安裝 DSH 的真實工具名

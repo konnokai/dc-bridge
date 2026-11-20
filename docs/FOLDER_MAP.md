@@ -88,6 +88,8 @@
 | `safe-fetch.js` | 有 SSRF 防護的抓取 |
 | `core/fetch-verdict.mjs` | 抓取結果判斷（驗證頁／HTTP 錯誤） |
 | `core/web-content.mjs` | Google export 改寫、HTML 標題／og／正文抽取 |
+| `core/embed-fix.mjs` | Threads／Instagram／Facebook 貼文改打 ebfix，取作者與正文 |
+| `core/firecrawl.mjs` | 只有框架的頁面交給自架 Firecrawl 渲染 |
 | `sensitive.js` | 敏感詞 |
 | `media-normalize.js` | 圖片正規化 |
 | `token-ledger.js` | token 帳本 |
@@ -105,6 +107,7 @@
 | `assets/` | 圖片等資源；`ai-chan-sheets/` 是 AI 娘三視圖與設定圖 |
 | `docs/` | 全部文件，見 [README.md](README.md) |
 | `deploy/alloy/` | Loki 收集器（Alloy）的獨立 compose、設定與操作說明 |
+| `deploy/firecrawl/` | 自架 Firecrawl 的獨立 compose（只綁 127.0.0.1）與操作說明 |
 | `deploy/grafana/` | `dc-bridge 營運` dashboard 的 import JSON 與說明 |
 | `state/` | 執行時資料（會話映射、會話 preset 映射、筆記、回訪、回饋、帳本、餅的已讀、鎖、生圖與股票資料）。`.gitignore` 排除，**不要刪** |
 | `config.json` | 真實設定，不入庫；模板是 `config.example.json` |

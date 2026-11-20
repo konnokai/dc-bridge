@@ -6,7 +6,7 @@
 ## 決定
 
 `dc-bridge` 與 `dsh` 繼續用 **pm2** 在 host 上跑。Docker Compose 只用在獨立的周邊服務：
-Alloy，以及既有的 Prometheus／Loki／Grafana。bridge 本身不進 compose。
+Alloy、Firecrawl，以及既有的 Prometheus／Loki／Grafana。bridge 本身不進 compose。
 
 ## 理由
 

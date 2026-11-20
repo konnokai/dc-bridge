@@ -1,0 +1,136 @@
+# 自架 Firecrawl：dc-bridge 的 web_fetch 在頁面只有框架、沒有正文時用它渲染。
+#
+# 只發佈到 127.0.0.1，而且不開 API 認證：這個 stack 只給同一台機器上的 dc-bridge 用，
+# 不要對外開放，也不要把 3002 加進任何反向代理。
+# 設定寫在 .env（從 .env.example 複製）；真正的 .env 不進版控。
+name: dc-bridge-firecrawl
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
+
+services:
+  api:
+    # 2026-11-20 的 latest digest（含 SSRF／DNS rebinding 修正）。官方沒有版本 tag；
+    # 要升級就換 digest，並先看一次官方 release 的 compose 有沒有新變數。
+    image: ${FIRECRAWL_IMAGE:-ghcr.io/firecrawl/firecrawl@sha256:d4d1a89a195532677beaf8f80ae35f67f1e00d36c0fe3caf71c30ed8b7b4f017}
+    restart: unless-stopped
+    command: node dist/src/harness.js --start-docker
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3002
+      ENV: local
+      # 只在本機埠上提供服務；沒有認證時更不能對外。
+      USE_DB_AUTHENTICATION: "false"
+      REDIS_URL: redis://redis:6379
+      REDIS_RATE_LIMIT_URL: redis://redis:6379
+      PLAYWRIGHT_MICROSERVICE_URL: http://playwright:3000/scrape
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請從 .env.example 建立 .env 並設定 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_HOST: nuq-postgres
+      POSTGRES_PORT: 5432
+      # RabbitMQ 有帳密，URL 要一起帶；密碼請用英數字（特殊字元要做 URL 編碼）。
+      NUQ_RABBITMQ_URL: amqp://${RABBITMQ_USER:-firecrawl}:${RABBITMQ_PASSWORD:?請在 .env 設定 RABBITMQ_PASSWORD}@rabbitmq:5672
+      # 這台只服務一個 Discord bot 的單篇抓取，不需要預設的 8 個 worker。
+      NUM_WORKERS_PER_QUEUE: ${NUM_WORKERS_PER_QUEUE:-2}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
+      BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-2}
+      LOGGING_LEVEL: ${LOGGING_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_started
+      playwright:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      nuq-postgres:
+        condition: service_healthy
+    ports:
+      # 只綁 loopback：dc-bridge 用 http://127.0.0.1:3002。
+      - "127.0.0.1:${FIRECRAWL_PORT:-3002}:3002"
+    mem_limit: 4g
+    memswap_limit: 4g
+    cpus: 2.0
+    logging: *logging
+
+  playwright:
+    image: ${FIRECRAWL_PLAYWRIGHT_IMAGE:-ghcr.io/firecrawl/playwright-service@sha256:227ce3d8059173925a5a0697c63a1e947662cca934a609151651f578774edd5d}
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      # 只要文字正文，不抓圖片與影片，速度比較穩。
+      BLOCK_MEDIA: ${BLOCK_MEDIA:-true}
+      MAX_CONCURRENT_PAGES: ${MAX_CONCURRENT_PAGES:-2}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Chromium 的共享記憶體；不給的話大頁面容易崩。
+    shm_size: 1gb
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: 2.0
+    logging: *logging
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    # 只是佇列與限流，不需要落盤。
+    command: ["redis-server", "--bind", "0.0.0.0", "--save", "", "--appendonly", "no"]
+    mem_limit: 512m
+    memswap_limit: 512m
+    logging: *logging
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    environment:
+      # 只有 compose 內部網路會連，不發佈管理介面。
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-firecrawl}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?請在 .env 設定 RABBITMQ_PASSWORD}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 512m
+    memswap_limit: 512m
+    logging: *logging
+
+  nuq-postgres:
+    image: ${FIRECRAWL_POSTGRES_IMAGE:-ghcr.io/firecrawl/nuq-postgres@sha256:d719b36160eac2fcbe16dc7e7360ddb9c82c40ea5da183d07bf4a755c6a0b2ae}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請從 .env.example 建立 .env 並設定 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      # 佇列狀態；砍掉 volume 等於清空 Firecrawl 的工作紀錄，抓取結果不受影響。
+      - nuq-postgres-data:/var/lib/postgresql/data
+    mem_limit: 1g
+    memswap_limit: 1g
+    logging: *logging
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  nuq-postgres-data:

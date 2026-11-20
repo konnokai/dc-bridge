@@ -15,10 +15,12 @@
 // - 搜索结果/抓取结果仅作为“候选解释”，最终是否入库仍由控制台人工确认。
 import path from 'node:path';
 import { safeFetch } from './safe-fetch.js';
+import { embedFixLines, embedFixTarget, fetchEmbedFixPost } from './core/embed-fix.mjs';
 import { fetchVerdict } from './core/fetch-verdict.mjs';
+import { firecrawlScrape } from './core/firecrawl.mjs';
 import { normalizeWebFetchUrl } from './core/web-content.mjs';
 import { fetchTwitterPost, twitterPostLines, twitterStatusId } from './core/twitter-post.mjs';
-import { webSearch } from './web-search.js';
+import { loadSearchConfig, webSearch } from './web-search.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -70,6 +72,42 @@ function untrustedData(data, maxChars = UNTRUSTED_MAX_CHARS) {
 // web_fetch 会跟随重定向，所以白名单必须交给 safeFetch 逐跳校验；默认不限，只有这里收窄。
 const WEB_FETCH_OPTS = { allowProtocols: ['https:'], allowPorts: [443] };
 
+/**
+ * 直接抓只拿到「只有标题」的页面（SPA、要靠 JS 才长出内容的页面）：改用自架 Firecrawl 渲染。
+ * 没设定 firecrawlURL 就回 null，调用端照原本的结果走。
+ */
+async function firecrawlFallback(url) {
+  const config = loadSearchConfig(projectRoot());
+  // 沒設定就不連外：不能因為「可能會用到」就把群友的網址送給另一個服務。
+  if (!config.firecrawlURL) return null;
+  let result;
+  try {
+    result = await firecrawlScrape(url, config);
+  } catch (error) {
+    return { content: [{ type: 'text', text: `网页需要 JavaScript 才能显示正文，Firecrawl 也失敗：${error?.message ?? error}` }], isError: true };
+  }
+  if (!result.ok) return null;
+  const payload = {
+    url: result.url,
+    title: result.title,
+    description: result.description,
+    text: result.text,
+    source: 'firecrawl',
+    ...(result.truncated ? { note: '正文太長，只留前 20000 字' } : {}),
+  };
+  return { content: [{ type: 'text', text: untrustedData(JSON.stringify(payload, null, 2), 0) }], isError: false };
+}
+
+/** fetchVerdict 说「只有标题，没有正文」（或者干脆没有正文）时，才值得再让 Firecrawl 试一次。 */
+function onlyShell(text) {
+  try {
+    const data = JSON.parse(text);
+    return !data?.text && typeof data?.note === 'string';
+  } catch {
+    return false;
+  }
+}
+
 const server = new McpServer({ name: 'web-search-safe', version: '0.2.1-r1' });
 
 server.tool(
@@ -95,7 +133,7 @@ server.tool(
 
 server.tool(
   'web_fetch',
-  '只读抓取 HTTPS（443 端口）网页正文，返回标题、说明与可见文字。X／Twitter 贴文（含 fixvx、fixupx、fxtwitter、vxtwitter 转址）改用 FxEmbed 公开 API 返回作者、正文与媒体；Google Docs／Slides／Sheets 会自动改写成公开 export；只拿到登录页或只有标题时会明说。禁止访问内网/本机地址，不执行任何本地操作。',
+  '只读抓取 HTTPS（443 端口）网页正文，返回标题、说明与可见文字。X／Twitter 贴文（含 fixvx、fixupx、fxtwitter、vxtwitter 转址）改用 FxEmbed 公开 API 返回作者、正文与媒体；Threads／Instagram／Facebook 贴文改走自架 embed fix 服务，返回作者、正文、回覆与引用；Google Docs／Slides／Sheets 会自动改写成公开 export；只拿到登录页、提示卡片或只有标题时会明说。要靠 JavaScript 才长出来的页面，设定 config.json 的 webSearch.firecrawlURL 后会改用自架 Firecrawl 渲染。禁止访问内网/本机地址，不执行任何本地操作。',
   { url: z.string().describe('要抓取的 https URL') },
   async ({ url }) => {
     try {
@@ -106,9 +144,25 @@ server.tool(
         }
         return { content: [{ type: 'text', text: untrustedData(twitterPostLines(post).join('\n'), 0) }], isError: false };
       }
+      const social = embedFixTarget(url);
+      if (social) {
+        const post = await fetchEmbedFixPost(url);
+        if (post.ok) {
+          return { content: [{ type: 'text', text: untrustedData(embedFixLines(post).join('\n'), 0) }], isError: false };
+        }
+        // 提示卡片（需登入／已刪除）是平台自己說的，Firecrawl 也不會多出正文；不要拿導覽列充當內容。
+        const rescued = post.status ? null : await firecrawlFallback(social.originalUrl);
+        if (rescued) return rescued;
+        return { content: [{ type: 'text', text: `抓取失败：${post.reason}` }], isError: true };
+      }
       const target = normalizeWebFetchUrl(url);
       const result = await safeFetch(target.url, 50000, WEB_FETCH_OPTS);
       const verdict = fetchVerdict(result, { expectText: target.expectText });
+      if (!verdict.isError && onlyShell(verdict.text)) {
+        // 用 safeFetch 驗證過、實際抓到的網址；原始輸入可能夾著文字或 http。
+        const rescued = await firecrawlFallback(result.url);
+        if (rescued) return rescued;
+      }
       const text = verdict.isError ? verdict.text : untrustedData(verdict.text, 0);
       return { content: [{ type: 'text', text }], isError: verdict.isError };
     } catch (error) {
