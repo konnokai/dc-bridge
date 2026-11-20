@@ -66,6 +66,9 @@
 | `material-provider.mjs` | 每日重大訊息 |
 | `trade-symbols.mjs` | 模擬股票商品主檔 |
 | `bot-trader.mjs` | Bot 交易員的排程判斷與 prompt |
+| `discord-bridge-runtime-state.mjs` | 橋接執行期的 per-key 狀態（`forgetKey`／`forgetSession`），會話重置時不漏清 |
+| `discord-bridge-stores.mjs` | 有 dirty 旗標與延遲存檔的檔案 store（記憶、筆記、知識、梗圖、開發回饋） |
+| `discord-bridge-turns.mjs` | 回合層：提問與審批、事件流（`handleSessionEvent`／`handleFrame`／`pumpEvents`）、自動壓縮、TTFT 計時器 |
 
 ### 共用工具
 
