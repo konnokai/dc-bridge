@@ -22,14 +22,15 @@ import {
 } from './discord-core.mjs';
 import { unwrap } from '../dsh-client.js';
 import { bumpEmojiUsage, labelEmojiTags } from './discord-emoji.mjs';
-import { collectMediaAttachments, stickerImages, stickerLabel } from './discord-media.mjs';
+import { collectMediaAttachments, stickerImages } from './discord-media.mjs';
 import { forgetUser, formatUserMemory, userFacts } from './discord-memory.mjs';
 import { formatCodexQuota } from './discord-codex-quota.mjs';
 import { formatQuota } from './discord-usage.mjs';
 import { isQuietBatchSkipped } from './discord-quiet.mjs';
-import { messageParts, promptBody } from './discord-context.mjs';
+import { authorName, flat, messageParts, promptBody, stickerLabel } from './discord-context.mjs';
 import { resolveMentions } from './discord-batch.mjs';
 import { playerAccountId } from './discord-trade.mjs';
+import { formatPortfolioResult } from './discord-bridge-agent-trade.mjs';
 
 export function createInbound({
   cfg,
@@ -45,15 +46,12 @@ export function createInbound({
   activity,
   agentSender,
   answerPending,
-  authorName,
   batcher,
   codexQuotaInfo,
   collectSlangSample,
   DSH_COMMAND_TIMEOUT_MS,
-  flat,
   forgetTradeAccount,
   forgetTriggerUser,
-  formatPortfolioResult,
   getTradeService,
   ignoredUser,
   lastActive,

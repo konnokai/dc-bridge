@@ -18,7 +18,7 @@ import {
 import { createQuoteProvider } from './quote-provider.mjs';
 import { createInstitutionalProvider } from './institutional-provider.mjs';
 import { createMaterialProvider } from './material-provider.mjs';
-import { createTradeService, parseHhmm, playerAccountId } from './discord-trade.mjs';
+import { createTradeService, parseHhmm, playerAccountId, stripPublicLinks } from './discord-trade.mjs';
 import { openTradeDb } from './discord-trade-db.mjs';
 import { findSensitive, formatSensitiveHit } from './discord-security.mjs';
 
@@ -27,7 +27,6 @@ export function createTradeRuntime({
   log,
   client,
   agentSecrets,
-  stripPublicLinks,
   STATE_DIR,
   botTokenSink,
   runBackgroundPrompt,

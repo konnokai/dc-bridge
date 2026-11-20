@@ -9,7 +9,7 @@ import { formatKnowledgeBlock } from './discord-knowledge.mjs';
 import { memeHint } from './discord-memes.mjs';
 import { buildSlangHint, buildStyleHint, onceInSession } from './discord-slang.mjs';
 import { buildEmojiHint, buildEmojiIndex, labelEmojiTags, retrieveEmojis } from './discord-emoji.mjs';
-import { OPENING_HINT, embedIsSensitive, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, messageParts, referencedMessage, replyTargetId, warmMemberCache } from './discord-context.mjs';
+import { OPENING_HINT, authorName, embedIsSensitive, embedPreview, flat, formatBlacklistStatus, formatQuote, formatRecentContext, formatTimeContext, guildBlacklistNames, messageParts, referencedMessage, replyTargetId, warmMemberCache, withStickers } from './discord-context.mjs';
 import { formatActivityLine } from './discord-activity.mjs';
 import { formatBatch, formatParticipationHint, imageRefTag, isBotNamed, isMediaOnlyBatch, repliedName, resolveMentions, shouldYield, triggerUsers } from './discord-batch.mjs';
 import { formatFollowupDelay, formatFollowupPrompt, formatFollowupStatus } from './discord-followup.mjs';
@@ -105,15 +105,12 @@ export function createTurns(deps) {
     turnGate,
     YIELD_GATE_SHADOW,
     activity,
-    authorName,
     client,
     collectSlangSample,
-    embedPreview,
     getEmojiCatalogs,
     emojiUsage,
     ensureSession,
     finishCeobeTurn,
-    flat,
     followups,
     ignoredUser,
     knowledgeStore,
@@ -131,7 +128,6 @@ export function createTurns(deps) {
     saveReloadStore,
     slangStore,
     triggerStore,
-    withStickers,
     memoryShown,
     notesShown,
     knowledgeShown,

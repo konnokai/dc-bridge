@@ -7,7 +7,7 @@ import path from 'node:path';
 import { PermissionFlagsBits } from 'discord.js';
 import { createTurnCollector, unwrap } from '../dsh-client.js';
 import { isDeniedUser, isSkippedMessage } from './discord-core.mjs';
-import { messageParts, warmMemberCache } from './discord-context.mjs';
+import { authorName, flat, messageParts, warmMemberCache, withStickers } from './discord-context.mjs';
 import { buildSummaryPrompt, cleanSummary, dayKey, hasSummaryToday, NOTES_PER_CHANNEL, recordNote, SUMMARY_DAYS_DEFAULT, SUMMARY_MAX_CHARS } from './discord-notes.mjs';
 import { buildProfilesPrompt, parseProfiles } from './discord-profiles.mjs';
 import { profileCandidates, setProfile } from './discord-memory.mjs';
@@ -54,9 +54,6 @@ export function createBackgroundJobs({
   epochOf,
   agentSender,
   agentSecrets,
-  authorName,
-  flat,
-  withStickers,
   isChannelAllowed,
   sendLong,
   renameSession,

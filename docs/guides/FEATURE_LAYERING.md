@@ -33,6 +33,10 @@
 | 值會重新賦值，或值在 factory 之後才宣告 | getter `getX: () => x`，模組端寫 `getX()` | 直接傳會拿到當下快照，控制台改設定後不生效 |
 | 其他 | 直接傳 | |
 
+**純函式不要再當 deps 轉手。** 拆 handler 時，`flat`、`textArg`、`authorName`、`withStickers`、`embedPreview` 這類不依賴執行期狀態的函式放在 `discord-context.mjs`，需要的模組直接 import；當 deps 一層一層傳，C／D 檢查看不到漏接，只有 G 項比對得到 key。
+
+**子 factory 在模組內組裝。** `createAgentTools` 會呼叫 `createAgentReadTools`／`createAgentTradeTools`；入口仍然只接 `createAgentTools`。G 項已擴大到掃描所有 bridge 模組的 `createXxx({...})` 呼叫，模組內漏接 deps 會在 `node scripts/test-discord-bridge-structure.mjs` 直接紅。
+
 ### 一句話
 
 功能進 core、接線留入口、照這份的固定做法走。
@@ -61,11 +65,16 @@ client 建立、基礎 store／狀態、每層 factory 的 deps 接線、Gateway
 | `discord-bridge-usage.mjs` | 113 | Token 帳本、回合紀錄、三個 provider 額度 |
 | `discord-bridge-dsh-sessions.mjs` | 348 | preset 檢查、ensureSession、退役、交接摘要 |
 | `discord-bridge-output.mjs` | 86 | 會話改名、頻道解析、分條發送 |
-| `discord-bridge-agent-tools.mjs` | 2466 | agentHandlers／apiHandlers、createAgentSender、生圖工作 |
+| `discord-bridge-agent-tools.mjs` | 1644 | 智能體工具的中控：送出、記憶、筆記、知識、梗圖、回饋等 handler、`apiHandlers` 包裝與生圖工作；讀取與交易由下面兩個模組組裝 |
+| `discord-bridge-agent-read.mjs` | 704 | 讀取工具：`read_history`／`search_history`／`recall_history`／`view_message`／`user_info`／`server_info`／`daily_stats` 與排版 |
+| `discord-bridge-agent-trade.mjs` | 278 | 模擬股票工具：quote／symbols／order／portfolio／leaderboard 與 bot 下單 |
 | `discord-bridge-background.mjs` | 881 | 黑話學習、小刻食堂、回訪、每日摘要、側寫、後台提問 |
 | `discord-bridge-trade.mjs` | 459 | 模擬股票：服務、結算、Bot 交易員、applyTradeConfig |
 | `discord-bridge-inbound.mjs` | 607 | 訊息、reaction、typing、slash 命令的准入分派 |
 | `discord-bridge-console.mjs` | 1006 | 控制台 HTTP API、供應商（hedge）設定、updateConfig；**factory 是 async**（段內有 await startConsole） |
+
+> 2026-11-21 再把 `agent-tools` 的讀取層與交易層拆成 `discord-bridge-agent-read.mjs`、
+> `discord-bridge-agent-trade.mjs`；`createAgentTools` 在內部組裝，入口接線不變。
 
 這輪的 commit（全部本機）：
 
@@ -93,7 +102,10 @@ import 來源錯／漏（truncateText、fs／path）、alias 洗掉
 - D：**範圍分析**（espree＋eslint-scope）——模組與入口的未解析名字都要是 0
 - E：入口死 import 歸零
 - F：import 的名字目標模組真的有 export（連結檢查）
-- G：**factory 簽名解構的 deps，接線都要給**（`withTimeout` 漏接那次的防護）
+- G：**factory 簽名解構的 deps，呼叫端接線都要給**（`withTimeout` 漏接那次的防護）。
+  G 會掃入口與所有 `discord-bridge-*` 模組的 `createXxx({...})` 呼叫，所以模組內組裝子 factory
+  也涵蓋；`createTurns(deps)` 這種在函式內解構的寫法也會展開檢查。spread 與非物件參數
+  無法靜態核對，直接跳過。共用實作在 `scripts/lib/factory-wiring.mjs`。
 
 devDependencies 加了 `espree`＋`eslint-scope`。D 項要 `espree.parse(..., { range: true })`
 ——沒有 range 時 eslint-scope 9.x 會內部炸 TypeError。
