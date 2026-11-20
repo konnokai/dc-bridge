@@ -828,6 +828,9 @@ async function main() {
   const reactionTimes = []; // reaction 的全局時間戳（每小時上限）
   const reactionLastAt = new Map(); // key -> 上次 reaction 時間（頻道冷卻）
   let agentApiHandle = null;
+  // 控制台層要等 await 才建好；先給 null，轉發箭頭 null-safe，
+  // login 後到控制台起來前的空窗裡 token 跟原版一樣是空字串。
+  let consoleLayer = null;
   // 讓位閘門影子模式：只記 log，不真的擋；觀察 1–2 天後改成 false。
   const YIELD_GATE_SHADOW = true;
   const activity = createActivityTracker(); // key -> 最近 10 分鐘的訊息（發言頻率）
@@ -1126,7 +1129,7 @@ async function main() {
     getBatcher: () => batcher,
     getTradeService: () => tradeRuntime.getTradeService(),
     getBotActiveRun: () => tradeRuntime.getBotActiveRun(),
-    getConsoleTokenValue: () => consoleLayer.getConsoleTokenValue(),
+    getConsoleTokenValue: () => consoleLayer?.getConsoleTokenValue?.() ?? '',
     getEmojiCatalogs: () => emojiCatalogs,
   });
   const {
@@ -1707,13 +1710,13 @@ async function main() {
     slashCommandData,
     turnGate,
     // 控制台的 updateConfig 別名宣告在這層之後：轉發箭頭執行期才解析
-    updateConfig: (...args) => updateConfig(...args),
+    updateConfig: (...args) => consoleLayer?.updateConfig?.(...args),
     urgentTyping,
     writeTurn,
     emojiUsage,
     // 入口的 let：值快取會過期，一律走 getter
     getArchiveFlushing: () => archiveFlushing,
-    getConsoleTokenValue: () => consoleLayer.getConsoleTokenValue(),
+    getConsoleTokenValue: () => consoleLayer?.getConsoleTokenValue?.() ?? '',
     getEmojiCatalogs: () => emojiCatalogs,
   });
   const {
@@ -1893,7 +1896,7 @@ async function main() {
   // HTTP API、供應商設定與管理端點在 core/discord-bridge-console.mjs；
   // syncHedgeSettings 給回合層的接線用（轉發箭頭，別名宣告在後），
   // stopConsole 給 shutdown 用，getConsoleTokenValue 給 agentTools／inbound 用。
-  const consoleLayer = await createConsoleLayer({
+  consoleLayer = await createConsoleLayer({
     cfg,
     log,
     api,
@@ -1950,19 +1953,18 @@ async function main() {
     markDevFeedbackDirty,
     markKnowledgeDirty,
     markNotesDirty,
-    flushMemory,
-    flushNotes,
     offlineQueue,
     modelApplied,
     pending,
     primedKeys,
     silentPending,
+    withTimeout,
     // 入口的 let：控制台只讀，走 getter
     getArchiveFlushing: () => archiveFlushing,
     getEmojiBuild: () => emojiBuild,
     getEmojiCatalogs: () => emojiCatalogs,
   });
-  const { syncHedgeSettings, updateConfig, getConsoleTokenValue, stopConsole } = consoleLayer;
+  const { syncHedgeSettings, updateConfig, stopConsole } = consoleLayer;
 
   const shutdown = async (signal) => {
     log(`收到 ${signal}，結束中…`);

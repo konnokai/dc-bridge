@@ -106,8 +106,6 @@ export async function createConsoleLayer({
   markDevFeedbackDirty,
   markKnowledgeDirty,
   markNotesDirty,
-  flushMemory,
-  flushNotes,
   offlineQueue,
   modelApplied,
   pending,

@@ -12,7 +12,7 @@
 
 | 檔案 | 作用 |
 | --- | --- |
-| `discord-bridge.js` | 入口：Gateway、批次、`agentHandlers`、控制台 |
+| `discord-bridge.js` | 入口：client 建立、基礎 store／狀態、各層 factory 接線、Gateway 註冊、啟動與 shutdown |
 | `dsh-client.js` | DSH Web API 客戶端（Cookie 鑄造、RPC、事件流） |
 | `mcp-discord.js` | Discord 工具（發訊、看訊息、表情、投票） |
 | `mcp-slang.js` | 黑話工具 |

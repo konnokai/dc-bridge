@@ -28,19 +28,25 @@ const entryFull = fs.readFileSync(ENTRY, 'utf8');
 // ── A/B：factory 接線（只看物件字面值第一層，4 個空白縮排的 `名字,`） ──
 const factories = [];
 entry.forEach((line, i) => {
-  const m = /^  const \w+ = (create\w+)\(\{$/.exec(line);
+  const m = /^  (?:const |let )?\w+ = (?:await )?(create\w+)\(\{$/.exec(line);
   if (!m) return;
   let end = i + 1;
   while (end < entry.length && entry[end] !== '  });') end += 1;
   const names = [];
+  const keys = [];
   for (let j = i + 1; j < end; j += 1) {
     const arg = /^    ([A-Za-z_$][\w$]*),$/.exec(entry[j]);
-    if (arg) { names.push(arg[1]); continue; }
-    // `key: value,` 形式的接線：檢查的是 value 那個名字
-    const keyed = /^    [A-Za-z_$][\w$]*: ([A-Za-z_$][\w$]*),$/.exec(entry[j]);
-    if (keyed) names.push(keyed[1]);
+    if (arg) { names.push(arg[1]); keys.push(arg[1]); continue; }
+    // `key: value,` 形式的接線：A/B 檢查 value；G 檢查 key（多行值如 `files: {` 也算）
+    const keyedAny = /^    ([A-Za-z_$][\w$]*): /.exec(entry[j]);
+    if (keyedAny) keys.push(keyedAny[1]);
+    const keyed = /^    [A-Za-z_$][\w$]*: (.+),$/.exec(entry[j]);
+    if (keyed) {
+      const valueName = /^([A-Za-z_$][\w$]*)$/.exec(keyed[1]);
+      if (valueName) names.push(valueName[1]);
+    }
   }
-  factories.push({ name: m[1], line: i + 1, names });
+  factories.push({ name: m[1], line: i + 1, names, keys });
 });
 ok(factories.length > 0, `找到 ${factories.length} 個 factory 接線區塊`);
 
@@ -221,6 +227,30 @@ for (const file of [...bridgeModules, 'discord-bridge.js']) {
     }
   }
   ok(bad.length === 0, `${file}：import 的名字目標模組都有 export${bad.length ? `（${bad.join(', ')}）` : ''}`);
+}
+
+// ── G：factory 簽名解構的 deps，入口接線都要給 ─────────────────────
+// 踩過一次：withTimeout 在簽名裡、模組也用，但入口接線漏傳——範圍分析
+// 只看「有沒有宣告」（解構就算宣告），只有這項比對「接線 key」會抓到。
+const factoryParams = new Map(); // createXxx -> [參數 key]
+for (const file of bridgeModules) {
+  const text = fs.readFileSync(path.join(CORE, file), 'utf8');
+  const ast = espree.parse(text, { ecmaVersion: 'latest', sourceType: 'module', range: true, loc: true });
+  for (const node of ast.body) {
+    if (node.type !== 'ExportNamedDeclaration' || node.declaration?.type !== 'FunctionDeclaration') continue;
+    const name = node.declaration.id.name;
+    const param = node.declaration.params[0];
+    if (param?.type !== 'ObjectPattern') { factoryParams.set(name, null); continue; }
+    const keys = param.properties.map((p) => (p.type === 'Property' ? p.key.name : p.value.name)).filter(Boolean);
+    factoryParams.set(name, keys);
+  }
+}
+for (const factory of factories) {
+  const params = factoryParams.get(factory.name);
+  if (!params) continue; // 非 bridge 模組的 factory（createAgentSender 等）不在這比
+  const missing = params.filter((p) => !factory.keys.includes(p));
+  ok(missing.length === 0,
+    `${factory.name}：簽名的 deps 接線都有給${missing.length ? `（漏 ${missing.join(', ')}）` : ''}`);
 }
 
 // ── E：入口 import 沒有死 binding ─────────────────────────────────
