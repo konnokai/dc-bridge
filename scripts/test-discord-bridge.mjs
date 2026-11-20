@@ -133,6 +133,9 @@ import { createAgentSendHandler } from '../src/core/discord-send-handler.mjs';
 import { COMMAND_CODE_API_BASE, createCommandCodeQuota, createGoQuota, createUsageTracker, formatQuota, GO_USAGE_URL, GOAT_MONTHLY_CREDITS, usageHours, usageReport, LEARNER_USAGE_KEY } from '../src/core/discord-usage.mjs';
 import { ratesAt, resolvePriceTable } from '../src/model-prices.js';
 import { describeAge } from '../src/core/discord-time.mjs';
+import { createRuntimeState } from '../src/core/discord-bridge-runtime-state.mjs';
+import { createDirtyStore } from '../src/core/discord-bridge-stores.mjs';
+import { createTurns } from '../src/core/discord-bridge-turns.mjs';
 import { REPO_ROOT, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
 
 let failures = 0;
@@ -148,6 +151,84 @@ const throwsAsync = async (fn, re, label) => {
   try { await fn(); ok(false, `${label}（應該要拋錯）`); }
   catch (error) { ok(re.test(String(error?.message ?? error)), label); }
 };
+
+// 原始碼斷言：拆檔後入口會變小、模組搬到 src/core/discord-bridge-*.mjs，
+// 所以讀「入口加上這些模組」的合併文字，搬家不會讓斷言靜默失效。
+const sourceFiles = () => {
+  const dir = path.join(REPO_ROOT, 'src');
+  const core = path.join(dir, 'core');
+  const modules = fs.existsSync(core)
+    ? fs.readdirSync(core).filter((name) => /^discord-bridge-.+\.mjs$/.test(name)).sort()
+      .map((name) => path.join(core, name))
+    : [];
+  return [path.join(dir, 'discord-bridge.js'), ...modules];
+};
+const bridgeSource = sourceFiles().map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+
+// 錨點找不到就丟錯。indexOf 回 -1 會讓 slice 變空字串，而 `!includes(...)`
+// 這種否定斷言在空字串上永遠通過，測試看起來全綠、保護其實已經消失。
+function anchorOf(needle, label = needle) {
+  const at = bridgeSource.indexOf(needle);
+  if (at === -1) throw new Error(`測不到「${needle}」（${label}）：原始碼標記不見了`);
+  return at;
+}
+const hasSource = (needle, label = needle) => anchorOf(needle, label) >= 0;
+
+// 字串與註解換成同長度空白，大括號才配得準，切片位置也不會跑掉。
+const braceMask = (() => {
+  const out = [];
+  let state = '';
+  for (let i = 0; i < bridgeSource.length; i += 1) {
+    const ch = bridgeSource[i];
+    const next = bridgeSource[i + 1];
+    if (state === '') {
+      if (ch === '/' && next === '*') { state = 'block'; out.push('  '); i += 1; continue; }
+      if (ch === '/' && next === '/') { state = 'line'; out.push('  '); i += 1; continue; }
+      if (ch === "'" || ch === '"' || ch === '`') { state = ch; out.push(' '); continue; }
+      out.push(ch);
+      continue;
+    }
+    if (state === 'line') {
+      if (ch === '\n') { state = ''; out.push('\n'); } else out.push(' ');
+      continue;
+    }
+    if (state === 'block') {
+      if (ch === '*' && next === '/') { state = ''; out.push('  '); i += 1; continue; }
+      out.push(ch === '\n' ? '\n' : ' ');
+      continue;
+    }
+    if (ch === '\\') { out.push('  '); i += 1; continue; }
+    if (ch === state) { state = ''; out.push(' '); continue; }
+    out.push(ch === '\n' ? '\n' : ' ');
+  }
+  return out.join('');
+})();
+
+/** 用簽名抓函式本體。搬檔、換到哪個區塊都不影響。 */
+function bodyOf(signature, label = signature) {
+  const from = anchorOf(signature, label);
+  // 先跳過參數列：參數可能有 `= {}` 這種預設值，直接數大括號會在參數裡就收尾。
+  let i = from;
+  while (i < braceMask.length && braceMask[i] !== '(') i += 1;
+  let paren = 0;
+  for (; i < braceMask.length; i += 1) {
+    if (braceMask[i] === '(') paren += 1;
+    else if (braceMask[i] === ')') {
+      paren -= 1;
+      if (paren === 0) { i += 1; break; }
+    }
+  }
+  let depth = 0;
+  let started = false;
+  for (; i < braceMask.length; i += 1) {
+    if (braceMask[i] === '{') { depth += 1; started = true; }
+    else if (braceMask[i] === '}') {
+      depth -= 1;
+      if (started && depth === 0) return bridgeSource.slice(from, i + 1);
+    }
+  }
+  throw new Error(`「${signature}」的大括號沒有收尾（${label}）`);
+}
 
 const BOT = '111111111111111111';
 const USER = '222222222222222222';
@@ -489,18 +570,17 @@ console.log('## 3. 會話鍵與 @ 判斷');
   ok(viewChannelId('123456789012345678') === '123456789012345678', 'view_message：channel 收純 id');
   ok(viewChannelId('abc') === null, 'view_message：channel 不是 id → 錯誤');
 
-  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  const viewBody = bridgeSource.slice(bridgeSource.indexOf('async view(body)'), bridgeSource.indexOf('async user(body)'));
+  const viewBody = bodyOf('async view(body)', 'view_message');
   ok(viewBody.includes('ignoredUser(target.author?.id)') && !viewBody.includes('canReadMessage('),
     'view_message 只擋模型的不理名單，deny 名單不擋唯讀');
-  ok(viewBody.includes('source.messages.fetch'), 'view_message 的連結修復 bot 跟著來源頻道抓');
-  ok(viewBody.includes('referenceRefsByUrl([target, repliedMessage, ...fixMessages]'),
+  ok(hasSource('source.messages.fetch', 'view_message 連結修復'), 'view_message 的連結修復 bot 跟著來源頻道抓');
+  ok(hasSource('referenceRefsByUrl([target, repliedMessage, ...fixMessages]', 'view_message 生圖參考'),
     'view_message 把修復 bot 補的連結預覽圖也算進生圖參考');
-  ok(viewBody.includes('rememberRefExtras(target.id, { base: targetRefBase')
-    && viewBody.includes('allImages.findIndex') && viewBody.includes('targetRefBase + position + 1'),
+  ok(hasSource('rememberRefExtras(target.id, { base: targetRefBase', 'view_message X 貼文')
+    && hasSource('allImages.findIndex', 'view_message X 貼文') && hasSource('targetRefBase + position + 1', 'view_message X 貼文'),
     'view_message 把 X 貼文圖片用貼文清單的位置記成 ref:#編號/n');
-  ok(bridgeSource.includes('found.guildId !== channel.guildId'), 'view_message 不能跨伺服器讀');
-  const editableBody = bridgeSource.slice(bridgeSource.indexOf('function editableConfig()'), bridgeSource.indexOf('// ── 供應商'));
+  ok(hasSource('found.guildId !== channel.guildId', 'view_message 跨伺服器'), 'view_message 不能跨伺服器讀');
+  const editableBody = bodyOf('function editableConfig()', 'editableConfig');
   ok(editableBody.includes('historyArchive: {') && editableBody.includes('retentionDays: cfg.discord.historyArchive.retentionDays'),
     '控制台回的設定包含歷史歸檔開關與保留天數');
   ok(!editableBody.includes('historyArchive: cfg.discord.historyArchive'),
@@ -586,11 +666,11 @@ console.log('## 3b. 斜線指令');
   const missing = await runSlashCommand({ text: '/compact', sessionId: 's1', executeCommand: async () => undefined });
   assert.deepEqual(missing, { kind: 'unknown', name: 'compact' });
 
-  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  const slashGate = bridgeSource.indexOf('slashInputAction({');
-  const batchAdd = bridgeSource.indexOf('batcher.add(key, {');
-  ok(slashGate > 0 && slashGate < batchAdd, '斜線訊息在進批次前就被攔下');
-  ok(bridgeSource.includes('api.commands.execute') && !bridgeSource.includes("content: [{ type: 'text', text: '/compact' }]"),
+  const messageBody = bodyOf('async function handleMessage(message)', 'handleMessage');
+  const slashGate = messageBody.indexOf('slashInputAction({');
+  const batchAdd = messageBody.indexOf('batcher.add(key, {');
+  ok(slashGate > 0 && batchAdd > 0 && slashGate < batchAdd, '斜線訊息在進批次前就被攔下');
+  ok(hasSource('api.commands.execute', '自動壓縮') && !bridgeSource.includes("content: [{ type: 'text', text: '/compact' }]"),
     '自動壓縮走 commands/execute，不再把 /compact 當使用者訊息');
 }
 
@@ -766,15 +846,16 @@ console.log('## 7. dc-chat preset 與守衛');
   const withoutPersona = (list) => list.filter((row) => row.id !== 'persona');
   ok(JSON.stringify(withoutPersona(openPlugins)) === JSON.stringify(withoutPersona(plugins)),
     '兩版 preset 的工具面與其他設定完全相同');
-  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  ok(/const agentPreset = presetForChannelKey\(cfg\.discord, key\)/.test(bridgeSource), 'ensureSession 依 key 選 preset');
-  ok(/await requirePreset\(agentPreset\)/.test(bridgeSource), '建立會話前驗證選出的 preset');
-  ok(/api\.sessions\.create\(\{\s*workspaceId: workspace\.workspace\.workspaceId,\s*agentPreset,\s*\}\)/.test(bridgeSource),
+  const ensureBody = bodyOf('async function ensureSession(', 'ensureSession');
+  const retireBody = bodyOf('async function retireSession(', 'retireSession');
+  ok(/const agentPreset = presetForChannelKey\(cfg\.discord, key\)/.test(ensureBody), 'ensureSession 依 key 選 preset');
+  ok(/await requirePreset\(agentPreset\)/.test(ensureBody), '建立會話前驗證選出的 preset');
+  ok(/api\.sessions\.create\(\{\s*workspaceId: workspace\.workspace\.workspaceId,\s*agentPreset,\s*\}\)/.test(ensureBody),
     'sessions.create 帶入選出的 preset');
-  ok(/error\?\.code === 'preset-missing'/.test(bridgeSource), 'preset 安裝細節只寫 log，不貼公開頻道');
-  ok(/sessionPresets\[sessionId\] = agentPreset/.test(bridgeSource), '建會話時記下實際 preset');
-  ok(/delete sessionPresets\[sessionId\]/.test(bridgeSource), '重置會話時清掉 preset 記錄');
-  ok(/const actualPreset = sessionId \? sessionPresets\[sessionId\] : ''/.test(bridgeSource),
+  ok(hasSource("error?.code === 'preset-missing'", 'preset 安裝失敗訊息'), 'preset 安裝細節只寫 log，不貼公開頻道');
+  ok(ensureBody.includes('sessionPresets[sessionId] = agentPreset'), '建會話時記下實際 preset');
+  ok(retireBody.includes('delete sessionPresets[sessionId]'), '重置會話時清掉 preset 記錄');
+  ok(hasSource('const actualPreset = sessionId ? sessionPresets[sessionId] : \'\'', '/status 實際 preset'),
     '/status 讀會話實際 preset');
   ok(!bridgeSource.includes('【發送】token='), '【發送】行不再把令牌寫進 prompt');
 
@@ -4926,34 +5007,33 @@ console.log('## 10. 引用、上下文、出站閘門');
   ok(OPENING_HINT.includes('接得上'), '開場提醒先看話題');
   const starRule = OPENING_HINT.split('。').find((sentence) => sentence.includes('★')) ?? '';
   ok(starRule.includes('reaction') && !starRule.includes('跳過'), '開場提醒：★ 接不上可以按 reaction，不能跳過');
-  const bridgeSource = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  ok(bridgeSource.includes('needsOpening.has(key) && job.direct'), '開場只在新會話且有 ★ 的批次注入');
+  ok(hasSource('needsOpening.has(key) && job.direct', '開場注入'), '開場只在新會話且有 ★ 的批次注入');
   // 單頻道覆寫：判斷「要不要 @bot」的地方都要走 requireMentionFor，不能留全域的 requireMentionInGuild()。
-  ok(bridgeSource.includes('const defaultDirect = (key) => requireMentionFor(key)'), '回合預設 direct 看單頻道設定');
-  ok(bridgeSource.includes('(requireMentionFor(key) || quietAt || !primedKeys.has(key))'), '頻道上下文看單頻道設定');
-  ok(bridgeSource.includes('requireMentionFor(key) && !urgentTyping.takeFollowUp(key, message.author.id)'),
+  ok(hasSource('const defaultDirect = (key) => requireMentionFor(key)', '回合預設 direct'), '回合預設 direct 看單頻道設定');
+  ok(hasSource('(requireMentionFor(key) || quietAt || !primedKeys.has(key))', '頻道上下文'), '頻道上下文看單頻道設定');
+  ok(hasSource('requireMentionFor(key) && !urgentTyping.takeFollowUp(key, message.author.id)', '批次閘門'),
     '非 ★ 訊息進不進批次看單頻道設定（叫過 bot 的人 60 秒內的補句除外）');
-  ok(bridgeSource.includes('if (addressedToBot) urgentTyping.sawAuthor(key, message.author.id)'),
+  ok(hasSource('if (addressedToBot) urgentTyping.sawAuthor(key, message.author.id)', '補句窗口'),
     '只有叫過 bot 的人才進補句窗口');
   ok(!/requireMentionInGuild\(\) \|\| (quietAt|isQuietBatchSkipped)/.test(bridgeSource)
     && !bridgeSource.includes("key.startsWith('dm:') || requireMentionInGuild()"), '判斷點沒有殘留全域 requireMentionInGuild()');
-  ok(bridgeSource.includes('mentionMapChanged') && bridgeSource.includes('primedKeys.clear();')
-    && bridgeSource.includes('silentPending.clear();'), '改單頻道覆寫要清 primedKeys，下一批重帶上下文');
-  ok(bridgeSource.includes('if (!silentPending.has(key) && (job.entries?.length ?? 0) > 0) primedKeys.add(key);'),
+  ok(hasSource('mentionMapChanged', '頻道覆寫變更') && hasSource('primedKeys.clear();', '頻道覆寫變更')
+    && hasSource('silentPending.clear();', '頻道覆寫變更'), '改單頻道覆寫要清 primedKeys，下一批重帶上下文');
+  ok(hasSource('if (!silentPending.has(key) && (job.entries?.length ?? 0) > 0) primedKeys.add(key);', 'primedKeys 標記'),
     '退出者的訊息還沒被上下文涵蓋時不要標記 primedKeys；純系統訊息也不算帶過上下文');
-  ok(bridgeSource.includes('if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);'),
+  ok(hasSource('if (pending && BigInt(pending) <= BigInt(boundary)) silentPending.delete(key);', 'silentPending 清除'),
     '退出者的訊息被上下文涵蓋後才清掉 silentPending');
   ok(!bridgeSource.includes("primedKeys.has(key) ? '' :"),
     '安靜結束清掉 primedKeys 時不能重送開場提醒');
-  const openingAdd = bridgeSource.indexOf('needsOpening.add(key)');
-  ok(openingAdd > bridgeSource.indexOf('sessions[key] = sessionId')
-    && openingAdd > bridgeSource.indexOf('async function ensureSession(')
-    && openingAdd < bridgeSource.indexOf('async function retireSession(')
-    && bridgeSource.indexOf('needsOpening.add(key)', openingAdd + 1) === -1,
+  const ensureBody = bodyOf('async function ensureSession(', 'ensureSession');
+  const retiredBody = bodyOf('async function retireSession(', 'retireSession');
+  const openingAdds = ensureBody.split('needsOpening.add(key)').length - 1;
+  ok(openingAdds === 1 && !retiredBody.includes('needsOpening.add(key)'),
     'needsOpening 只在真的新建會話時設定，重啟載入既有會話不補開場');
   // 斜線命令不經過模型，開場提示不能在它之前就用掉。
-  const openingTake = bridgeSource.indexOf('needsOpening.delete(key)', bridgeSource.indexOf('async function deliverPrompt('));
-  ok(openingTake > bridgeSource.indexOf('const command = accepted.result.value?.command'),
+  const deliverBody = bodyOf('async function deliverPrompt(', 'deliverPrompt');
+  const openingTake = deliverBody.indexOf('needsOpening.delete(key)');
+  ok(openingTake > deliverBody.indexOf('const command = accepted.result.value?.command'),
     '開場提示要等 prompt 真的進模型才用掉');
 
   const limited = formatRecentContext(
@@ -5270,6 +5350,440 @@ console.log('## 12. 供應商設定');
   const newlineError = (() => { try { parseKeyAction({ provider: 'opencode-go', action: 'set', value: 'secret\nvalue' }); } catch (error) { return String(error.message); } return ''; })();
   ok(/ASCII/.test(newlineError) && !newlineError.includes('secret'), '金鑰含換行要拒絕，錯誤訊息不能帶值');
   throws(() => parseKeyAction({ provider: 'opencode-go', action: 'set', value: 'x'.repeat(513) }), /512/, '金鑰長度上限');
+}
+
+console.log('## 提問與審批');
+{
+  // 行為測試：真的跑一次掛起／回答／逾時，檢查送給 DSH 的 payload 與頻道訊息。
+  const makeTurns = (overrides = {}) => {
+    const responded = [];
+    const sent = [];
+    const turns = createTurns({
+      api: { respond: async (payload) => { responded.push(payload); } },
+      log: () => {},
+      pending: new Map(),
+      cfg: { discord: { questionTimeoutMs: 10 } },
+      sendLong: async (key, text) => { sent.push({ key, text }); },
+      reverse: new Map([['s1', 'ch:1']]),
+      canAnswerPending,
+      questionAnswersFor,
+      parseApprovalAnswer,
+      questionAudience,
+      askTurns: new Map(),
+      askAbandonedTurns: new Map(),
+      turnUsers: new Map([['ch:1', [{ id: 'u1', name: '阿明' }]]]),
+      ...overrides,
+    });
+    return { turns, responded, sent };
+  };
+
+  {
+    const { turns, responded } = makeTurns();
+    const entry = { kind: 'question', clientId: 'c1', eventId: 'e1', questions: [{ id: 'q1', question: '選一個', options: [{ label: '藍色' }] }], askedUserIds: ['u1'] };
+    turns.registerPending('ch:1', entry);
+    ok(entry.timer !== undefined, '提問：掛起時掛上逾時計時器');
+    const answered = await turns.answerPending(entry, '藍色', 'ch:1', false, 'u1');
+    ok(answered === true, '提問：被問的人回答了');
+    assert.deepEqual(responded.at(-1).outcome.value.answers, [{ id: 'q1', selected: ['藍色'] }]);
+    ok(true, '提問：回覆 DSH 的內容是選項答案');
+  }
+
+  {
+    const { turns, responded } = makeTurns();
+    const entry = { kind: 'question', clientId: 'c1', eventId: 'e1', questions: [], askedUserIds: ['u1'] };
+    turns.registerPending('ch:1', entry);
+    const answered = await turns.answerPending(entry, '不要', 'ch:1', false, 'u2');
+    ok(answered === false && responded.length === 0, '提問：不是被問的人不能回答，也不會打 DSH');
+  }
+
+  {
+    const { turns, responded } = makeTurns();
+    const entry = { kind: 'approval', clientId: 'c1', eventId: 'e1' };
+    turns.registerPending('ch:1', entry);
+    ok(await turns.answerPending(entry, '通過', 'ch:1', true, 'u1') === true, '審批：「通過」有處理');
+    assert.equal(responded.at(-1).outcome.value, 'allowed-once');
+    ok(true, '審批：回覆 DSH allowed-once');
+  }
+
+  {
+    const { turns, responded, sent } = makeTurns();
+    const entry = { kind: 'approval', clientId: 'c1', eventId: 'e1' };
+    turns.registerPending('ch:1', entry);
+    await turns.answerPending(entry, '再說吧', 'ch:1', true, 'u1');
+    ok(responded.length === 0, '審批：看不懂的回答不會送去 DSH');
+    ok(sent.at(-1).text.includes('通過') && sent.at(-1).text.includes('拒絕'), '審批：看不懂會提示要回「通過」或「拒絕」');
+  }
+
+  {
+    const { turns, responded, sent } = makeTurns();
+    const entry = { kind: 'question', clientId: 'c1', eventId: 'e1', questions: [], askedUserIds: ['u1'] };
+    turns.registerPending('ch:1', entry);
+    await new Promise((resolve) => { setTimeout(resolve, 40); });
+    assert.deepEqual(responded.at(-1).outcome.value, { answers: [] });
+    ok(true, '提問：逾時會回空答案，不讓 DSH 一直等');
+    ok(sent.at(-1).text.includes('逾時'), '提問：逾時會跟頻道說一聲');
+  }
+
+  {
+    const { turns, responded } = makeTurns({ turnUsers: new Map() });
+    await turns.handleQuestion({ sessionId: 's1', clientId: 'c1', eventId: 'e1', questions: [{ question: '要不要' }] });
+    assert.deepEqual(responded.at(-1).outcome.value, { answers: [] });
+    ok(true, '提問：沒有觸發者時直接取消，不貼到頻道');
+  }
+
+  {
+    const { turns, sent } = makeTurns();
+    await turns.handleApproval({ sessionId: 's1', clientId: 'c1', eventId: 'e1', toolName: 'send_message', reason: '要發訊息' });
+    ok(sent.at(-1).text.includes('send_message') && sent.at(-1).text.includes('要發訊息'), '審批：頻道訊息帶工具名與理由');
+  }
+
+  {
+    const { turns, responded } = makeTurns({ askTurns: new Map([['s1', { abort() {} }]]) });
+    await turns.handleQuestion({ sessionId: 's1', clientId: 'c1', eventId: 'e1', questions: [] });
+    assert.deepEqual(responded.at(-1).outcome.value, { answers: [] });
+    ok(true, '提問：私人回合進行中，提問直接取消不貼頻道');
+  }
+}
+
+console.log('## 事件流');
+{
+  // 行為測試：送 turn/start + turn/end 兩幀，真的走過 pumpEvents → handleFrame →
+  // handleSessionEvent，檢查閘門用正確的票放行。只比對原始碼文字看不出這條路。
+  const logs = [];
+  const calls = [];
+  const mapOrSet = (name) => (/Taken|Held|Recorded|Ready/.test(name) ? new Set() : new Map());
+  const frames = [
+    { type: 'session/event', sessionId: 's1', event: { type: 'turn/start', data: { turn: 1 } } },
+    { type: 'session/event', sessionId: 's1', event: { type: 'turn/end', data: { turn: 1 } } },
+  ];
+  const base = {
+    cfg: { discord: { ttftTimeoutMs: 0, autoCompactTokens: 0, security: {} } },
+    log: (message) => logs.push(String(message)),
+    sessions: { 'ch:1': 's1' },
+    reverse: new Map([['s1', 'ch:1']]),
+    api: { events: { async *mux() { for (const payload of frames) yield { payload }; } } },
+    usage: { ingestEvent() {}, ingestSnapshot() {}, ledger: { turnUsage: () => null } },
+    agentSender: {
+      startTurn() {},
+      noteAttempt() {},
+      clearTurns: () => calls.push('clearTurns'),
+      finishTurn: () => ({ sent: 1, reacted: 0, unreacted: 0, removed: 0, attempted: true }),
+    },
+    createTurnCollector: () => ({
+      push: (event) => (event.type === 'turn/end' ? { reason: { kind: 'completed' }, turn: 1, text: '' } : null),
+    }),
+    syncHedgeSettings: async () => {},
+    sleep: async () => { throw new Error('STOP'); },
+    defaultDirect: () => false,
+    markTurnOpen() {},
+    markTurnEnded() {},
+    stopTyping() {},
+    finishProgress() {},
+    hideCompactNotice() {},
+    startProgress() {},
+    showCompactNotice() {},
+    startTyping() {},
+    resolveChannel: async () => ({}),
+    writeTurn: () => calls.push('writeTurn'),
+    quietUntil: () => 0,
+    epochOf: () => 0,
+    enqueuePrompt() {},
+    finishCeobeTurn: async () => 0,
+    ASK_CANCEL_FAILED_GRACE_MS: 1,
+    turnGate: {
+      owns: () => true,
+      releaseNormal: (key, ticket) => calls.push(`releaseNormal ${key} ${ticket}`),
+      releaseAll: () => calls.push('releaseAll'),
+      isBusy: () => false,
+      currentTicket: () => 't0',
+    },
+  };
+  // 其餘沒列到的依賴一律給空的 Map／Set（模組裡的 per-key 狀態就是這些），
+  // 呼叫到沒給的函式會直接爆掉，不會靜靜通過。
+  const deps = new Proxy(base, {
+    get(target, name) {
+      if (name in target) return target[name];
+      const key = String(name);
+      target[key] = mapOrSet(key);
+      return target[key];
+    },
+  });
+  deps.pendingDirect.set('ch:1', [{ direct: true, ticket: 'T1', meta: { chatty: false } }]);
+
+  const turns = createTurns(deps);
+  const outcome = await turns.pumpEvents().catch((error) => error);
+  ok(String(outcome?.message) === 'STOP', 'pumpEvents：迴圈可以被結束掉（測試用哨兵）');
+  ok(!logs.some((line) => line.includes('事件流中斷')), 'pumpEvents：正常跑完不會回報中斷');
+  ok(turns.lastFrameAt() > 0, 'pumpEvents：每一幀都更新 lastFrameAt（控制台看得出事件流還活著）');
+  ok(calls.includes('releaseNormal ch:1 T1'), 'pumpEvents：turn/end 用投遞時那一張票放行閘門');
+  ok(calls.includes('writeTurn'), 'pumpEvents：回合結果有寫進回合紀錄');
+  ok(calls.includes('releaseAll'), 'pumpEvents：斷線時放行所有壓住的批次');
+  ok(calls.includes('clearTurns'), 'pumpEvents：斷線時清掉 agentSender 的回合');
+}
+
+console.log('## TTFT 計時器');
+{
+  // 行為測試：TTFT 是「模型太久沒吐第一個字就取消這一輪」的機制，原本只有部署後才知道壞了。
+  const build = (overrides = {}) => {
+    const cancelled = [];
+    const sent = [];
+    const deps = {
+      cfg: { discord: { ttftTimeoutMs: 20, autoCompactTokens: 0 } },
+      log: () => {},
+      sessions: { 'ch:1': 's1' },
+      api: { cancelSession: async (sessionId) => { cancelled.push(sessionId); } },
+      late: { turnGate: { releaseNormal() {}, currentTicket: () => 'ticket-1' } },
+      pending: new Map(),
+      reverse: new Map([['s1', 'ch:1']]),
+      askTurns: new Map(),
+      askAbandonedTurns: new Map(),
+      turnUsers: new Map(),
+      ttftTimers: new Map(),
+      ttftTimeouts: new Map(),
+      ttftAbandonedTurns: new Map(),
+      turnMeta: new Map(),
+      turnTools: new Map(),
+      turnTtftMs: new Map(),
+      turnTickets: new Map(),
+      turnDirect: new Map(),
+      collectors: new Map(),
+      sendLong: async (key, text) => { sent.push({ key, text }); },
+      stopTyping: () => {},
+      finishProgress: () => {},
+      defaultDirect: () => true,
+      ...overrides,
+    };
+    return { turns: createTurns(deps), cancelled, sent, deps };
+  };
+
+  {
+    const { turns, cancelled, deps } = build();
+    turns.armTtftTimer('ch:1', 's1', 7);
+    ok(deps.ttftTimers.has('s1'), 'TTFT：turn/start 之後開始計時');
+    turns.clearTtftTimer('s1');
+    ok(!deps.ttftTimers.has('s1'), 'TTFT：第一個 token 到了就停錶');
+    await new Promise((resolve) => { setTimeout(resolve, 60); });
+    ok(cancelled.length === 0, 'TTFT：停錶後不會取消回合');
+  }
+
+  {
+    const { turns, cancelled, deps } = build();
+    turns.armTtftTimer('ch:1', 's1', 7);
+    await new Promise((resolve) => { setTimeout(resolve, 80); });
+    ok(cancelled.length === 1 && cancelled[0] === 's1', 'TTFT：超時會取消 DSH 這一輪');
+    ok(deps.ttftTimeouts.get('ch:1') === 20, 'TTFT：記下超時門檻，turn/end 時要提示');
+    ok(!deps.ttftTimers.has('s1'), 'TTFT：超時後計時器移除');
+  }
+
+  {
+    const { turns, deps } = build({ cfg: { discord: { ttftTimeoutMs: 0, autoCompactTokens: 0 } } });
+    turns.armTtftTimer('ch:1', 's1', 7);
+    ok(!deps.ttftTimers.has('s1'), 'TTFT：門檻 0 代表關閉，不計時');
+  }
+
+  {
+    const { turns, deps } = build();
+    turns.armTtftTimer('ch:1', 's1', 7);
+    deps.ttftTimeouts.set('ch:1', 20);
+    deps.ttftAbandonedTurns.set('ch:1', new Set([7]));
+    turns.clearAllTtftTimers();
+    ok(deps.ttftTimers.size === 0 && deps.ttftTimeouts.size === 0 && deps.ttftAbandonedTurns.size === 0,
+      'TTFT：斷線時全部清掉，不會殘留到重連後');
+  }
+}
+
+console.log('## 訊息入口');
+{
+  // 行為測試：離線佇列真的有上限、真的會重投；單頻道 @ 規則走的是同一個函式。
+  const build = (overrides = {}) => {
+    const sent = [];
+    const submitted = [];
+    const logs = [];
+    const deps = {
+      cfg: {
+        discord: {
+          queue: { max: 2, retryMs: 60_000 },
+          requireMentionInGuild: true,
+          requireMentionInChannel: { 555: false },
+          messageContentIntent: true,
+        },
+      },
+      log: (message) => logs.push(String(message)),
+      sendLong: async (key, text) => { sent.push({ key, text }); },
+      api: { callUnary: async () => ({}) },
+      turnGate: { submit: (key, job) => submitted.push({ key, job }) },
+      offlineQueue: new Map(),
+      offlineHintAt: new Map(),
+      ...overrides,
+    };
+    return { turns: createTurns(deps), deps, sent, submitted, logs };
+  };
+
+  {
+    const { turns, deps, logs } = build();
+    turns.enqueueOffline('ch:1', { direct: false, id: 'a' });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'b' });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'c' });
+    const kept = deps.offlineQueue.get('ch:1') ?? [];
+    ok(kept.length === 2 && kept.map((job) => job.id).join(',') === 'b,c',
+      '離線佇列：超過上限丟最舊一則');
+    ok(logs.some((line) => line.includes('離線佇列已滿')), '離線佇列：滿了要記 log');
+  }
+
+  {
+    const { turns, sent } = build();
+    turns.enqueueOffline('ch:1', { direct: true, id: 'a' });
+    turns.enqueueOffline('ch:1', { direct: true, id: 'b' });
+    ok(sent.length === 1 && sent[0].text.includes('排隊'), '離線佇列：直接叫 bot 的批次才提示，而且 60 秒只提示一次');
+  }
+
+  {
+    const { turns, submitted } = build();
+    turns.enqueueOffline('ch:1', { direct: false, id: 'a' });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'b' });
+    await turns.flushOffline();
+    ok(submitted.length === 2, '離線佇列：DSH 恢復後把排隊的訊息重投，一則一次');
+    ok(submitted[0].job.id === 'a' && submitted[1].job.id === 'b', '離線佇列：重投照原本順序');
+  }
+
+  {
+    const { turns, deps } = build({ api: { callUnary: async () => { throw new Error('DSH 掛了'); } } });
+    turns.enqueueOffline('ch:1', { direct: false, id: 'a' });
+    await turns.flushOffline();
+    ok((deps.offlineQueue.get('ch:1') ?? []).length === 1, '離線佇列：探活失敗時保留佇列，等下一次排程');
+  }
+
+  {
+    const { turns } = build();
+    ok(turns.requireMentionInGuild() === true, '單頻道規則：guild 預設要 @bot');
+    ok(turns.requireMentionFor('dm:9') === true, '單頻道規則：私聊不套頻道覆寫（一律回 true，呼叫端另有 DM 分支）');
+    ok(turns.requireMentionFor('ch:555') === false, '單頻道規則：頻道覆寫關掉就自由參與');
+    ok(turns.requireMentionFor('ch:777') === true, '單頻道規則：沒有覆寫就跟著 guild 預設');
+  }
+
+  {
+    const { turns } = build({
+      cfg: { discord: { queue: { max: 2, retryMs: 60_000 }, requireMentionInGuild: false, requireMentionInChannel: {}, messageContentIntent: false } },
+    });
+    ok(turns.requireMentionInGuild() === true, '單頻道規則：沒開 Message Content 意圖時強制 @bot');
+    ok(turns.requireMentionFor('ch:777') === true, '單頻道規則：沒開意圖時頻道覆寫也不能關掉 @');
+  }
+}
+
+console.log('## 檔案 store');
+{
+  // 行為測試：真的建一個 store、真的觸發存檔路徑，不是檢查原始碼有沒有那行字。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dc-stores-'));
+  const file = path.join(dir, 'x.json');
+  let saved = 0;
+  let fail = false;
+  const store = createDirtyStore({
+    label: '測試',
+    file,
+    log: () => {},
+    load: () => ({ store: { items: [] }, warning: '壞檔重建' }),
+    save: () => {
+      if (fail) throw new Error('磁碟滿');
+      saved += 1;
+    },
+  });
+  ok(store.warning === '壞檔重建', 'store：載入警告原樣交回去');
+  store.flush();
+  ok(saved === 0, 'store：沒 markDirty 不會寫檔');
+  store.markDirty();
+  ok(store.isDirty() === true, 'store：markDirty 之後是 dirty');
+  store.flush();
+  ok(saved === 1 && store.isDirty() === false, 'store：flush 寫一次並清掉 dirty');
+  store.flush();
+  ok(saved === 1, 'store：dirty 清掉後再 flush 不重寫');
+  fail = true;
+  store.markDirty();
+  store.flush();
+  ok(store.isDirty() === true && saved === 1, 'store：存檔失敗保留 dirty，等下次再試');
+
+  let delayed = 0;
+  const quick = createDirtyStore({
+    label: '測試',
+    file,
+    log: () => {},
+    delayMs: 20,
+    load: () => ({ store: {} }),
+    save: () => { delayed += 1; },
+  });
+  quick.markDirty();
+  quick.markDirty();
+  await new Promise((resolve) => { setTimeout(resolve, 60); });
+  ok(delayed === 1, 'store：連續 markDirty 只存一次（去抖）');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log('## 執行期狀態');
+{
+  // 行為測試：直接建一個狀態、塞 key、清 key，看有沒有漏。
+  const state = createRuntimeState();
+  const collections = Object.entries(state)
+    .filter(([, value]) => value instanceof Map || value instanceof Set)
+    .map(([name]) => name);
+  const groups = {
+    KEY_SCOPED: state.KEY_SCOPED,
+    SESSION_SCOPED: state.SESSION_SCOPED,
+    SURVIVES_RESET: state.SURVIVES_RESET,
+    OWNED_ELSEWHERE: state.OWNED_ELSEWHERE,
+  };
+  const classified = new Set(Object.values(groups).flat());
+  const unclassified = collections.filter((name) => !classified.has(name));
+  ok(unclassified.length === 0,
+    `每個執行期 Map／Set 都分類過（${collections.length} 個${unclassified.length ? `，漏了 ${unclassified.join(', ')}` : ''}）`);
+  const unknown = [...classified].filter((name) => !collections.includes(name));
+  ok(unknown.length === 0, `分類清單沒有指向不存在的狀態${unknown.length ? `（${unknown.join(', ')}）` : ''}`);
+  const seen = new Set();
+  const duplicated = [];
+  for (const names of Object.values(groups)) {
+    for (const name of names) {
+      if (seen.has(name)) duplicated.push(name);
+      seen.add(name);
+    }
+  }
+  ok(duplicated.length === 0, `同一個狀態不會被歸兩類${duplicated.length ? `（${duplicated.join(', ')}）` : ''}`);
+
+  // 這份清單是從舊 retireSession 逐條 delete 抄下來的，加上 turnSentTexts。
+  // 刻意寫死：有人把某個狀態從清單搬走，這裡會紅，而不是跟著一起變綠。
+  const expectedKeyScoped = [
+    'ttftTimeouts', 'ttftAbandonedTurns', 'turnMeta', 'turnTools', 'turnTtftMs',
+    'offlineQueue', 'offlineHintAt', 'primedKeys', 'silentPending', 'botLastByUser',
+    'recentHumans', 'memoryShown', 'memoryWrites', 'notesShown', 'noteWrites',
+    'knowledgeShown', 'knowledgeWrites', 'memeSaves', 'devFeedbackWrites',
+    'devFeedbackEdits', 'slangWrites', 'slangShown', 'emojiShown', 'pendingUsers',
+    'turnUsers', 'turnTriggerRecorded', 'sandboxRuns', 'voicePerTurn', 'pendingDirect',
+    'turnDirect', 'turnTickets', 'pendingDirectMessages', 'turnDirectMessages',
+    'turnStartedAt', 'turnFollowupTaken', 'turnFollowupHeld', 'pendingLastMessages',
+    'turnLastMessage', 'needsOpening', 'turnSentTexts',
+  ].sort();
+  ok(JSON.stringify([...state.KEY_SCOPED].sort()) === JSON.stringify(expectedKeyScoped),
+    `/reset 要清的狀態就是這 ${expectedKeyScoped.length} 個，沒有悄悄多或少`);
+
+  const key = 'ch:1234567890';
+  const sessionId = 'session-abc';
+  const touch = (name, value) => {
+    const bag = state[name];
+    if (bag instanceof Set) bag.add(value); else bag.set(value, { at: 1 });
+  };
+  for (const name of state.KEY_SCOPED) touch(name, key);
+  for (const name of state.SESSION_SCOPED) touch(name, sessionId);
+  for (const name of state.SURVIVES_RESET) touch(name, key);
+
+  state.forgetKey(key);
+  const leakedKey = state.KEY_SCOPED.filter((name) => state[name].has(key));
+  ok(leakedKey.length === 0, `forgetKey 清掉所有 per-key 狀態${leakedKey.length ? `（漏了 ${leakedKey.join(', ')}）` : ''}`);
+  const keptSession = state.SESSION_SCOPED.every((name) => state[name].has(sessionId));
+  ok(keptSession, 'forgetKey 不動綁在 sessionId 上的狀態');
+  const keptCooldown = state.SURVIVES_RESET.every((name) => state[name].has(key));
+  ok(keptCooldown, 'forgetKey 不清冷卻時間（不然 /reset 能繞過語音與工具提醒的冷卻）');
+
+  state.forgetSession(sessionId);
+  const leakedSession = state.SESSION_SCOPED.filter((name) => state[name].has(sessionId));
+  ok(leakedSession.length === 0,
+    `forgetSession 清掉所有 per-session 狀態${leakedSession.length ? `（漏了 ${leakedSession.join(', ')}）` : ''}`);
 }
 
 console.log(failures === 0 ? '\n✅ Discord 橋接離線回歸通過' : `\n❌ ${failures} 項失敗`);

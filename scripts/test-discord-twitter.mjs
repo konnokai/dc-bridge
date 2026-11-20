@@ -181,9 +181,24 @@ test('fetchTwitterImage：白名單在 DNS 之前就擋掉別的網域', async (
   await assert.rejects(fetchTwitterImage('https://evil.example.com/a.jpg', 1024), /仅允许 pbs\.twimg\.com/);
 });
 
+// 入口拆成多個 core 模組後，字串斷言要讀入口＋全部 discord-bridge-*.mjs 的合併文字。
+function bridgeSource() {
+  const core = path.join(REPO_ROOT, 'src', 'core');
+  const modules = fs.existsSync(core)
+    ? fs.readdirSync(core).filter((name) => /^discord-bridge-.+\.mjs$/.test(name)).sort()
+      .map((name) => path.join(core, name))
+    : [];
+  return [path.join(REPO_ROOT, 'src', 'discord-bridge.js'), ...modules]
+    .map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+}
+
 test('view_message 與 web_fetch 都有接上 X 貼文解析', () => {
-  const bridge = fs.readFileSync(path.join(REPO_ROOT, 'src', 'discord-bridge.js'), 'utf8');
-  const viewBody = bridge.slice(bridge.indexOf('async view(body)'), bridge.indexOf('async user(body)'));
+  const bridge = bridgeSource();
+  const start = bridge.indexOf('async view(body)');
+  const end = bridge.indexOf('async user(body)');
+  assert.notEqual(start, -1, 'view_message 錨點還在');
+  assert.notEqual(end, -1, 'user 錨點還在');
+  const viewBody = bridge.slice(start, end);
   assert.match(viewBody, /firstTwitterPost\(/, 'view_message 照本文、被回覆、修復 bot 的順序找連結');
   assert.match(viewBody, /fetchTwitterPost\(/, 'view_message 會抓貼文');
   assert.match(viewBody, /withTimeout\(tweetPromise/, 'X 貼文受 60 秒預算限制');

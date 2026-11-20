@@ -69,18 +69,11 @@ node scripts/deploy-discord.mjs --sha 5d98bad   # 以後改壞了，回到這次
 
 ## 怎麼重現／查證
 
-```bash
-# 1. 頻道對應的 session（state/discord-sessions.json 的 sessions 底下）
-cd /home/jun/dc-bridge
-python3 -c "import json;d=json.load(open('state/discord-sessions.json'));print(d['sessions'].get('ch:739040035571236905'))"
+找 session 與解日誌的通用做法見 [DSH 會話日誌](../guides/DSH_SESSION_LOGS.md)。
+這次的 session 是 `session-0fc54a24-dbf0-4722-bca1-1b3a30c08c19`（頻道 `739040035571236905`），
+解到 `/tmp/sess.jsonl`。
 
-# 2. 解會話日誌
-D=~/.dsh/sessions/--home-jun-dc-bridge-state-discord-agents--/session-0fc54a24-dbf0-4722-bca1-1b3a30c08c19
-cp "$D/session.v4.jsonl.zstd" /tmp/sess.zst
-zstdcat /tmp/sess.zst > /tmp/sess.jsonl
-```
-
-把 turn 13、14 印出來（`user/message` 的內文在 `data.content`，`assistant/message` 在 `data.message.content`）：
+把 turn 13、14 印出來：
 
 ```bash
 python3 - <<'PY'

@@ -12,7 +12,7 @@
 
 | 檔案 | 作用 |
 | --- | --- |
-| `discord-bridge.js` | 入口：Gateway、批次、`agentHandlers`、控制台 |
+| `discord-bridge.js` | 入口：client 建立、基礎 store／狀態、各層 factory 接線、Gateway 註冊、啟動與 shutdown |
 | `dsh-client.js` | DSH Web API 客戶端（Cookie 鑄造、RPC、事件流） |
 | `mcp-discord.js` | Discord 工具（發訊、看訊息、表情、投票） |
 | `mcp-slang.js` | 黑話工具 |
@@ -66,6 +66,17 @@
 | `material-provider.mjs` | 每日重大訊息 |
 | `trade-symbols.mjs` | 模擬股票商品主檔 |
 | `bot-trader.mjs` | Bot 交易員的排程判斷與 prompt |
+| `discord-bridge-runtime-state.mjs` | 橋接執行期的 per-key 狀態（`forgetKey`／`forgetSession`），會話重置時不漏清 |
+| `discord-bridge-stores.mjs` | 有 dirty 旗標與延遲存檔的檔案 store（記憶、筆記、知識、梗圖、開發回饋） |
+| `discord-bridge-turns.mjs` | 回合層：提問與審批、事件流、訊息入口（離線佇列與投遞）、自動壓縮、TTFT 計時器 |
+| `discord-bridge-usage.mjs` | Token 帳本、回合紀錄（`writeTurn`）與三個 provider 的訂閱額度查詢 |
+| `discord-bridge-dsh-sessions.mjs` | DSH 會話層：preset 檢查、`ensureSession`、退役（`retireSession`）與交接摘要 |
+| `discord-bridge-output.mjs` | Discord 送出：會話改名、頻道解析（`resolveChannel`）與分條發送（`sendLong`） |
+| `discord-bridge-agent-tools.mjs` | 智能體工具：`agentHandlers`／`apiHandlers`、`createAgentSender` 接線與生圖工作 handler |
+| `discord-bridge-background.mjs` | 背景工作：黑話學習、小刻食堂輪詢、回訪排程、每日摘要與群友側寫、後台提問與背景會話 |
+| `discord-bridge-trade.mjs` | 模擬股票：服務建立、結算、Bot 交易員與復盤排程；控制台改設定走 `applyTradeConfig` |
+| `discord-bridge-inbound.mjs` | Discord 入口事件：訊息、reaction、typing 與 slash 命令的准入分派 |
+| `discord-bridge-console.mjs` | 控制台：HTTP API、供應商設定（hedge）、`updateConfig`；`createConsoleLayer` 是 async |
 
 ### 共用工具
 
