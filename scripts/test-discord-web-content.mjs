@@ -42,6 +42,16 @@ ok(preview.text.includes('正文第一段'), '可見正文讀得到');
 ok(!preview.text.includes('不該出現的腳本') && !preview.text.includes('color:red'), 'script/style 不會進正文');
 const articlePreview = extractHtmlPreview('<html><body><nav>導覽列</nav><article>正文內容</article><footer>頁尾</footer></body></html>');
 ok(articlePreview.text === '正文內容', '有 article 時只取 article，不拿導覽列');
+const truncated = extractHtmlPreview('<html><head><title>Threads</title><style>:root, .__fb-light-mode {--fds-black:#000000}');
+ok(truncated.text === '', '被字數上限截斷的 style 不會把 CSS 當正文');
+ok(extractHtmlPreview('<html><body><p>前段</p><svg-icon></svg-icon><p>後段正文很重要</p></body></html>').text.includes('後段正文很重要'),
+  '自訂元素 svg-icon 不會被當成 svg 吃掉後文');
+ok(extractHtmlPreview('<html><head><title>標題</title><meta name="a" content="b"><p>省略 body 的正文</p></html>').text === '省略 body 的正文',
+  'HTML5 省略 </head> 與 <body> 仍讀得到正文');
+ok(extractHtmlPreview('<html><body><!-- <svg --><p>註解後面的正文</p></body></html>').text === '註解後面的正文',
+  '註解裡沒關的 <svg 不會吃掉後文');
+const shellVerdict = fetchVerdict({ url: 'https://www.threads.com/a', statusCode: 200, truncated: true, body: '<html><head><title>Threads</title><style>:root{--x:#000}' });
+ok(!shellVerdict.isError && /JavaScript/.test(JSON.parse(shellVerdict.text).note), '只有框架時明說可能需要 JavaScript');
 ok(isHtml(html) && !isHtml('純文字'), 'HTML 判斷正確');
 ok(!isHtml('這段文字提到 <title> 標籤，但不是 HTML'), '純文字提到 <title> 不會被誤判成 HTML');
 

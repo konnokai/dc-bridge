@@ -31,6 +31,7 @@ import { lookupSlang, recordChannelTag, recordSlang, SLANG_STATUS } from './disc
 import { findSymbol } from './trade-symbols.mjs';
 import { formatPct, formatTwd, pickPlayerIdentity, playerAccountId } from './discord-trade.mjs';
 import { fetchTwitterImage, fetchTwitterPost, firstTwitterPost, twitterImageUrls, twitterPostLines } from './twitter-post.mjs';
+import { embedFixLines, embedFixTarget, fetchEmbedFixPost, firstEmbedFixPost } from './embed-fix.mjs';
 import { resolvePrtsArtwork } from './prts-artwork.mjs';
 import { ceobeHandlerBlocked } from './discord-ceobe.mjs';
 import { fetchVideoLink, formatChapters, formatVideoTime, videoLinks } from './discord-video-link.mjs';
@@ -1820,13 +1821,24 @@ export function createAgentTools({
       }
       // X 貼文先開始抓，跟後面的 Discord 附件下載並行；等到要排版時再收結果。
       // 這個工具整通只有 60 秒，附件可能吃掉 55 秒，所以不能等附件全部跑完才開始連外。
-      const tweetSource = firstTwitterPost([
+      const linkSourceInputs = [
         targetParts.text,
         ...(repliedMessage ? [messageParts(repliedMessage).text] : []),
         ...fixMessages.map((message) => message.content),
-      ]);
+      ];
+      const tweetSource = firstTwitterPost(linkSourceInputs);
       const tweetPromise = tweetSource
         ? fetchTwitterPost(tweetSource).catch((error) => ({ ok: false, reason: error?.message ?? String(error) }))
+        : null;
+      // Threads／Instagram／Facebook 原站是 SPA，Discord 預覽常常只有標題；直接向 ebfix 要正文。
+      // 先記下結果：等 X 貼文與圖片跑完時，它通常早就回來了，不要因為「剩餘秒數」把它丟掉。
+      const socialSource = firstEmbedFixPost(linkSourceInputs);
+      const socialPlatform = socialSource ? embedFixTarget(socialSource)?.platform ?? '社群貼文' : '';
+      let socialPost = null;
+      const socialPromise = socialSource
+        ? fetchEmbedFixPost(socialSource)
+          .catch((error) => ({ ok: false, platform: socialPlatform, reason: error?.message ?? String(error) }))
+          .then((post) => { socialPost = post; })
         : null;
       if (target.poll) {
         const poll = target.poll;
@@ -1943,6 +1955,26 @@ export function createAgentTools({
               }
             } else if (candidates.length) {
               missed.push('X 貼文圖片（時間不夠，沒下載）');
+            }
+          }
+        }
+      }
+
+      // 群友貼的 Threads／Instagram／Facebook 連結：原站要 JS 才有正文，改向 ebfix 要。
+      // X 貼文與圖片可能先吃光預算；已經抓回來的結果照樣要印。
+      if (socialPromise) {
+        const socialLeft = 55_000 - (Date.now() - viewStart);
+        if (!socialPost && socialLeft < 12_000) {
+          lines.push('社群貼文這次沒看：前面的內容已經花掉大部分時間，要看就再呼叫一次 view_message。');
+        } else {
+          if (!socialPost) {
+            await withTimeout(socialPromise, Math.min(20_000, socialLeft), '社群貼文')
+              .catch((error) => { socialPost = { ok: false, platform: socialPlatform, reason: error?.message ?? String(error) }; });
+          }
+          if (socialPost) {
+            for (const line of embedFixLines(socialPost)) {
+              const text = flat(line, 1501);
+              lines.push(text.length > 1500 ? `${text.slice(0, 1500)}…` : text);
             }
           }
         }

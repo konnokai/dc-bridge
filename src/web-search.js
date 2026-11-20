@@ -51,7 +51,11 @@ const defaultConfig = Object.freeze({
   maxUses: 5,
   maxTokens: 4096,
   maxResults: 8,
-  timeoutMs: DEFAULT_TIMEOUT_MS
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+  // 自架 Firecrawl：需要 JS 才長出內容的頁面用它渲染。留空就停用。
+  firecrawlURL: '',
+  firecrawlApiKey: '',
+  firecrawlApiKeyEnv: 'FIRECRAWL_API_KEY'
 });
 
 function num(value, fallback, min, max) {
@@ -83,7 +87,12 @@ export function loadSearchConfig(root) {
     maxUses: num(raw.maxUses, defaultConfig.maxUses, 1, 5),
     maxTokens: num(raw.maxTokens, defaultConfig.maxTokens, 256, 8192),
     maxResults: num(raw.maxResults, defaultConfig.maxResults, 1, 20),
-    timeoutMs: num(raw.timeoutMs, defaultConfig.timeoutMs, 5000, 120000)
+    timeoutMs: num(raw.timeoutMs, defaultConfig.timeoutMs, 5000, 120000),
+    firecrawlURL: typeof raw.firecrawlURL === 'string' ? raw.firecrawlURL.trim().replace(/\/+$/, '') : '',
+    firecrawlApiKey: typeof raw.firecrawlApiKey === 'string' ? raw.firecrawlApiKey.trim() : '',
+    firecrawlApiKeyEnv: typeof raw.firecrawlApiKeyEnv === 'string' && raw.firecrawlApiKeyEnv.trim()
+      ? raw.firecrawlApiKeyEnv.trim()
+      : defaultConfig.firecrawlApiKeyEnv
   };
 }
 

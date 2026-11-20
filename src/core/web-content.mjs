@@ -38,7 +38,7 @@ const ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
 };
 
-const decodeEntities = (value) => String(value ?? '').replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, code) => {
+export const decodeEntities = (value) => String(value ?? '').replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, code) => {
   const key = String(code).toLowerCase();
   if (key.startsWith('#x')) {
     const n = Number.parseInt(key.slice(2), 16);
@@ -89,12 +89,31 @@ export function extractHtmlPreview(body) {
     }
     return '';
   };
+  // 正文只看 <body>。<title> 在 <head>，算進去會讓「只有標題」的 SPA 頁看起來有內容。
+  // 被字數上限截斷的頁面可能連 <body> 都還沒出現，這時就當沒有正文。
+  let visible = html;
+  const head = /<head\b[^>]*>/i.exec(html);
+  if (head) {
+    const headEnd = /<\/head\s*>/i.exec(html);
+    if (headEnd) {
+      visible = html.slice(headEnd.index);
+    } else {
+      // HTML5 可以省略 </head> 和 <body>：遇到 body 才有的元素就當正文開始。
+      // 被字數上限截斷的頁面通常停在 <style> 裡，找不到這些元素，就當沒有正文。
+      const bodyStart = /<(?:body|main|article|div|p|h[1-6]|section|table|ul|ol|form|header|footer|nav)\b/i.exec(html);
+      visible = bodyStart ? html.slice(bodyStart.index) : '';
+    }
+  }
   // 有 main／article 就先讀它，避免前 2000 字都是導覽列。
-  const main = /<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2];
-  const source = main?.trim() ? main : html;
+  const main = /<(main|article)\b[^>]*>([\s\S]*?)<\/\1>/i.exec(visible)?.[2];
+  const source = main?.trim() ? main : visible;
   const text = source
-    .replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    // 註解要先拿掉：註解裡一個沒關的 <svg 會讓下面的未閉合規則吃到後面。
     .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style|noscript|template|svg)(?=[\s/>])[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    // 正文被字數上限截斷時，<style>／<script> 可能沒有結尾；lazy 比對抓不到，CSS 就會
+    // 整段留下來（Threads 的 670 KB SPA 頁就是這樣）。沒有結尾就當它一路吃到檔尾。
+    .replace(/<(script|style|noscript|template|svg)(?=[\s/>])[^>]*>[\s\S]*$/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

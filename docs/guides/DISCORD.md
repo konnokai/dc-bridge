@@ -270,6 +270,9 @@ DSH 的 `llm-hedge` settings 命名空間。
 | `webSearch.searxngURL` | SearXNG 的 `/search` 端點，例如 `http://192.168.1.1:58918/search` |
 | `webSearch.allowPrivate` | 允許 http / 私有位址（自架實例要開，預設 `false`） |
 | `webSearch.maxResults` | 單次回傳幾條，預設 8 |
+| `webSearch.firecrawlURL` | 自架 Firecrawl 的根網址，例如 `http://127.0.0.1:3002`；留空 = 不用。設定在 `deploy/firecrawl/` |
+| `webSearch.firecrawlApiKey` | Firecrawl 的 API key；自架預設沒有認證，留空即可 |
+| `webSearch.firecrawlApiKeyEnv` | 要從環境變數讀金鑰時的名字，預設 `FIRECRAWL_API_KEY` |
 
 SearXNG 實例必須在 `settings.yml` 的 `search.formats` 裡開啟 `json`，否則只會回 HTML（工具會明確報錯）。
 
@@ -1515,6 +1518,11 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   「X 貼文看不了：原因」，其它內容照回。整通工具剩不到 12 秒就不等結果，跟 YouTube 連結同一條預算規則。
   這條路不用設定、不用金鑰，但貼文 ID 會送給第三方（FxEmbed）；API 限流 1000 次/分鐘/IP。
   使用 FxEmbed 是管理員在回饋 `df_mw7etjk73dae52` 指定的做法。
+- `view_message` 的 Threads／Instagram／Facebook 連結：訊息本文（或修復 bot 補的訊息）裡有貼文網址時，
+  改打自架 embed fix 服務（`ebfix.konnokai.me`，IG／FB 走 `ig.`／`fb.` 子網域），取作者、正文、回覆與引用。
+  原站是 SPA，Discord 預覽通常只有標題，直接抓原頁只會拿到一大段 CSS。貼文需要登入、私人或已刪除時，
+  只多一行「Threads／Instagram／Facebook 看不了：原因（…），沒有正文」，不假裝讀到了。
+  跟 X 貼文同一條 60 秒預算：剩不到 12 秒就不等結果，請模型再呼叫一次。
 - `mcp__discord__search_history`（`query`、`from`、`date`、`limit` 都可省略，但 `query`／`from` 至少給一個）：在這個頻道找訊息。
   伺服器頻道走 Discord 的訊息搜尋 API（`/guilds/{guild}/messages/search`），不用從最新一則一則往回翻；
   一次最多比對 75 個符合（3 頁 × 25），更早的符合要再給 `date` 縮小範圍。
@@ -1604,6 +1612,10 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   Google Docs／Slides／Sheets 的 `/edit`、`/view` 會自動改寫成 `export?format=txt`／`csv`（公開文件才有效；私人文件回登入頁時明確說打不開）。
   X／Twitter 貼文（`x.com`、`twitter.com` 與 `fixvx.com`／`fixupx.com`／`fxtwitter.com`／`vxtwitter.com` 的 `/status/<id>`）不抓原頁，
   改用 FxEmbed 公開 API（`api.fxtwitter.com`）回作者、正文與媒體清單；貼文 ID 會送給第三方，不用金鑰。
+  Threads／Instagram／Facebook 貼文只換網域打自架 embed fix 服務（`ebfix.konnokai.me`、`ig.`／`fb.` 子網域），
+  回作者、正文、回覆與引用；原站是 SPA，直接抓只會拿到 CSS。需要登入或已刪除時回提示卡片的原文並說「沒有正文」。
+  直接抓只拿到標題、沒有正文時（通常是靠 JavaScript 才長出內容的頁面），若 `webSearch.firecrawlURL` 有設定，
+  會再交給自架 Firecrawl 渲染，回傳的 JSON 多一個 `"source": "firecrawl"`；沒設定就不會把網址送出去。
   HTML 會抽 `og:title`／`og:description`／`<title>` 與可見文字；只有標題、沒有正文時明講「只有標題」。
   有驗證頁特徵（任何狀態碼）就回 `isError`「機器人驗證」；其他 403／503 說網站拒絕訪問，其他 4xx／5xx 帶狀態碼；不會把驗證頁 HTML 當正文
 - `mcp__prts__*`（24 個，全部唯讀）：明日方舟 PRTS Wiki 與遊戲資料。`search_prts` 找詞條、`get_operator_basic_info`

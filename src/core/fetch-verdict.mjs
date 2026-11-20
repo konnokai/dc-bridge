@@ -78,7 +78,7 @@ export function fetchVerdict(result, { expectText = false } = {}) {
   const summary = {
     ...base,
     ...preview,
-    ...(preview.text ? {} : { note: '只有标题，没有正文' }),
+    ...(preview.text ? {} : { note: '只有标题，没有正文（页面可能要靠 JavaScript 才长出来）' }),
   };
   return { isError: false, text: JSON.stringify(summary, null, 2) };
 }
