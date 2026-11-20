@@ -29,18 +29,23 @@ entry.forEach((line, i) => {
   const names = [];
   for (let j = i + 1; j < end; j += 1) {
     const arg = /^    ([A-Za-z_$][\w$]*),$/.exec(entry[j]);
-    if (arg) names.push(arg[1]);
+    if (arg) { names.push(arg[1]); continue; }
+    // `key: value,` 形式的接線：檢查的是 value 那個名字
+    const keyed = /^    [A-Za-z_$][\w$]*: ([A-Za-z_$][\w$]*),$/.exec(entry[j]);
+    if (keyed) names.push(keyed[1]);
   }
   factories.push({ name: m[1], line: i + 1, names });
 });
 ok(factories.length > 0, `找到 ${factories.length} 個 factory 接線區塊`);
 
-// 名字在入口的宣告位置與種類：含 import、模組層級、主體層級與多行解構
+// 名字在入口的宣告位置與種類：含 import、模組層級、主體層級與解構（單行與多行）
 const declarations = new Map();
 const mainStart = entry.findIndex((line) => line.startsWith('async function main()'));
 entry.forEach((line, i) => {
   if (i < mainStart) {
-    for (const m of line.matchAll(/([A-Za-z_$][\w$]*)\s*(?:,|$)/g)) {
+    // import 行先剝掉 `} from '...'` 再掃名字，不然尾端名字（unwrap }）會漏掉
+    const importLine = /^\s*import\s/.test(line) ? line.replace(/\}\s*from\s+.*/, '') : line;
+    for (const m of importLine.matchAll(/([A-Za-z_$][\w$]*)\s*(?:,|$)/g)) {
       const name = m[1];
       if (name && !declarations.has(name)) declarations.set(name, { line: i + 1, kind: 'import' });
     }
@@ -54,17 +59,29 @@ entry.forEach((line, i) => {
   if (fn) declarations.set(fn[1], { line: i + 1, kind: 'function' });
   const one = /^  (const|let|var) (\w+) =/.exec(line);
   if (one && !declarations.has(one[2])) declarations.set(one[2], { line: i + 1, kind: one[1] });
+  // 單行解構：const { a, b } = ...（一行擠多個名字也一樣切開登記）
+  const inline = /^  (const|let|var) \{(.*)\}\s*=/.exec(line);
+  if (inline) {
+    for (const part of inline[2].split(',')) {
+      const name = part.trim().split(':')[0].trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name) && !declarations.has(name)) {
+        declarations.set(name, { line: i + 1, kind: inline[1] });
+      }
+    }
+  }
 });
-// 多行解構：const { a, b } = ...
+// 多行解構：const { a, b\n  c } = ...
 entry.forEach((line, i) => {
   if (!/^  \} = /.test(line)) return;
   let start = i;
   while (start > 0 && !/^  (const|let|var) \{/.test(entry[start])) start -= 1;
   const kind = /^  (const|let|var) \{/.exec(entry[start])?.[1] ?? 'const';
   for (let j = start + 1; j < i; j += 1) {
-    const raw = entry[j].trim().replace(/,$/, '');
-    if (!raw || raw.includes(':') || !/^[A-Za-z_$][\w$]*$/.test(raw)) continue;
-    if (!declarations.has(raw)) declarations.set(raw, { line: start + 1, kind });
+    for (const part of entry[j].split(',')) {
+      const name = part.trim().replace(/,$/, '').split(':')[0].trim();
+      if (!name || !/^[A-Za-z_$][\w$]*$/.test(name)) continue;
+      if (!declarations.has(name)) declarations.set(name, { line: start + 1, kind });
+    }
   }
 });
 
@@ -82,8 +99,9 @@ for (const factory of factories) {
     `${factory.name}：接線沒有用到入口的 let／var${mutable.length ? `（${mutable.join(', ')}）` : ''}`);
   ok(later.length === 0,
     `${factory.name}：接線的名字都在呼叫前宣告${later.length ? `（${later.join(', ')}）` : ''}`);
-  // 找不到宣告的名字（多半在 import 或多行解構裡）不在這裡判，交給 B/C 兩項各自的掃描。
-  if (unknown.length > 0) console.log(`   （${factory.name}：${unknown.length} 個名字在入口找不到宣告，略過）`);
+  // 宣告掃描涵蓋 import、單行／多行解構與一般宣告；還找不到就是真的沒宣告，直接紅
+  ok(unknown.length === 0,
+    `${factory.name}：接線的名字都在入口找得到宣告${unknown.length ? `（沒有：${unknown.join(', ')}）` : ''}`);
 }
 
 // ── C：bridge 模組用到 core 的 export 就必須 import ──────────────────
