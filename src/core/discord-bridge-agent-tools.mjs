@@ -3,6 +3,8 @@
 // 宣告在這層之後的東西（enqueuePrompt、batcher、tradeService、botActiveRun、
 // consoleTokenValue、emojiCatalogs）一律走 getter，接線時求值會 TDZ 或拿到舊快照。
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { ChannelType, Message, MessageFlags, PermissionFlagsBits, SnowflakeUtil } from 'discord.js';
 import { canReadMessage, isConversationAllowed, isSilentMessage, isSkippedMessage, matchesTerms, searchTerms, sessionLabelFor, splitDiscordMessage, viewChannelId, viewMessageTarget } from './discord-core.mjs';
 import { formatQuietUntil, QUIET_MAX_MINUTES, quietSendBlocked } from './discord-quiet.mjs';
@@ -16,7 +18,7 @@ import { componentParts, embedIsSensitive, linkPaths, messageParts, parseHistory
 import { bySnowflake, collectSearchHits, guildSearchParams, scanHistoryMessages, SEARCH_PAGE_MAX } from './discord-history.mjs';
 import { forgetFact, nameMatches, numberFacts, rememberFact, userFacts } from './discord-memory.mjs';
 import { channelNotes, forgetNote, formatNoteList, NOTES_PER_CHANNEL, NOTE_DAYS_DEFAULT, NOTE_DAYS_MAX, NOTE_MAX_CHARS, pruneNotes, recordNote } from './discord-notes.mjs';
-import { addMeme, canSaveMemeFrom, checkMemeSlot, deleteMemeById, findMeme, forgetMeme, formatMemeList, isMemeRef, memeFileName, memeNameFromRef, newMemeId, normalizeMeme, recordMemeUse, searchMemes } from './discord-memes.mjs';
+import { addMeme, canSaveMemeFrom, checkMemeSlot, createSentImageOwners, deleteMemeById, findMeme, forgetMeme, formatMemeList, isMemeRef, memeFileName, memeNameFromRef, newMemeId, normalizeMeme, recordMemeUse, searchMemes } from './discord-memes.mjs';
 import { formatKnowledgeForTool, KEYWORD_MAX_CHARS, KNOWLEDGE_BODY_MAX_CHARS, KNOWLEDGE_KEYWORDS_MAX, KNOWLEDGE_TOOLS, saveCandidate as saveKnowledgeCandidate, TITLE_MAX_CHARS } from './discord-knowledge.mjs';
 import { DEV_FEEDBACK_EDITS_PER_TURN, formatDevFeedbackList, recentDevFeedback, recordDevFeedback, updateDevFeedback, validateDevFeedbackFields, validateDevFeedbackSubmit } from './discord-dev-feedback.mjs';
 import { formatEmojiLine, isUnicodeEmoji, knownEmojiTokens, labelEmojiTags, matchStickers, ownReaction, reactionKey, retrieveEmojis, substituteEmojiNames } from './discord-emoji.mjs';
@@ -25,7 +27,7 @@ import { describeSensitive, formatSensitiveHit } from './discord-security.mjs';
 import { GIF_QUERY_MAX, searchGifs } from './discord-gif.mjs';
 import { recordTriggers, triggerStats, triggerUserList } from './discord-trigger-stats.mjs';
 import { loadStatusFile, parseStatusText, saveStatusFile } from './discord-status.mjs';
-import { lookupSlang, recordChannelTag, recordSlang } from './discord-slang.mjs';
+import { lookupSlang, recordChannelTag, recordSlang, SLANG_STATUS } from './discord-slang.mjs';
 import { findSymbol } from './trade-symbols.mjs';
 import { formatPct, formatTwd, pickPlayerIdentity, playerAccountId } from './discord-trade.mjs';
 import { fetchTwitterImage, fetchTwitterPost, firstTwitterPost, twitterImageUrls, twitterPostLines } from './twitter-post.mjs';
@@ -42,7 +44,6 @@ export function createAgentTools({
   client,
   sessions,
   reverse,
-  usage,
   epochOf,
   resolveChannel,
   sendLong,
@@ -117,6 +118,12 @@ export function createAgentTools({
   getEmojiCatalogs,
 }) {
   const STATUS_COOLDOWN_MS = 60_000;
+  const SLANG_STATUS_TEXT = {
+    [SLANG_STATUS.CANDIDATE]: '候選',
+    [SLANG_STATUS.CONFIRMED]: '已確認',
+    [SLANG_STATUS.REJECTED]: '已拒絕',
+  };
+  const sentImageOwners = createSentImageOwners(); // bot 送出的生圖訊息 id -> 要求畫圖的人
   let customStatus = loadStatusFile(CUSTOM_STATUS_FILE);
   let lastStatusAt = 0;
   let sandboxBusy = false; // 全域同時只跑一個容器
@@ -2516,7 +2523,7 @@ export function createAgentTools({
     ttlMs: IMAGE_JOB_TTL_MS,
   });
 
-return {
+  return {
     agentSecrets,
     agentSender,
     authorName,

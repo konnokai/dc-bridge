@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ActivityType, ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, Message, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
+import { ActivityType, ButtonStyle, Client, ComponentType, Events, GatewayIntentBits, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { NodeApiClient, createTurnCollector, discoverDshLaunchToken, unwrap } from './dsh-client.js';
 import {
   COMPACT_NOTICE,
@@ -18,40 +18,26 @@ import {
   adminLinks,
   buildInviteUrl,
   canResetConversation,
-  canAnswerPending,
-  questionAudience,
   conversationKeyFor,
-  canReadMessage,
-  describeToolCall,
   formatProgress,
   invitePermissionsBitfield,
   isConversationAllowed,
   isDeniedUser,
-  isSilentMessage,
   isTransientDshError,
   loadSessions,
   loadSessionPresets,
   saveSessionPresets,
-  matchesTerms,
   requireMentionForChannel,
-  searchTerms,
   normalizeDiscordConfig,
-  parseApprovalAnswer,
   parseSlashCommand,
   runSlashCommand,
   slashInputAction,
-  questionAnswersFor,
-  saveSessions,
-  sessionTitleFor,
   sessionLabelFor,
-  shouldAutoCompact,
   shouldHandleGuildMessage,
   withSelfMutedUser,
   splitDiscordMessage,
   stripBotMention,
   isSkippedMessage,
-  viewChannelId,
-  viewMessageTarget,
   isChattyChannel,
   presetForChannelKey,
   catalogView,
@@ -76,7 +62,6 @@ import { createFollowupStore, loadFollowupFile, saveFollowupFile } from './core/
 import {
   CEOBE_POLL_MS,
   ceobeFinishPlan,
-  ceobeHandlerBlocked,
   createCeobeClient,
   createCeobeNonce,
   createCeobeState,
@@ -89,48 +74,27 @@ import {
 } from './core/discord-ceobe.mjs';
 import { createReactionInbox } from './core/discord-feedback.mjs';
 import {
-  DEV_FEEDBACK_EDITS_PER_TURN,
-  DEV_FEEDBACK_WRITES_PER_TURN,
   deleteDevFeedbackById,
-  devFeedbackOverview,
-  formatDevFeedbackList,
-  recentDevFeedback,
-  recordDevFeedback,
-  updateDevFeedback,
-  validateDevFeedbackFields,
-  validateDevFeedbackSubmit
+  devFeedbackOverview
 } from './core/discord-dev-feedback.mjs';
 import {
-  NOTE_DAYS_DEFAULT,
-  NOTE_DAYS_MAX,
-  NOTE_MAX_CHARS,
   NOTES_PER_CHANNEL,
   SUMMARY_DAYS_DEFAULT,
   SUMMARY_MAX_CHARS,
   buildSummaryPrompt,
-  channelNotes,
   cleanSummary,
   dayKey,
   deleteNoteById,
-  forgetNote,
-  formatNoteList,
-  formatNotesBlock,
   hasSummaryToday,
   notesOverview,
-  pruneNotes,
   recordNote
 } from './core/discord-notes.mjs';
 import {
   KNOWLEDGE_BODY_MAX_CHARS,
-  KNOWLEDGE_KEYWORDS_MAX,
-  KEYWORD_MAX_CHARS,
-  KNOWLEDGE_TOOLS,
   MAX_APPROVED,
   TITLE_MAX_CHARS,
   confirmKnowledge,
   deleteKnowledge,
-  formatKnowledgeBlock,
-  formatKnowledgeForTool,
   knowledgeOverview,
   knowledgeStats,
   rejectKnowledge,
@@ -138,54 +102,32 @@ import {
   updateKnowledge
 } from './core/discord-knowledge.mjs';
 import {
-  buildReloadSummaryPrompt,
-  clearReloadSummaryOrThrow,
-  forgetReloadSummaryIfCurrent,
-  formatReloadSummary,
   loadReloadFile,
-  peekReloadSummary,
-  persistReloadSummary,
-  saveReloadFile,
-  takeReloadSummary
+  saveReloadFile
 } from './core/discord-reload.mjs';
 import { findSensitive, formatSensitiveHit } from './core/discord-security.mjs';
 import { bumpEmojiUsage, catalogFile, labelEmojiTags, loadCatalogs, loadEmojiUsage, pruneCatalogs, saveEmojiUsage } from './core/discord-emoji.mjs';
 import {
-  forgetFact,
   forgetUser,
-  formatMemoryBlock,
   formatUserMemory,
   memoryOverview,
-  nameMatches,
-  numberFacts,
   profileCandidates,
-  pruneStaleGuesses,
-  rememberFact,
   setProfile,
   userFacts
 } from './core/discord-memory.mjs';
 import { buildProfilesPrompt, parseProfiles } from './core/discord-profiles.mjs';
 import { createArchive, worthArchiving } from './core/discord-history-archive.mjs';
 import {
-  cleanupStaleContainers,
-  formatRunResult,
-  runSandboxScript,
-  sandboxTurnAllowed
+  cleanupStaleContainers
 } from './core/discord-sandbox.mjs';
 import {
   SLANG_STATUS,
   buildExtractionPrompt,
-  buildSlangHint,
-  buildStyleHint,
   confirmSlang,
   confirmSlangMany,
   deleteSlang,
   loadSlangFile,
-  lookupSlang,
-  onceInSession,
   parseExtractionJson,
-  recordChannelTag,
-  recordSlang,
   rejectSlang,
   rejectSlangMany,
   saveSlangFile,
@@ -197,44 +139,16 @@ import {
 import { askJev, buildSlangTriage, planTriage } from './core/jev.mjs';
 import {
   collectMediaAttachments,
-  describeSkipped,
-  embedImages,
-  fetchDiscordMedia,
-  loadMemeSourceBytes,
-  parseDrawRef,
-  prepareMediaBlock,
-  prepareVideoUrlBlock,
-  referenceImageCount,
-  referenceRefsByUrl,
-  resolveGeneratedImage,
-  resolveReferenceImage,
-  runInMediaQueue,
   stickerImages,
-  stickerLabel,
-  viewMediaItems
+  stickerLabel
 } from './core/discord-media.mjs';
 import {
-  addMeme,
-  canSaveMemeFrom,
-  checkMemeSlot,
-  createSentImageOwners,
   deleteMemeById,
-  findMeme,
-  forgetMeme,
-  formatMemeList,
-  isMemeRef,
-  memeFileName,
-  memeHint,
-  memeNameFromRef,
-  newMemeId,
-  normalizeMeme,
-  recordMemeUse,
-  searchMemes
+  memeFileName
 } from './core/discord-memes.mjs';
-import { videoLinks } from './core/discord-video-link.mjs';
 import { GIF_RATINGS } from './core/discord-gif.mjs';
 import { resolveConsoleToken, startConsole } from './core/discord-console.mjs';
-import { createAgentSender, startAgentApi } from './core/discord-agent.mjs';
+import { startAgentApi } from './core/discord-agent.mjs';
 import { createRuntimeState } from './core/discord-bridge-runtime-state.mjs';
 import { createStores } from './core/discord-bridge-stores.mjs';
 import { createTurns } from './core/discord-bridge-turns.mjs';
@@ -251,21 +165,12 @@ import { loadTriggerFile, saveTriggerFile, triggerStats, triggerUserList } from 
 import {
   IMAGE_JOB_STALE_TEXT,
   IMAGE_JOB_TTL_MS,
-  cancelImageJobs,
-  createImageJobHandler,
-  drawUsersForFile,
-  listImageJobs,
   loadImageJobs,
   saveImageJobs,
   sweepStaleImageJobs
 } from './core/discord-image-jobs.mjs';
 import {
-  addVoiceJob,
-  hasWorkingVoiceJob,
-  listVoiceJobs,
-  pruneVoiceJobs,
-  takeVoiceJob,
-  voiceJobFor
+  pruneVoiceJobs
 } from './core/discord-voice-jobs.mjs';
 import { readDshCredential } from './web-search.js';
 import { truncateText } from './md-to-plain.js';
@@ -327,11 +232,6 @@ const SUMMARY_MIN_MESSAGES = 10; // 少於這個量不做每日摘要，省 toke
 const SUMMARY_MAX_MESSAGES = 100; // 每日摘要最多讀幾則（Discord 單次上限 100）
 const SUMMARY_TRANSCRIPT_CHARS = 6000; // 每日摘要的聊天記錄上限
 const SUMMARY_INTERVAL_MS = 30 * 60 * 1000; // 每 30 分鐘檢查一次今天要不要做摘要
-const SLANG_STATUS_TEXT = {
-  [SLANG_STATUS.CANDIDATE]: '候選',
-  [SLANG_STATUS.CONFIRMED]: '已確認',
-  [SLANG_STATUS.REJECTED]: '已拒絕',
-};
 
 /**
  * 橋接指令。`default_member_permissions` 只是 Discord 端的預設顯示條件，
@@ -723,7 +623,6 @@ async function main() {
 
   // 梗圖庫：索引在 state/discord-memes/index.json，圖檔在同目錄的 files/。
   const memeStore = fileStores.memes.store;
-  const sentImageOwners = createSentImageOwners(); // bot 送出的生圖訊息 id -> 要求畫圖的人
   const markMemesDirty = fileStores.memes.markDirty;
   const flushMemes = fileStores.memes.flush;
 
@@ -1275,7 +1174,6 @@ async function main() {
     client,
     sessions,
     reverse,
-    usage,
     epochOf,
     resolveChannel,
     sendLong,
@@ -1361,13 +1259,11 @@ async function main() {
     isChannelAllowed,
     noteHuman,
     forgetTriggerUser,
-    imageKnowledge,
     textArg,
     parseMessageLink,
     stripPublicLinks,
     formatPortfolioResult,
     apiHandlers,
-    agentHandlers,
     getCustomStatus,
   } = agentTools;
   // 同一會話短時間內的訊息合成一批，一批只開一個模型回合。
