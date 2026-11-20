@@ -151,11 +151,16 @@
   @media (max-width: 720px) { .provider-key { grid-template-columns: 1fr; } }
   /* 小刻食堂：一個頻道一張小卡；來源清單可摺疊，桌機兩欄、手機一欄。 */
   .ceobe-target { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
-  .ceobe-target .row { flex-wrap: wrap; }
+  .ceobe-target .row { flex-wrap: wrap; align-items: flex-end; }
   /* 頻道 ID 的 label 吃掉剩下的寬度，桌機的刪除鈕才不會卡在中間。 */
   .ceobe-target .row > label { flex: 1 1 220px; min-width: 0; }
+  .ceobe-target .row > button { height: 35px; }
   .ceobe-channel { width: 100%; min-width: 0; }
   .ceobe-source-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 10px; max-height: 180px; overflow: auto; padding: 6px 0; }
+  /* 桌機把來源攤成四欄：每欄寬一點，右邊不會留一大片空白。 */
+  @media (min-width: 1000px) {
+    .ceobe-source-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
   .ceobe-source-list label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
   .ceobe-source-list input[type="checkbox"] { width: auto; margin: 0; flex: none; }
 </style>
@@ -404,21 +409,26 @@
   <section class="card">
     <h2>小刻食堂（餅）</h2>
     <form id="ceobe-form" class="grid" novalidate>
-      <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
-        <input id="ceobe-enabled" type="checkbox" style="width:auto;margin:0;flex:none">
-        ceobe.enabled：把小刻食堂的新餅投給下面列出的頻道
-      </label>
-      <p class="muted" style="grid-column:1/-1;margin:0;font-size:12px">
-        每個頻道可以勾選要接收的資料源。第一次加入的頻道或來源只從加入之後的新餅開始，不會補推舊的。
-        頻道要同時在 allow 名單裡，bot 也要有「查看頻道」與「傳送訊息」權限。
-        餅會送進該頻道的 DSH 會話，由人格整理後發文；原文連結由模型保留，漏掉時橋接會補。
-      </p>
-      <div id="ceobe-targets" style="grid-column:1/-1"></div>
-      <div class="row" style="grid-column:1/-1">
-        <button type="button" id="ceobe-add" class="ghost">新增頻道</button>
-        <button type="button" id="ceobe-load" class="ghost">載入資料源</button>
-        <button type="submit">儲存</button>
-        <span id="ceobe-msg" class="msg"></span>
+      <div class="fsec" style="grid-column:1/-1">
+        <h3>頻道與來源<small>ceobe.*</small></h3>
+        <div class="grid">
+          <label style="grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text)">
+            <input id="ceobe-enabled" type="checkbox" style="width:auto;margin:0;flex:none">
+            ceobe.enabled：把小刻食堂的新餅投給下面列出的頻道
+          </label>
+          <p class="muted" style="grid-column:1/-1;margin:0;font-size:12px">
+            每個頻道可以勾選要接收的資料源。第一次加入的頻道或來源只從加入之後的新餅開始，不會補推舊的。
+            頻道要同時在 allow 名單裡，bot 也要有「查看頻道」與「傳送訊息」權限。
+            餅會送進該頻道的 DSH 會話，由人格整理後發文；原文連結由模型保留，漏掉時橋接會補。
+          </p>
+          <div id="ceobe-targets" style="grid-column:1/-1"></div>
+          <div class="row" style="grid-column:1/-1">
+            <button type="button" id="ceobe-add" class="ghost">新增頻道</button>
+            <button type="button" id="ceobe-load" class="ghost">載入資料源</button>
+            <button type="submit">儲存</button>
+            <span id="ceobe-msg" class="msg"></span>
+          </div>
+        </div>
       </div>
     </form>
     <p id="ceobe-status" class="muted" style="margin:10px 0 0;font-size:12px"></p>
