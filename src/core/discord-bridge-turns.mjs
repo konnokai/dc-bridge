@@ -112,7 +112,7 @@ export function createTurns(deps) {
     embedPreview,
     getEmojiCatalogs,
     emojiUsage,
-    ensureSession,
+    getEnsureSession,
     flat,
     followups,
     ignoredUser,
@@ -1254,7 +1254,7 @@ export function createTurns(deps) {
         return false;
       }
     }
-    const sessionId = await ensureSession(key);
+    const sessionId = await getEnsureSession(key);
     if (epoch !== epochOf(key)) {
       log(`投遞前會話已重置，丟棄 (${key})`);
       writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });

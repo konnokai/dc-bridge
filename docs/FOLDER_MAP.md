@@ -70,6 +70,7 @@
 | `discord-bridge-stores.mjs` | 有 dirty 旗標與延遲存檔的檔案 store（記憶、筆記、知識、梗圖、開發回饋） |
 | `discord-bridge-turns.mjs` | 回合層：提問與審批、事件流、訊息入口（離線佇列與投遞）、自動壓縮、TTFT 計時器 |
 | `discord-bridge-usage.mjs` | Token 帳本、回合紀錄（`writeTurn`）與三個 provider 的訂閱額度查詢 |
+| `discord-bridge-dsh-sessions.mjs` | DSH 會話層：preset 檢查、`ensureSession`、退役（`retireSession`）與交接摘要 |
 
 ### 共用工具
 
