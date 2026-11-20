@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "notes": [
+    {
+      "id": "23b2236b-8d12-4398-abee-def3deb1e514",
+      "body": "# 讓位／純媒體閘門觀察（2026-11-16）\n\n狀態：部署 `c46a5df`（11-14 22:29），`YIELD_GATE_SHADOW = true`，兩個閘門都只記 log。11-16 使用者決定再觀察。\n\n## 目前數據（部署後 39 小時）\n- 讓位（影子）0 次。\n- 純媒體（影子）52 次：11-14 2、11-15 44、11-16 6（到 13:07）。\n- 全部在 `ch:739040035571236905`（chatty 測試頻道），全部 1 則純附件／貼圖；抽 3 筆的回合都以「不接」結束。\n- 沒有重啟、`dc-bridge-error.log` 0 bytes。\n\n## 人工比對（公共頻道 1073905098457108551 最近 400 則）\n- 2 個「T 回覆 bot、中間有人插話」型態，都沒觸發，原因正確：\n  - 11-15 07:03：bot 回插話的人（penguinowwo）的時間在 T 的訊息之後，送單當下 `botAfter=0`。\n  - 11-15 11:27：bot 沒回過插話的人。\n- 同一個 07:03 案例，persona 仍送了文字（更正匯率 0.0247）；內容是新資訊，算可接受，但代表 persona 那條不是絕對。\n\n## 下次從哪裡查\n1. 日誌在 `~/.pm2/logs/`。每日 00:00 輪替成 `dc-bridge-out__YYYY-MM-DD_00-00-00.log`（內容是前一天的），當天的是 `dc-bridge-out.log`。\n2. 先看有沒有命中：\n   ```\n   grep '讓位（影子' ~/.pm2/logs/dc-bridge-out*.log\n   grep '純媒體（影子' ~/.pm2/logs/dc-bridge-out*.log\n   ```\n3. 欄位：`bot=` bot 回給 T 的訊息 id（長訊息切段會有多個）、`reply=` T 回覆的訊息 id、`botAfter=1/0` bot 是否回過插話的人、`others★=N` 同批別人的 @ 數、`T=` 最後一則的作者、`batch=` 這批最後一則、`recent=id:author`。log 只有 id，沒有內文。\n4. 遇到命中要驗：\n   - 抓 `batch` 那則的 `message_reference.message_id`，確認等於 `reply`。\n   - 確認 `reply` 在 `bot` 清單裡（是 bot 回給 T 的那一則）。\n   - 看 `recent` 裡的插話者，以及 bot 是否在 T 之前回過他。\n   - 判斷 T 是「重複問同一件事」還是「真的問新問題」；後者被擋就是誤擋。\n5. 切換條件：累積幾次命中、沒有誤擋，再把 `src/discord-bridge.js` 的 `YIELD_GATE_SHADOW` 改 `false`，走 `node scripts/deploy-discord.mjs`，確認 `dsh`、`dc-bridge` 重啟與 `已登入` log。\n6. 切 `false` 會同時開兩個閘門：讓位（所有頻道）與純媒體（只有 chatty、要求沒有 ★）。想分開就拆成兩個常數。\n\n## 相關程式\n- `src/core/discord-batch.mjs`：`shouldYield`、`takeFollowups`\n- `src/discord-bridge.js`：`botLastByUser`、`yieldGateDecision`、`yieldLogDetail`、`deliverPrompt`\n- `src/core/discord-context.mjs`：`replyTargetId`\n\n## 相關 commit\n- `0beb5af` persona「插話接手就退出」（★ 也適用）\n- `3a7961d` 讓位閘門收窄成回覆 bot 的那一則\n- `c46a5df` 合併並部署",
+      "createdAt": 1794809695971,
+      "updatedAt": 1794809695971,
+      "source": "agent",
+      "pinned": false,
+      "origin": {
+        "sessionId": "ses_e25b90387ffexkiQ2ZcwTog4bp"
+      }
+    }
+  ],
+  "todos": [
+    {
+      "id": "9dd394c3-a7aa-4750-9f0b-4813be48b41e",
+      "text": "追 openai/codex#59890：Codex OAuth 生圖 GIF 是否開放。開放後拿掉 dc-draw-image 的 ChatGPT 直接擋，實測 0.170+ 的 GIF，再更新 DISCORD.md 與 memory。",
+      "completed": false,
+      "createdAt": 1795060117960
+    },
+    {
+      "id": "864c02ca-ce96-4627-bce8-b0fc153882c2",
+      "text": "部署 Luna 固定與 GIF 直接擋：branch docs/codex-0.170-gif 的改動還沒 commit/push/deploy；部署後確認生圖額度記在 Luna，且 animated:true 不再 spawn Codex。",
+      "completed": true,
+      "createdAt": 1795060118018
+    }
+  ]
+}
