@@ -9,16 +9,20 @@
 ## 開發流程
 
 - [[gh-read-remote-file]] — `gh api … --jq .content` 在 PowerShell 解 base64 的正確寫法
-- [[dc-bridge-tests]] — 測試套件結構、輸出重定向到檔案再讀、preset patch 重生
+- [[dc-bridge-tests]] — 測試套件結構、原始碼斷言安全網、輸出重定向與 preset patch 重生
 - [[discord-turn-gate]] — createTurnGate 的 ticket、DSH turn 配對、漏接 turn/start 補救與重連舊事件防護
 - [[discord-deploy]] — `npm ci`、文件排除、部署標記與修復流程、遠端 checkout 衝突、Alloy 啟用、MCP／plugin 匯入圖與 DSH 重啟
 - [[discord-dsh-setup]] — setup-dsh 清理舊 bundle 時的共用 profile 副作用與實體目錄保護
 - [[discord-console-config]] — 控制台欄位白名單、即時生效、config.json 寫回與 provider 憑證端點安全
-- [[discord-agent-gaps-plan]] — PLAN_AGENT_GAPS 執行慣例：熱點檔案、三條線、新增 MCP 工具 9 處 checklist、完成條件
+- [[discord-console-vue]] — Vue 控制台狀態邊界、建置產物與部署方式
+- [[discord-agent-gaps-plan]] — PLAN_AGENT_GAPS 執行慣例：熱點檔案、三條線、新增 MCP 工具 checklist、完成條件
 - [[discord-dream-safety]] — Dream agent 早期誤觸原始碼的未提交改動與清理提醒（2026-11-07）
 - [[discord-upstream-sync]] — 上游對齊基準（b145a83）、空合併清 behind、安全批次吸收、固定決策
 - [[discord-hindsight-evaluation]] — Hindsight 不取代現有記憶的評估、長期歸檔限制與 oMLX／Qdrant 現況（2026-11-17）
 - [[graphify-query]] — `graphify query` 結果會截斷；用 `graphify explain` 導航，並以來源碼確認呼叫關係
+- [[discord-agent-tools-structure]] — agent-tools 拆分決策、共用 helper 位置、子 factory 依賴檢查與讀取／交易層邊界（2026-11-20）
+- [[discord-bridge-layering]] — bridge 分層、10 組拆模組決策、依賴／初始化規則與結構檢查（2026-11-20）
+- [[discord-bridge-turns]] — turns 模組範圍、狀態所有權、事件流接線與行為測試
 
 ## 維運與觀測
 
@@ -49,6 +53,7 @@
 - [[discord-quiet-gate]] — 安靜期間 /send 閘門擋 send_message/send_sticker/create_poll
 - [[discord-video-subtitles]] — view_message 的 YouTube 連結影片字幕支援：yt-dlp、VTT 解析、章節、直連網址、縮排、白名單
 - [[discord-web-fetch]] — Google Docs/Slides/Sheets export、HTML 抽取、Content-Encoding 解壓與二進位 guard、normalizeWebFetchUrl 回 {url, expectText}
+- [[discord-social-post-fetch]] — ebfix 社群貼文正文優先抓取、可選 Firecrawl shell fallback 與部署安全界線
 - [[discord-web-search]] — 聯網搜尋 provider（DeepSeek/Bing/SearXNG）、SearXNG 實例設定與引擎踩坑
 - [[discord-dev-feedback-console]] — 控制台回饋「複製 prompt」按鈕與欄寬
 - [[discord-console-table-layout]] — 黑話／頻道表固定版面、84px 列高、colgroup 欄寬
