@@ -73,6 +73,7 @@
 | `discord-bridge-dsh-sessions.mjs` | DSH 會話層：preset 檢查、`ensureSession`、退役（`retireSession`）與交接摘要 |
 | `discord-bridge-output.mjs` | Discord 送出：會話改名、頻道解析（`resolveChannel`）與分條發送（`sendLong`） |
 | `discord-bridge-agent-tools.mjs` | 智能體工具：`agentHandlers`／`apiHandlers`、`createAgentSender` 接線與生圖工作 handler |
+| `discord-bridge-background.mjs` | 背景工作：黑話學習、小刻食堂輪詢、回訪排程、每日摘要與群友側寫、後台提問與背景會話 |
 
 ### 共用工具
 
