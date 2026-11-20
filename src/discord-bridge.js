@@ -74,7 +74,7 @@ import {
   notesOverview
 } from './core/discord-notes.mjs';
 import {
-  KNOWLEDGE_BODY_MAX_CHARS,
+  BODY_MAX_CHARS as KNOWLEDGE_BODY_MAX_CHARS,
   MAX_APPROVED,
   TITLE_MAX_CHARS,
   confirmKnowledge,
@@ -82,7 +82,7 @@ import {
   knowledgeOverview,
   knowledgeStats,
   rejectKnowledge,
-  saveKnowledgeCandidate,
+  saveCandidate as saveKnowledgeCandidate,
   updateKnowledge
 } from './core/discord-knowledge.mjs';
 import {
@@ -1419,7 +1419,7 @@ async function main() {
     clearAbandonedTurn,
     defaultDirect,
     epochOf,
-    getFinishCeobeTurn: () => finishCeobeTurn,
+    finishCeobeTurn: (...args) => finishCeobeTurn(...args),
     finishProgress,
     hideCompactNotice,
     lastActive,
@@ -1478,11 +1478,11 @@ async function main() {
     activity,
     authorName,
     client,
-    getCollectSlangSample: () => collectSlangSample,
+    collectSlangSample: (...args) => collectSlangSample(...args),
     embedPreview,
     getEmojiCatalogs: () => emojiCatalogs,
     emojiUsage,
-    getEnsureSession: () => ensureSession,
+    ensureSession: (...args) => ensureSession(...args),
     flat,
     followups,
     ignoredUser,
@@ -1537,7 +1537,7 @@ async function main() {
 
   // DSH 會話層在 core/discord-bridge-dsh-sessions.mjs；ensureSession 依賴 turnGate，
   // turnGate 又要 epochOf，所以這層只能在 turns 之後接線。createTurns 拿的是
-  // getEnsureSession getter，上面的接線才不會在別名宣告前讀值。
+  // ensureSession 的轉發箭頭：箭頭裡的名字執行期才解析，接線時不會讀到還沒宣告的別名。
   const dshSessions = createDshSessions({
     api,
     cfg,
@@ -1678,6 +1678,9 @@ async function main() {
     localDayKey,
     getSlangDayKey,
     getSlangDayCount,
+    resetCeobeCache,
+    slangQueueInfo,
+    clearSummaryTimer,
   } = backgroundJobs;
 
   /**
@@ -3154,9 +3157,7 @@ async function main() {
           for (const sourceId of sourceIds) ceobeState.ensurePair(channelId, sourceId);
         }
       }
-      ceobeSources = null;
-      ceobeComb = { key: '', id: '' };
-      ceobeList = { cookieId: '', cookies: [] };
+      resetCeobeCache();
     }
     cfg.discord.slang = next.slang;
     cfg.discord.videoLinks = next.videoLinks;
@@ -3315,9 +3316,7 @@ async function main() {
             slang: {
               enabled: cfg.discord.slang.enabled,
               ...slangStats(slangStore),
-              running: slangRunning,
-              queued: slangQueue.length,
-              lastRunAt: slangLastRunAt || null,
+              ...slangQueueInfo(),
               today: getSlangDayKey() === localDayKey() ? getSlangDayCount() : 0,
               maxPerDay: cfg.discord.slang.maxPerDay,
             },
@@ -3612,9 +3611,7 @@ async function main() {
               stats: slangStats(slangStore),
               learning: {
                 enabled: cfg.discord.slang.enabled,
-                running: slangRunning,
-                queued: slangQueue.length,
-                lastRunAt: slangLastRunAt || null,
+                ...slangQueueInfo(),
                 today: getSlangDayKey() === localDayKey() ? getSlangDayCount() : 0,
                 maxPerDay: cfg.discord.slang.maxPerDay,
               },
@@ -3737,7 +3734,7 @@ async function main() {
     codexResetPinger?.stop();
     clearAllTtftTimers();
     stopTradeJobs();
-    if (summaryTimer) clearTimeout(summaryTimer);
+    clearSummaryTimer();
     try { await agentApiHandle?.close(); } catch { /* 已經關了 */ }
     try { await consoleHandle?.close(); } catch { /* 已經關了 */ }
     try { await client.destroy(); } catch { /* 已斷線就算了 */ }

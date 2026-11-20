@@ -25,7 +25,7 @@ import { askBlockReason, createAskTurn } from './discord-ask.mjs';
 import { resolveMentions } from './discord-batch.mjs';
 import { labelEmojiTags } from './discord-emoji.mjs';
 import { findSensitive } from './discord-security.mjs';
-import { truncateText } from './discord-media.mjs';
+import { truncateText } from '../md-to-plain.js';
 
 export function createBackgroundJobs({
   cfg,
@@ -170,6 +170,7 @@ export function createBackgroundJobs({
     slangQueue.push({ guildId: String(guildId), channelId: String(channelId) });
     void drainSlangQueue();
   }
+
   /**
    * 指令回合的等待：排到閘門最前面時，DSH 可能還在跑別的回合、事件流還沒同步，
    * 或佇列裡有 DSH 後台送進來的訊息。等它乾淨再問，不要叫使用者「再試一次」。
@@ -893,7 +894,7 @@ export function createBackgroundJobs({
       slangRunning = false;
     }
   }
-return {
+  return {
     finishCeobeTurn,
     collectSlangSample,
     ceobeInfo,
@@ -905,5 +906,17 @@ return {
     localDayKey,
     getSlangDayKey: () => slangDayKey,
     getSlangDayCount: () => slangDayCount,
+    // 控制台改 ceobe 設定要清快取；模組持有這些 let，入口不能直接碰。
+    resetCeobeCache: () => {
+      ceobeSources = null;
+      ceobeComb = { key: '', id: '' };
+      ceobeList = { cookieId: '', cookies: [] };
+    },
+    slangQueueInfo: () => ({
+      running: slangRunning,
+      queued: slangQueue.length,
+      lastRunAt: slangLastRunAt || null,
+    }),
+    clearSummaryTimer: () => { if (summaryTimer) clearTimeout(summaryTimer); },
   };
 }

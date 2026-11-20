@@ -145,9 +145,10 @@ for (const file of bridgeModules) {
   ok(missing.length === 0, `${file}：用到的 core 函式都 import 了${missing.length ? `（漏 ${missing.join(', ')}）` : ''}`);
 }
 
-// ── D：範圍分析——模組裡引用了沒 import、沒接 deps、也沒宣告的名字 ──────
+// ── D：範圍分析——引用了沒 import、沒接 deps、也沒宣告的名字 ──────────────
 // 函式體內的引用也算（那些是延遲執行）；node:fs／node:path 與非 core 的
 // import（discord.js、twitter-post 等）C 項掃不到，只有這項會抓。
+// 入口一起掃：搬走的名字入口殘留讀寫（ceobeSources、slangQueue）就是漏在這裡。
 const GLOBALS = new Set([
   // JS 內建與 node 全域（粗清單，夠用就好；新的內建加在這裡）
   'console', 'process', 'Buffer', 'globalThis', 'setTimeout', 'clearTimeout', 'setInterval',
@@ -159,8 +160,9 @@ const GLOBALS = new Set([
   'NaN', 'Infinity', 'undefined', 'null', 'true', 'false', 'this', 'arguments', 'require',
   'module', 'exports', 'encodeURI', 'encodeURIComponent', 'decodeURI', 'decodeURIComponent',
 ]);
-for (const file of bridgeModules) {
-  const text = fs.readFileSync(path.join(CORE, file), 'utf8');
+for (const file of [...bridgeModules, 'discord-bridge.js']) {
+  const filePath = file === 'discord-bridge.js' ? ENTRY : path.join(CORE, file);
+  const text = fs.readFileSync(filePath, 'utf8');
   const ast = espree.parse(text, { ecmaVersion: 'latest', sourceType: 'module', range: true, loc: true });
   const scopeManager = eslintScope.analyze(ast, { sourceType: 'module', ecmaVersion: 2024 });
   const unresolved = new Map(); // name -> [line, ...]
@@ -173,6 +175,52 @@ for (const file of bridgeModules) {
   }
   const list = [...unresolved.entries()].map(([name, lines]) => `${name}@${lines.slice(0, 3).join(',')}`);
   ok(unresolved.size === 0, `${file}：引用的名字都有 import／deps／宣告${list.length ? `（漏 ${list.join(', ')}）` : ''}`);
+}
+
+// ── F：import 的名字，目標模組真的有 export ─────────────────────────────
+// 只查 repo 內的相對路徑；套件（discord.js）交給執行期。alias（A as B）比對 A。
+// 踩過兩次：truncateText 寫錯來源模組、KNOWLEDGE_BODY_MAX_CHARS 把 alias 洗掉。
+const exportCache = new Map();
+function exportsOf(target) {
+  if (exportCache.has(target)) return exportCache.get(target);
+  const text = fs.readFileSync(target, 'utf8');
+  const ast = espree.parse(text, { ecmaVersion: 'latest', sourceType: 'module', range: true, loc: true });
+  const names = new Set();
+  const addPattern = (node) => {
+    if (node.type === 'Identifier') names.add(node.name);
+    else if (node.type === 'ObjectPattern') for (const p of node.properties) addPattern(p.value);
+    else if (node.type === 'AssignmentPattern') addPattern(node.left);
+  };
+  for (const node of ast.body) {
+    if (node.type === 'ExportNamedDeclaration') {
+      if (node.declaration?.declarations) for (const d of node.declaration.declarations) addPattern(d.id);
+      else if (node.declaration?.id?.name) names.add(node.declaration.id.name);
+      for (const spec of node.specifiers ?? []) names.add(spec.local.name);
+    } else if (node.type === 'ExportDefaultDeclaration') names.add('default');
+    else if (node.type === 'ExportAllDeclaration' && node.exported) names.add(node.exported.name);
+  }
+  exportCache.set(target, names);
+  return names;
+}
+for (const file of [...bridgeModules, 'discord-bridge.js']) {
+  const filePath = file === 'discord-bridge.js' ? ENTRY : path.join(CORE, file);
+  const dir = path.dirname(filePath);
+  const text = fs.readFileSync(filePath, 'utf8');
+  const ast = espree.parse(text, { ecmaVersion: 'latest', sourceType: 'module', range: true, loc: true });
+  const bad = [];
+  for (const node of ast.body) {
+    if (node.type !== 'ImportDeclaration') continue;
+    if (!node.source.value.startsWith('.')) continue;
+    const target = path.resolve(dir, node.source.value);
+    if (!fs.existsSync(target)) { bad.push(`${node.source.value}（檔案不存在）`); continue; }
+    let names;
+    try { names = exportsOf(target); } catch { continue; }
+    for (const spec of node.specifiers) {
+      if (spec.type !== 'ImportSpecifier') continue;
+      if (!names.has(spec.imported.name)) bad.push(`${spec.imported.name}（${node.source.value} 沒有這個 export）`);
+    }
+  }
+  ok(bad.length === 0, `${file}：import 的名字目標模組都有 export${bad.length ? `（${bad.join(', ')}）` : ''}`);
 }
 
 // ── E：入口 import 沒有死 binding ─────────────────────────────────

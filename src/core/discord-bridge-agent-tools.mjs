@@ -19,7 +19,7 @@ import { bySnowflake, collectSearchHits, guildSearchParams, scanHistoryMessages,
 import { forgetFact, nameMatches, numberFacts, rememberFact, userFacts } from './discord-memory.mjs';
 import { channelNotes, forgetNote, formatNoteList, NOTES_PER_CHANNEL, NOTE_DAYS_DEFAULT, NOTE_DAYS_MAX, NOTE_MAX_CHARS, pruneNotes, recordNote } from './discord-notes.mjs';
 import { addMeme, canSaveMemeFrom, checkMemeSlot, createSentImageOwners, deleteMemeById, findMeme, forgetMeme, formatMemeList, isMemeRef, memeFileName, memeNameFromRef, newMemeId, normalizeMeme, recordMemeUse, searchMemes } from './discord-memes.mjs';
-import { formatKnowledgeForTool, KEYWORD_MAX_CHARS, KNOWLEDGE_BODY_MAX_CHARS, KNOWLEDGE_KEYWORDS_MAX, KNOWLEDGE_TOOLS, saveCandidate as saveKnowledgeCandidate, TITLE_MAX_CHARS } from './discord-knowledge.mjs';
+import { formatKnowledgeForTool, KEYWORD_MAX_CHARS, BODY_MAX_CHARS as KNOWLEDGE_BODY_MAX_CHARS, KEYWORDS_MAX as KNOWLEDGE_KEYWORDS_MAX, KNOWLEDGE_TOOLS, saveCandidate as saveKnowledgeCandidate, TITLE_MAX_CHARS } from './discord-knowledge.mjs';
 import { DEV_FEEDBACK_EDITS_PER_TURN, formatDevFeedbackList, recentDevFeedback, recordDevFeedback, updateDevFeedback, validateDevFeedbackFields, validateDevFeedbackSubmit } from './discord-dev-feedback.mjs';
 import { formatEmojiLine, isUnicodeEmoji, knownEmojiTokens, labelEmojiTags, matchStickers, ownReaction, reactionKey, retrieveEmojis, substituteEmojiNames } from './discord-emoji.mjs';
 import { defang, isVisible, repliedName, resolveMentions, takeFollowups, visibleName } from './discord-batch.mjs';

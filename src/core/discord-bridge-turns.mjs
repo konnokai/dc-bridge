@@ -49,7 +49,6 @@ export function createTurns(deps) {
     clearAbandonedTurn,
     defaultDirect,
     epochOf,
-    finishCeobeTurn,
     finishProgress,
     hideCompactNotice,
     lastActive,
@@ -108,12 +107,12 @@ export function createTurns(deps) {
     activity,
     authorName,
     client,
-    getCollectSlangSample,
+    collectSlangSample,
     embedPreview,
     getEmojiCatalogs,
     emojiUsage,
-    getEnsureSession,
-    getFinishCeobeTurn,
+    ensureSession,
+    finishCeobeTurn,
     flat,
     followups,
     ignoredUser,
@@ -626,7 +625,7 @@ export function createTurns(deps) {
     if (reason.kind === 'completed') {
       const { sent, reacted, unreacted, removed, attempted } = agentSender.finishTurn(key);
       // 餅的回合：模型漏掉的原文連結由橋接補；完全沒送出才發保底訊息。
-      const ceobeAdded = meta?.ceobe ? await getFinishCeobeTurn(key, meta.ceobe, sentTexts, sent) : 0;
+      const ceobeAdded = meta?.ceobe ? await finishCeobeTurn(key, meta.ceobe, sentTexts, sent) : 0;
       const totalSent = sent + ceobeAdded;
       if (meta) {
         const turnUsage = usage.ledger.turnUsage(frame.sessionId, ended.turn);
@@ -660,13 +659,13 @@ export function createTurns(deps) {
     if (reason.kind === 'error') {
       const message = String(reason.error?.message ?? '未知錯誤').slice(0, 500);
       log(`agent 出錯 (${key})：${message}`);
-      if (meta?.ceobe) await getFinishCeobeTurn(key, meta.ceobe, sentTexts, spoke);
+      if (meta?.ceobe) await finishCeobeTurn(key, meta.ceobe, sentTexts, spoke);
       // 沒人叫 bot 的那批出錯只記日誌：頻道裡沒人在等回覆，貼錯誤只會吵到人。
       if (direct) await sendLong(key, `⚠️ agent 處理出錯：${message}`);
       return;
     }
     if (reason.kind === 'aborted') {
-      if (meta?.ceobe) await getFinishCeobeTurn(key, meta.ceobe, sentTexts, spoke);
+      if (meta?.ceobe) await finishCeobeTurn(key, meta.ceobe, sentTexts, spoke);
       if (direct) {
         await sendLong(key, ttftMs
           ? `⚠️ 模型這次想太久（超過 ${Math.round(ttftMs / 1000)} 秒），先取消這一輪；可以再問一次。`
@@ -981,7 +980,7 @@ export function createTurns(deps) {
         // 抓回來的歷史訊息也餵進黑話語料（去重靠 message.id）；退出的人不收。
         for (const entry of history) {
           if (!entry.author?.bot && entry.content && !cfg.discord.deny.self.includes(String(entry.author.id))) {
-            getCollectSlangSample(entry, resolveMentions(entry.content, entry));
+            collectSlangSample(entry, resolveMentions(entry.content, entry));
           }
         }
         // 退出的人那則已經落在這次抓的範圍（比批次最後一則舊），算帶到了；還在後面的留給下一批。
@@ -1255,7 +1254,7 @@ export function createTurns(deps) {
         return false;
       }
     }
-    const sessionId = await getEnsureSession(key);
+    const sessionId = await ensureSession(key);
     if (epoch !== epochOf(key)) {
       log(`投遞前會話已重置，丟棄 (${key})`);
       writeTurn(key, batchMeta, 'skipped', { reason: 'gate', job });
