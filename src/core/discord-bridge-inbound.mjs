@@ -56,7 +56,6 @@ export function createInbound({
   formatPortfolioResult,
   getTradeService,
   ignoredUser,
-  isChannelAllowed,
   lastActive,
   markEmojiUsageDirty,
   markMemoryDirty,
@@ -614,7 +613,7 @@ export function createInbound({
       log(`註冊全域 slash command 失敗（邀請連結需要 applications.commands scope）：${error?.message ?? error}`);
     }
   }
-return {
+  return {
     handleReaction,
     handleMessage,
     handleTyping,

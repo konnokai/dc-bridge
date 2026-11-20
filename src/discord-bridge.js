@@ -1725,7 +1725,6 @@ async function main() {
     formatPortfolioResult,
     getTradeService: () => getTradeService(),
     ignoredUser,
-    isChannelAllowed,
     lastActive,
     markEmojiUsageDirty,
     markMemoryDirty,
