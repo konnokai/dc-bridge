@@ -46,6 +46,9 @@ node scripts/deploy-discord.mjs             # 真的部署
 
 - [Miyoria](https://github.com/owenliu0924/Miyoria)：AI VTuber 框架。
   本專案的觀測與部分架構想法參考它的 [`docs/ARCHITECTURE.md`](https://github.com/owenliu0924/Miyoria/blob/main/docs/ARCHITECTURE.md)。
+- [nonebot-bison](https://github.com/MountainDash/nonebot-bison)：小刻食堂（餅）的抓取與移植參考。
+  上游說明在 [`docs/dev/ceobecanteen.md`](https://github.com/MountainDash/nonebot-bison/blob/main/docs/dev/ceobecanteen.md)；
+  本專案的快照與實作對照見 [docs/design/REF_CEOBECANTEEN.md](docs/design/REF_CEOBECANTEEN.md)。
 
 ## 授權
 
