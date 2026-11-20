@@ -3,13 +3,15 @@
 > 根目錄只留 `README.md`，其餘文件都在本目錄。
 > 狀態標記：✅ 照它做就對 · ⚠️ 部分過時（看備註） · 🗄️ 只作背景。
 
-## guides/ — 給使用者與維運
+## guides/ — 使用者、維運與規範
 
 | 文件 | 一句話 | 狀態 |
 | --- | --- | --- |
 | [guides/DISCORD.md](guides/DISCORD.md) | **Discord 版唯一說明**：安裝、設定、權限、指令、控制台、花費、記憶、筆記、回訪、黑話 | ✅ |
 | [guides/DSH_SETUP.md](guides/DSH_SETUP.md) | 把 preset 與 MCP 掛到 DSH：`setup-dsh.mjs` 的流程 | ✅ |
 | [guides/DSH_022_ADAPTATION.md](guides/DSH_022_ADAPTATION.md) | DSH 0.2.2 適配：projection 幀改 `changes`、工具名補洞、實測與回退 | ✅ 升級 DSH 前先看 |
+| [guides/DSH_SESSION_LOGS.md](guides/DSH_SESSION_LOGS.md) | 解析 DSH 會話日誌：找 session、解 zstd、看事件與 turn | ✅ |
+| [guides/FEATURE_LAYERING.md](guides/FEATURE_LAYERING.md) | 功能落點：新功能寫進 core factory，入口只留 deps 接線 | ✅ 寫新功能前先看 |
 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) | 安全基線與威脅模型、發布前檢查、改動檢查單 | ✅ 動安全相關程式前必讀 |
 | [guides/PRIVACY.md](guides/PRIVACY.md) | 資料會送到哪裡、哪些檔案含個資、`privacy-scan` 怎麼用 | ✅ |
 | [guides/CONSOLE-UI-TESTING.md](guides/CONSOLE-UI-TESTING.md) | 控制台離線預覽與瀏覽器回歸怎麼跑 | ✅ |
@@ -43,8 +45,10 @@
 | --- | --- |
 | 把 bot 接起來 | [guides/DISCORD.md](guides/DISCORD.md) |
 | 知道某個目錄或腳本在做什麼 | [FOLDER_MAP.md](FOLDER_MAP.md) |
+| 寫新功能、決定程式放哪 | [guides/FEATURE_LAYERING.md](guides/FEATURE_LAYERING.md) |
 | 部署到測試伺服器 | [../AGENTS.md](../AGENTS.md)、`node scripts/deploy-discord.mjs` |
 | 改設定或加功能前先知道有哪些坑 | [guides/DISCORD.md](guides/DISCORD.md)、`design/`（本機） |
+| 查模型為什麼回那句話或拒絕 | [guides/DSH_SESSION_LOGS.md](guides/DSH_SESSION_LOGS.md) |
 | 動安全相關程式 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) |
 | 看花了多少錢 | [guides/DISCORD.md](guides/DISCORD.md) 的「花費」段 |
 | 升級 DSH | [guides/DSH_022_ADAPTATION.md](guides/DSH_022_ADAPTATION.md) |
