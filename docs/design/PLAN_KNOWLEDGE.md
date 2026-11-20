@@ -83,7 +83,7 @@ Codex prompt 後面。查知識失敗不擋生圖。
 - `src/core/discord-knowledge.mjs`（資料與注入）
 - `src/discord-bridge.js`（handler、注入點、控制台 API、生圖 hook）
 - `src/mcp-discord.js`（`propose_knowledge`）
-- `src/core/discord-console.mjs` ＋ `public/discord-console.html`（知識分頁）
+- `console/src/tabs/KnowledgeTab.vue`（知識分頁；產物是 `public/discord-console.html`）＋ `src/core/discord-console.mjs`（API）
 - `plugins/dc-agent-presets/dc-draw-image.mjs`（生圖附加）
 - `docs/guides/DISCORD.md`（使用者文件）
 

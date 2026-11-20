@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Discord 控制台的離線瀏覽器回歸；只連測試自己起的 mock server。 */
+/** Discord 控制台的離線瀏覽器回歸；只連測試自己起的 mock server，測的是打包後的 public/discord-console.html。 */
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { startConsole } from '../src/core/discord-console.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const original = false;
+const HTML = join(here, '..', 'public', 'discord-console.html');
 
 async function loadPlaywright() {
   const require = createRequire(import.meta.url);
@@ -34,7 +34,7 @@ async function test(name, fn) {
 try {
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 
-  if (!original) await test('Discord 控制台：頻道風格可按頻道過濾，跟狀態過濾一起作用', async () => {
+  await test('Discord 控制台：頻道風格可按頻道過濾，跟狀態過濾一起作用', async () => {
     const style = (id, channelId, channelName, status, guildName) => ({ id, kind: 'style', channelId, channelName, guildName, term: id, meaning: '描述', status, seen: 1 });
     let entries = [
       { id: 'w1', kind: 'slang', term: '難繃', meaning: '很難繃住', status: 'candidate', seen: 1 },
@@ -45,7 +45,7 @@ try {
       style('gone', '999', '999', 'rejected'),
     ];
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -129,7 +129,7 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：黑話批次確認與拒絕', async () => {
+  await test('Discord 控制台：黑話批次確認與拒絕', async () => {
     const entries = [
       { id: 'c1', kind: 'slang', term: '難繃', meaning: '受不了', usage: '', status: 'candidate', seen: 1 },
       { id: 'c2', kind: 'slang', term: '破防', meaning: '心態崩', usage: '', status: 'candidate', seen: 1 },
@@ -137,7 +137,7 @@ try {
     ];
     const calls = [];
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -183,7 +183,7 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：群知識可確認、可從訊息連結新增', async () => {
+  await test('Discord 控制台：群知識可確認、可從訊息連結新增', async () => {
     const entries = [
       {
         id: 'k1', title: '繪圖設定', body: '畫大肥魚時保留鯨魚尾', scope: 'guild', guildId: 'g1', channelId: 'c1',
@@ -198,7 +198,7 @@ try {
     ];
     const writes = [];
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -280,7 +280,7 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：黑話與頻道標籤可搜尋', async () => {
+  await test('Discord 控制台：黑話與頻道標籤可搜尋', async () => {
     let entries = [
       { id: 's1', kind: 'slang', term: '大肥魚', meaning: '群內 AI 的暱稱', usage: '呼叫 AI 時用', status: 'confirmed', seen: 1 },
       { id: 's2', kind: 'slang', term: '破防', meaning: '心態崩了', usage: '自嘲時', status: 'rejected', seen: 2 },
@@ -289,7 +289,7 @@ try {
       { id: 't2', kind: 'style', channelId: 'c2', channelName: 'general', guildName: '伺服器甲', term: '正式', meaning: '語氣正式', status: 'candidate', seen: 2 },
     ];
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -368,7 +368,7 @@ try {
       { id: 't2', kind: 'style', channelId: 'c2', channelName: '長'.repeat(30), term: '乙', meaning: '長'.repeat(80), status: 'confirmed', seen: 2 },
     ];
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -420,13 +420,13 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：已拒絕的黑話可以復原', async () => {
+  await test('Discord 控制台：已拒絕的黑話可以復原', async () => {
     let entries = [
       { id: 'r1', kind: 'slang', term: '拒絕', meaning: '拒絕的', usage: '', status: 'rejected', seen: 3 },
     ];
     let confirmedId = null;
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -478,7 +478,7 @@ try {
       firstAt: Date.now(),
     }));
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -536,7 +536,7 @@ try {
   await test('Discord 控制台：手機寬度下各表儲存格內容不溢出到隔壁欄，排序同值保留伺服器順序', async () => {
     const old = Date.parse('2026-01-02T03:04:05Z');
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({
           bot: null, dsh: {}, sessions: 1, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 },
@@ -623,7 +623,7 @@ try {
       keys: [],
     };
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 }, emoji: { entries: 0, guilds: 0, items: [] }, ignored: [] }),
         invite: () => ({}),
@@ -704,7 +704,7 @@ try {
     const pad = (index) => String(index).padStart(2, '0');
     const userId = (index) => `9000000000000000${pad(index)}`;
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: {}, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -825,7 +825,7 @@ try {
 
   await test('Discord 控制台：梗圖載入失敗會提示', async () => {
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -899,7 +899,7 @@ try {
     };
     let overviewOrders = [order];
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -994,7 +994,7 @@ try {
       slang: { jev: { mode: 'auto' } },
     };
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, requireMention: true, mentionOverrides: 1, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -1059,14 +1059,14 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：存功能設定不會把 Jev 設定改掉', async () => {
+  await test('Discord 控制台：存功能設定不會把 Jev 設定改掉', async () => {
     const posts = [];
     const current = {
       allow: {}, deny: {}, ownerIds: [], media: {},
       slang: { jev: { mode: 'auto', confirmAt: 0.8, rejectBelow: 0.1 } },
     };
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -1102,14 +1102,14 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：小刻食堂可新增頻道、載入來源後不丟輸入', async () => {
+  await test('Discord 控制台：小刻食堂可新增頻道、載入來源後不丟輸入', async () => {
     const posts = [];
     let current = {
       allow: {}, deny: {}, ownerIds: [], media: {},
       ceobe: { enabled: true, channels: { '111111111111111111': ['uid-a'] } },
     };
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),
@@ -1169,7 +1169,7 @@ try {
     }
   });
 
-  if (!original) await test('Discord 控制台：回饋分頁列出意見、可跳到觸發訊息、不執行模型寫的 HTML', async () => {
+  await test('Discord 控制台：回饋分頁列出意見、可跳到觸發訊息、不執行模型寫的 HTML', async () => {
     let items = [{
       id: 'df1',
       at: '2026-11-01T04:05:06.000Z',
@@ -1189,7 +1189,7 @@ try {
     }];
     let deleted = '';
     const dc = await startConsole({
-      port: 0, token: 't', htmlPath: join(here, '..', 'public', 'discord-console.html'),
+      port: 0, token: 't', htmlPath: HTML,
       handlers: {
         status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
         invite: () => ({}),

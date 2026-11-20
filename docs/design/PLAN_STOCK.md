@@ -1091,7 +1091,7 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
 
 ### 10.2 控制台
 
-控制台已經有分頁（`public/discord-console.html`），新增一個「股盤」分頁；交易設定放在既有「設定」分頁。
+控制台已經有分頁（原始碼 `console/src/`，產物 `public/discord-console.html`），新增一個「股盤」分頁（`console/src/tabs/TradeTab.vue`）；交易設定放在既有「設定」分頁（`console/src/tabs/SettingsTab.vue`）。
 
 **股盤分頁（唯讀）**
 
@@ -1347,7 +1347,7 @@ MVP 接受「刪除後重開帳戶」；若要比賽公平，排行榜可加「�
    - `src/core/discord-usage.mjs`：Bot usage 歸屬。
    - `scripts/setup-dsh.mjs`：`mcp-trade` 與 `dc-trader`。
    - `scripts/build-agent-preset-patches.mjs`：`DISCORD_PRESETS` 加 `dc-trader`。
-   - `public/discord-console.html`：股盤分頁與設定欄位。
+   - `console/src/tabs/TradeTab.vue` 與 `console/src/tabs/SettingsTab.vue`：股盤分頁與設定欄位（產物 `public/discord-console.html`）。
    - `dsh/agent-presets/dc-trader/{preset.yml,agent.cordis.yml}`：`dc-trader` 來源。
    - `dsh/agent-presets/dc-chat/`：persona 加交易規則。
 4. 測試：

@@ -5,6 +5,14 @@
 先讀 [docs/guides/FEATURE_LAYERING.md](docs/guides/FEATURE_LAYERING.md)：
 邏輯寫進 `src/core/` 的 `createXxx(deps)`，入口 `src/discord-bridge.js` 只留 deps 接線。
 
+## 控制台前端
+
+原始碼在 `console/src/`（Vite + Vue），`public/discord-console.html` 是 `npm run build:console` 的產物，
+伺服器只讀這一個檔案（`src/core/discord-console.mjs`）。改完前端要重建再 commit；
+`scripts/test-console-static.mjs` 會跑 `build-console.mjs --check` 抓忘記重建。
+看畫面用 `npm run dev:console`（`/api` 轉給 127.0.0.1:3110），或照
+[docs/guides/CONSOLE-UI-TESTING.md](docs/guides/CONSOLE-UI-TESTING.md) 起 mock。
+
 ## Lessons
 
 - 拆模組時晚宣告的依賴接「轉發箭頭」（`fn: (...args) => fn(...args)`），不要用 getter（`getFn: () => fn`）：getter 的呼叫端要寫兩層括號，`getEnsureSession(key)` 這種單層呼叫會靜靜拿回函式本體，工作沒做、測試也全綠。
