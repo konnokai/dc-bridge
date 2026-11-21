@@ -77,6 +77,7 @@
 - [[discord-history-archive]] — Qdrant 歷史歸檔：360 天、recall_history、控制台瀏覽／搜尋／刪除、游標與權限風險（2026-11-17）
 - [[discord-honest-boundary]] — 幻覺歸屬根因、compaction 摘要丟失發言者、persona 誠實邊界、debounce maxWait 15 秒、COMPACT_NOTICE 白飯梗
 - [[discord-auto-compaction]] — Bridge `autoCompactTokens` 與 DSH pressure 門檻的差異、`thresholdRatio: 1` 限制及 `/compact` 保留行為
+- [[discord-ceobecanteen]] — 小刻食堂（餅）的上游 API、投遞安全、預設設定與控制台版面（2026-11-20）
 - [[discord-persona]] — 鯨魚娘 persona 重構與長距摘要限制
 - [[discord-open-politics-preset]] — `openPoliticsChannels`、`dc-chat-open` 安全差異、會話實際 preset 顯示與安裝錯誤處理（2026-11-17）
 - [[discord-usage-pricing]] — 花費看板改用美元價目、evict cur 換算、2027 假日、部署備份
