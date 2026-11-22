@@ -23,6 +23,8 @@ export const data = reactive({
   archive: null,
   config: null,
   providers: null,
+  arknightsAliases: null,
+  arknightsAliasesError: '',
 });
 
 // 目前分頁。資料照常每 5 秒刷新；只有比較重的端點（觸發、回饋、知識）跟著分頁抓。
@@ -45,6 +47,8 @@ export const pagedLists = reactive({
 });
 
 export const triggerState = reactive({ search: '', page: 1, sortKey: 'count', dir: 'desc' });
+
+export const aliasView = reactive({ status: 'all', page: 1, query: '', selection: reactive(new Set()) });
 
 export const archiveState = reactive({
   items: [], next: null, stack: [], names: {}, loaded: false, search: null, status: '', channels: [], channelId: '',
@@ -187,6 +191,27 @@ export async function refreshDevFeedback() {
 
 export async function refreshKnowledge() {
   try { data.knowledge = await api('/api/knowledge'); } catch { /* 5 秒後的 refresh 會再試 */ }
+}
+
+let aliasesLoaded = false;
+
+/** 別名不跟 5 秒輪詢：第一次載入或手動按重新整理／操作後才抓。 */
+export async function refreshAliases({ force = false } = {}) {
+  if (aliasesLoaded && !force) return data.arknightsAliases;
+  try {
+    data.arknightsAliases = await api('/api/arknights-aliases');
+    data.arknightsAliasesError = '';
+    aliasesLoaded = true;
+  } catch (error) {
+    data.arknightsAliasesError = error?.message ?? String(error);
+  }
+  return data.arknightsAliases;
+}
+
+export function resetAliases() {
+  aliasesLoaded = false;
+  data.arknightsAliases = null;
+  data.arknightsAliasesError = '';
 }
 
 export async function loadConfig() {

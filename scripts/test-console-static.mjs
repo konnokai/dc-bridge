@@ -35,7 +35,7 @@ console.log('## Discord 控制台');
   const built = read('public/discord-console.html');
   ok(/<div id="app"><\/div>/.test(built), '產物有掛載點 #app');
   ok(!/<script[^>]+src=/.test(built) && !/<link[^>]+rel="stylesheet"/.test(built), '產物是單一檔案：沒有外部 JS／CSS');
-  for (const endpoint of ['/api/config', '/api/providers', '/api/usage', '/api/slang', '/api/knowledge', '/api/archive/list', '/api/memes/image', '/api/ceobe']) {
+  for (const endpoint of ['/api/config', '/api/providers', '/api/usage', '/api/slang', '/api/knowledge', '/api/arknights-aliases', '/api/archive/list', '/api/memes/image', '/api/ceobe']) {
     ok(built.includes(endpoint), `產物打包了 ${endpoint}`);
   }
 
@@ -56,6 +56,12 @@ console.log('## Discord 控制台');
   ok(/id="notes-count"/.test(source) && /id="note-rows"/.test(source), '頻道筆記卡片有計數與表格');
   ok(/api\('\/api\/notes'\)/.test(store) && /api\('\/api\/notes\/delete'/.test(source), '頻道筆記卡片接上查詢與刪除端點');
   ok(/id="memes-count"/.test(source) && /id="meme-rows"/.test(source), '梗圖卡片有計數與表格');
+  ok(/id="alias-count"/.test(source) && /id="alias-rows"/.test(source), '幹員別名卡片有計數與表格');
+  ok(/id="alias-add"/.test(source) && /id="alias-refresh"/.test(source), '幹員別名卡片有手動新增與重新整理');
+  ok(/id="alias-corrupt"/.test(source), '別名檔損毀有提示');
+  const refreshBlock = store.slice(store.indexOf('export async function refresh()'), store.indexOf('export async function refreshUsage'));
+  ok(!refreshBlock.includes('/api/arknights-aliases'), '別名不跟 5 秒輪詢');
+  ok(/api\('\/api\/arknights-aliases'/.test(store) && /\/api\/arknights-aliases\//.test(source), '別名卡片接上查詢與拒絕／刪除端點');
   ok(/api\('\/api\/memes'\)/.test(store) && /api\('\/api\/memes\/delete'/.test(source) && /\/api\/memes\/image\?id=/.test(store),
     '梗圖卡片接上查詢、刪除與縮圖端點');
   ok(/authorization: 'Bearer ' \+ auth\.token/.test(store), '梗圖縮圖用標頭帶 token，不放進網址');

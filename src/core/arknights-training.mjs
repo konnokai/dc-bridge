@@ -1,11 +1,19 @@
 // 明日方舟幹員練度統計（一圖流 yituliu）：把全服持有者的專精與模組分布整理成建議。
 //
 // 統計端點只有 charId；幹員名、技能名與模組名要另一份幹員表。兩邊都是公開唯讀資料，
-// 沒有金鑰，快取只在這個行程內。
+// 沒有金鑰。統計與幹員表快取在行程內；PRTS 的幹員別名（redirect）抓一次就寫進
+// state/arknights-aliases.json 永久沿用，之後不再連 PRTS。
 //
 // 數值語意（對齊一圖流前端）：skillN 的 key 3 = 專精三、equipN 的 key 3 = 模組階段 3；
 // key 4 以上是上游零星髒資料，忽略。分母固定用 own（持有者數）。
-import { Converter } from 'opencc-js';
+import {
+  ALIAS_STATUS,
+  buildAliasStore,
+  normalizeName,
+  readAliasStoreStatus,
+  recordAlias,
+  writeAliasStore,
+} from './arknights-aliases.mjs';
 
 const STATS_URL = 'https://auth.yituliu.cn/open/ak-operator-statistics/v2/result';
 // 幹員表在別人的前端 repo；jsDelivr 快取久、raw.githubusercontent 是原始來源。
@@ -13,9 +21,14 @@ const TABLE_URLS = [
   'https://cdn.jsdelivr.net/gh/Arknights-yituliu/frontend-v2-plus@main/src/static/json/operator/character_table_simple.v2.json',
   'https://raw.githubusercontent.com/Arknights-yituliu/frontend-v2-plus/main/src/static/json/operator/character_table_simple.v2.json',
 ];
+const PRTS_API = 'https://prts.wiki/api.php';
 const STATS_TTL_MS = 6 * 60 * 60 * 1000;
 const TABLE_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
+const PRTS_TIMEOUT_MS = 15_000;
+const PRTS_TOTAL_BUDGET_MS = 30_000;
+const PRTS_BATCH = 50;
+const ALIAS_RETRY_MS = 5 * 60 * 1000;
 
 const PROFESSIONS = {
   PIONEER: '先鋒',
@@ -28,18 +41,13 @@ const PROFESSIONS = {
   SPECIAL: '特種',
 };
 
-const toSimplified = Converter({ from: 'tw', to: 'cn' });
 const cache = new Map(); // key -> { at, retryAt?, data }
+let aliasRetryAt = 0;
+let aliasFetchPromise = null;
 
 const count = (value) => Number(value) || 0;
 const fmt = (value) => String(count(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const pct = (part, whole) => `${whole > 0 ? ((part / whole) * 100).toFixed(1) : '0.0'}%`;
-
-/** 名稱比對用的正規化：繁轉簡、全形轉半形、去括號／間隔號／空白、不分大小寫。 */
-const normalizeName = (value) => toSimplified(String(value ?? ''))
-  .normalize('NFKC')
-  .toLowerCase()
-  .replace(/[\s()·・•\[\]（）【】]/g, '');
 
 /** check 回 true 才進快取；回字串代表格式不對，當成這次抓取失敗。 */
 async function loadJson(key, urls, ttlMs, label, check = () => true) {
@@ -77,12 +85,186 @@ async function loadStats() {
   return doc.data;
 }
 
-const loadTable = () => loadJson('table', TABLE_URLS, TABLE_TTL_MS, '幹員表', (doc) => {
+export const loadTable = () => loadJson('table', TABLE_URLS, TABLE_TTL_MS, '幹員表', (doc) => {
   if (!doc || typeof doc !== 'object') return '幹員表格式不對';
   const rows = Object.values(doc);
   if (!rows.every((op) => op && typeof op.name === 'string' && typeof op.charId === 'string')) return '幹員表格式不對';
   return true;
 });
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+async function prtsApi(params, deadline) {
+  let failure;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const remaining = deadline ? deadline - Date.now() : PRTS_TIMEOUT_MS;
+    if (remaining <= 0) break;
+    try {
+      const url = new URL(PRTS_API);
+      url.search = new URLSearchParams({ ...params, format: 'json' }).toString();
+      const res = await fetch(url, {
+        headers: { 'user-agent': 'dc-bridge-arknights/0.1' },
+        signal: AbortSignal.timeout(Math.min(PRTS_TIMEOUT_MS, remaining)),
+      });
+      if (!res.ok) throw new Error(`PRTS API HTTP ${res.status}`);
+      const doc = await res.json();
+      // MediaWiki 的錯誤仍可能是 HTTP 200，錯誤放在 error 欄位；不能當成空結果。
+      if (doc?.error) throw new Error(`PRTS API 錯誤：${doc.error.code ?? ''} ${doc.error.info ?? ''}`.trim());
+      if (!doc?.query) throw new Error('PRTS 回應缺少 query');
+      return doc;
+    } catch (error) {
+      failure = error;
+      // 只重試逾時／連線類錯誤；HTTP 或 API 錯誤重試沒有意義。
+      const retryable = /timeout|aborted|fetch failed|network/i.test(String(error?.message ?? error));
+      if (!retryable || Date.now() + 1000 >= deadline) break;
+      await sleep(500);
+    }
+  }
+  throw failure ?? new Error('PRTS 別名抓取逾時');
+}
+
+/** 幹員分類的全部頁面＋每頁 redirect；任何一批失敗就整批放棄，不寫半套。 */
+export async function fetchAliasPages(deadline = Date.now() + PRTS_TOTAL_BUDGET_MS) {
+  const titles = [];
+  let cont;
+  do {
+    const params = {
+      action: 'query',
+      list: 'categorymembers',
+      cmtitle: 'Category:干员',
+      cmlimit: '500',
+      cmnamespace: '0',
+    };
+    if (cont) params.cmcontinue = cont;
+    const doc = await prtsApi(params, deadline);
+    for (const row of doc.query.categorymembers ?? []) titles.push(row.title);
+    cont = doc?.continue?.cmcontinue;
+  } while (cont);
+  if (titles.length === 0) throw new Error('PRTS 幹員分類是空的');
+
+  const pages = new Map(); // title -> { title, redirects }
+  for (let i = 0; i < titles.length; i += PRTS_BATCH) {
+    const batch = titles.slice(i, i + PRTS_BATCH);
+    let rdcontinue;
+    do {
+      const params = {
+        action: 'query',
+        titles: batch.join('|'),
+        prop: 'redirects',
+        rdlimit: 'max',
+        rdnamespace: '0',
+      };
+      if (rdcontinue) params.rdcontinue = rdcontinue;
+      const doc = await prtsApi(params, deadline);
+      const rows = Object.values(doc.query.pages ?? {});
+      if (rows.length === 0) throw new Error('PRTS 回應沒有頁面');
+      for (const page of rows) {
+        const existing = pages.get(page.title);
+        const redirects = page.redirects ?? [];
+        if (existing) existing.redirects.push(...redirects);
+        else pages.set(page.title, { title: page.title, redirects: [...redirects] });
+      }
+      rdcontinue = doc?.continue?.rdcontinue;
+    } while (rdcontinue);
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+  }
+  return [...pages.values()];
+}
+
+/**
+ * 別名表：有檔案就用檔案（永久沿用），沒有才抓 PRTS 並寫檔。
+ * 檔案損毀時不重建，避免把管理員的拒絕紀錄蓋掉；抓不到就跳過別名層。
+ * 同一個程序同時進來的查詢共用同一次抓取。
+ */
+async function ensureAliasStore(table, aliasFile) {
+  const status = readAliasStoreStatus(aliasFile);
+  if (status.state === 'ok') return status.store;
+  if (status.state === 'corrupt') {
+    console.error(`[arknights] 別名檔損毀，先不重建（避免蓋掉拒絕紀錄）：${status.error}`);
+    return null;
+  }
+  if (aliasFetchPromise) return aliasFetchPromise;
+  if (aliasRetryAt && Date.now() < aliasRetryAt) return null;
+  aliasRetryAt = Date.now() + ALIAS_RETRY_MS;
+  aliasFetchPromise = (async () => {
+    try {
+      const store = buildAliasStore(await fetchAliasPages(), table);
+      if (store.entries.length === 0) throw new Error('PRTS 別名表是空的');
+      // 抓的期間可能有另一個程序先寫好（或管理員先改了）；已經有檔案就不覆蓋。
+      const current = readAliasStoreStatus(aliasFile);
+      if (current.state === 'ok') return current.store;
+      if (current.state === 'corrupt') {
+        console.error(`[arknights] 別名檔在抓取期間損毀，先不覆蓋：${current.error}`);
+        return null;
+      }
+      writeAliasStore(store, aliasFile);
+      aliasRetryAt = 0;
+      return store;
+    } catch (error) {
+      console.error(`[arknights] 別名表抓取失敗：${error?.message ?? error}`);
+      return null;
+    } finally {
+      aliasFetchPromise = null;
+    }
+  })();
+  return aliasFetchPromise;
+}
+
+/** MCP 啟動後在背景把別名表準備好；已有檔案就不抓幹員表，也不連 PRTS。 */
+export async function warmupAliases() {
+  const status = readAliasStoreStatus();
+  if (status.state === 'ok') return true;
+  if (status.state === 'corrupt') {
+    console.error(`[arknights] 別名檔損毀，跳過暖機（避免蓋掉拒絕紀錄）：${status.error}`);
+    return false;
+  }
+  try {
+    const table = await loadTable();
+    const store = await ensureAliasStore(table);
+    return Boolean(store);
+  } catch (error) {
+    console.error(`[arknights] 別名暖機失敗：${error?.message ?? error}`);
+    return false;
+  }
+}
+
+/**
+ * 用別名表比對。精確命中優先；「飛天貓」這種查詢包含 PRTS 別名（天猫）時，
+ * 只有這樣才不容易和單字名（阿、陳）搞混，所以單字別名不做包含比對。
+ * 多條別名同時命中時，最長的那條若包住其他條（Angelina 包住 Lin），只取最長那條。
+ */
+export function matchAlias(query, table, store) {
+  const raw = String(query ?? '').trim();
+  const q = normalizeName(raw);
+  if (!q || !store?.entries?.length) return null;
+  if (store.entries.some((entry) => entry.id === q && entry.status === ALIAS_STATUS.REJECTED)) {
+    return { error: `「${raw}」這個別名已被管理員拒絕；請用正式名稱或 charId。` };
+  }
+  const byId = new Map(Object.values(table).map((op) => [op.charId, op]));
+  const active = store.entries.filter((entry) => entry.status === ALIAS_STATUS.ACTIVE);
+  const exact = active.find((entry) => entry.id === q);
+  const exactOperator = exact ? byId.get(exact.charId) : null;
+  if (exactOperator) return { operator: exactOperator, aliasId: exact.id };
+  const hits = new Map(); // charId -> { operator, aliasId }
+  for (const entry of active) {
+    if ([...entry.id].length < 2) continue;
+    if (!q.includes(entry.id)) continue;
+    const operator = byId.get(entry.charId);
+    if (!operator) continue;
+    const previous = hits.get(operator.charId);
+    if (!previous || entry.id.length > previous.aliasId.length) {
+      hits.set(operator.charId, { operator, aliasId: entry.id });
+    }
+  }
+  const ranked = [...hits.values()].sort((a, b) => b.aliasId.length - a.aliasId.length);
+  if (ranked.length === 1) return ranked[0];
+  if (ranked.length > 1) {
+    const [first, ...rest] = ranked;
+    if (rest.every((item) => first.aliasId.includes(item.aliasId))) return first;
+    return { error: candidateError(`「${raw}」對到多個暱稱`, ranked.map((item) => item.operator)) };
+  }
+  return null;
+}
 
 /** 名稱或 charId 對到唯一幹員；對不到或對到多個時回 { error }。 */
 export function matchOperator(query, table) {
@@ -177,11 +359,33 @@ export function formatTraining(operator, stat) {
 }
 
 /** 查一位幹員的專精／模組建議；失敗直接丟錯，由 MCP 工具轉成 isError。 */
-export async function lookupTraining(query) {
+export async function lookupTraining(query, { aliasFile } = {}) {
   const [table, stats] = await Promise.all([loadTable(), loadStats()]);
+  const rawQuery = String(query ?? '').trim();
   const matched = matchOperator(query, table);
-  if (matched.error) return matched.error;
-  const stat = stats.find((row) => row.charId === matched.operator.charId);
-  if (!stat) return `${matched.operator.name}（${matched.operator.charId}）還沒有練度統計資料。`;
-  return formatTraining(matched.operator, stat);
+  let operator = matched.operator;
+  if (!operator && rawQuery) {
+    const store = await ensureAliasStore(table, aliasFile);
+    const viaAlias = matchAlias(query, table, store);
+    if (viaAlias?.operator) {
+      operator = viaAlias.operator;
+      // 查到就永久記下來；只收接近別名本身的查詢（「42专三」這種加料的不記）。
+      const extra = [...rawQuery].length - [...viaAlias.aliasId].length;
+      if (extra <= 1 && !/\s/.test(rawQuery) && recordAlias(store, {
+        alias: rawQuery,
+        charId: operator.charId,
+        name: operator.name,
+        source: 'query',
+      })) {
+        try { writeAliasStore(store, aliasFile); }
+        catch (error) { console.error(`[arknights] 別名寫入失敗：${error?.message ?? error}`); }
+      }
+    } else if (viaAlias?.error) {
+      return viaAlias.error;
+    }
+  }
+  if (!operator) return matched.error;
+  const stat = stats.find((row) => row.charId === operator.charId);
+  if (!stat) return `${operator.name}（${operator.charId}）還沒有練度統計資料。`;
+  return formatTraining(operator, stat);
 }

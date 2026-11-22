@@ -2,8 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { auth, clearToken, showGate, takeTokenFromQuery } from './api.js';
 import {
-  archiveState, closeDetail, data, loadArchive, loadArchiveChannels, loadConfig, markAuthed, refresh, refreshDevFeedback,
-  refreshKnowledge, refreshTriggers, ui, verifyToken,
+  archiveState, closeDetail, data, loadArchive, loadArchiveChannels, loadConfig, markAuthed, refresh, refreshAliases,
+  refreshDevFeedback, refreshKnowledge, refreshTriggers, resetAliases, ui, verifyToken,
 } from './store.js';
 import { fmtUptime } from './format.js';
 import Gate from './components/Gate.vue';
@@ -11,6 +11,7 @@ import DetailModal from './components/DetailModal.vue';
 import OverviewTab from './tabs/OverviewTab.vue';
 import UsageTab from './tabs/UsageTab.vue';
 import SlangTab from './tabs/SlangTab.vue';
+import AliasesTab from './tabs/AliasesTab.vue';
 import KnowledgeTab from './tabs/KnowledgeTab.vue';
 import TriggersTab from './tabs/TriggersTab.vue';
 import MemoryTab from './tabs/MemoryTab.vue';
@@ -24,6 +25,7 @@ const TABS = [
   { key: 'overview', label: '總覽', component: OverviewTab },
   { key: 'usage', label: '花費', component: UsageTab },
   { key: 'slang', label: '黑話', component: SlangTab },
+  { key: 'aliases', label: '別名', component: AliasesTab },
   { key: 'knowledge', label: '知識', component: KnowledgeTab },
   { key: 'triggers', label: '對話', component: TriggersTab },
   { key: 'memory', label: '記憶', component: MemoryTab },
@@ -87,6 +89,7 @@ function logout() {
 
 async function manualRefresh() {
   await refresh();
+  if (ui.tab === 'aliases') await refreshAliases({ force: true });
 }
 
 async function bootstrap() {
@@ -116,6 +119,7 @@ watch(() => auth.authed, async (on) => {
     stopTimer();
     // 下次登入要重新抓歸檔；舊的 loaded 會讓它在 401 之後永遠不再重試。
     archiveState.loaded = false;
+    resetAliases();
     return;
   }
   startTimer();

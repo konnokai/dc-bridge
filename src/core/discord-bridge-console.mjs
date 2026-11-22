@@ -45,6 +45,17 @@ import {
 import { deleteDevFeedbackById, devFeedbackOverview } from './discord-dev-feedback.mjs';
 import { deleteMemeById, memeFileName } from './discord-memes.mjs';
 import { deleteNoteById, notesOverview } from './discord-notes.mjs';
+import {
+  ALIAS_STATUS,
+  addManualAlias,
+  aliasStats,
+  deleteAliases,
+  readAliasStore,
+  readAliasStoreStatus,
+  setAliasStatus,
+  writeAliasStore,
+} from './arknights-aliases.mjs';
+import { loadTable, matchOperator } from './arknights-training.mjs';
 import { memoryOverview } from './discord-memory.mjs';
 import { ignoreList, unignore } from './discord-ignore.mjs';
 import { resolveConsoleToken, startConsole } from './discord-console.mjs';
@@ -951,6 +962,69 @@ export async function createConsoleLayer({
             const removed = deleteSlang(slangStore, id);
             if (removed) saveSlangNow();
             return removed;
+          },
+          arknightsAliases: () => {
+            const status = readAliasStoreStatus();
+            if (status.state === 'missing') {
+              return { entries: [], stats: { total: 0, active: 0, rejected: 0 }, builtAt: null, source: '', missing: true };
+            }
+            if (status.state === 'corrupt') {
+              return {
+                entries: [],
+                stats: { total: 0, active: 0, rejected: 0 },
+                builtAt: null,
+                source: '',
+                corrupt: true,
+                error: status.error,
+              };
+            }
+            return { ...status.store, stats: aliasStats(status.store) };
+          },
+          arknightsAliasesSetStatus: (ids, action) => {
+            const store = readAliasStore();
+            if (!store) return { changed: 0 };
+            const status = action === 'reject' ? ALIAS_STATUS.REJECTED : ALIAS_STATUS.ACTIVE;
+            const changed = setAliasStatus(store, ids, status);
+            if (changed) {
+              writeAliasStore(store);
+              log(`控制台：別名改為 ${status} ${changed} 條`);
+            }
+            return { changed };
+          },
+          arknightsAliasesAdd: async (alias, operator) => {
+            const status = readAliasStoreStatus();
+            if (status.state === 'missing') return { error: 'MCP 還沒抓到 PRTS 別名，稍後再試', status: 409 };
+            if (status.state === 'corrupt') return { error: `別名檔損毀：${status.error}`, status: 409 };
+            const text = String(alias ?? '').trim();
+            const target = String(operator ?? '').trim();
+            if (!text || !target) return { error: '缺少別名或幹員', status: 400 };
+            let table;
+            try {
+              table = await loadTable();
+            } catch (error) {
+              return { error: `幹員表讀取失敗：${error?.message ?? error}`, status: 503 };
+            }
+            const matched = matchOperator(target, table);
+            if (!matched.operator) return { error: matched.error, status: 400 };
+            const result = addManualAlias(status.store, {
+              alias: text,
+              charId: matched.operator.charId,
+              name: matched.operator.name,
+            });
+            if (result.error) return { ...result, status: 400 };
+            writeAliasStore(status.store);
+            log(`控制台：新增別名 ${result.entry.alias} → ${result.entry.name}`);
+            return result;
+          },
+          arknightsAliasesDelete: (ids) => {
+            const store = readAliasStore();
+            if (!store) return { removed: 0 };
+            const removed = deleteAliases(store, ids);
+            if (removed) {
+              writeAliasStore(store);
+              log(`控制台：刪除別名 ${removed} 條`);
+            }
+            return { removed };
           },
           logs: (limit) => LOG_RING.slice(-limit),
           trade: async (name) => {
