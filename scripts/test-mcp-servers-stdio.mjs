@@ -13,6 +13,7 @@ const SERVERS = [
   { serverName: 'discord', script: 'src/mcp-discord.js' },
   { serverName: 'slang', script: 'src/mcp-slang.js' },
   { serverName: 'trade', script: 'src/mcp-trade.js' },
+  { serverName: 'arknights', script: 'src/mcp-arknights.js' },
 ];
 
 let failures = 0;

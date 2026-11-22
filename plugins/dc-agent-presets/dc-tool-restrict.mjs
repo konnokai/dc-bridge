@@ -74,8 +74,8 @@ export const LEGACY_0_2_1_TOOL_NAMES = Object.freeze([
 ])
 
 // 執行期白名單。已掛 mcp-web-search-safe（只讀搜尋/抓取）、mcp-discord（發訊息與頻道動作）、
-// mcp-slang（自己查詞、收黑話與頻道標籤）與 mcp-prts（只讀 PRTS 資料）；新增 MCP 時把命名空間前綴或精確工具名加在這裡，
-// 並同步更新 docs/guides/DISCORD.md。
+// mcp-slang（自己查詞、收黑話與頻道標籤）與 mcp-prts／mcp-arknights（只讀明日方舟資料）；
+// 新增 MCP 時把命名空間前綴或精確工具名加在這裡，並同步更新 docs/guides/DISCORD.md。
 const SAFE_PREFIXES = ['mcp__web-search-safe__']
 const WEB_SEARCH_TOOLS = ['mcp__web-search-safe__web_fetch', 'mcp__web-search-safe__web_search']
 // 逐一列精確名稱，不放 mcp__discord__ 前綴：mcp-discord 新增工具時要有人看過才放行。
@@ -160,6 +160,9 @@ const PRTS_TOOLS = [
   'mcp__prts__operator_artwork',
 ]
 
+// 一圖流練度統計：只讀公開資料，跟 PRTS 同一組開關（只有 dc-chat／dc-chat-open 放行）。
+const ARKNIGHTS_TOOLS = ['mcp__arknights__get_operator_training']
+
 // 模擬股票：玩家端與 Bot 端看到的工具不一樣。Bot 只能替自己下單，玩家永遠看不到
 // bot_place_order；dc-learner 兩邊都不給。註冊期先藏，guard 再擋一次。
 const TRADE_ALL_TOOLS = [
@@ -239,7 +242,7 @@ export function apply(ctx, config = {}) {
     ...DANGEROUS,
     ...(allowWebSearch ? [] : WEB_SEARCH_TOOLS),
     ...(allowDiscordSend ? [] : [...DISCORD_TOOLS, ...SLANG_TOOLS]),
-    ...(allowPrts ? [] : PRTS_TOOLS),
+    ...(allowPrts ? [] : [...PRTS_TOOLS, ...ARKNIGHTS_TOOLS]),
     ...TRADE_ALL_TOOLS.filter((tool) => !allowedTrade.has(tool)),
     // 不能在這裡 restrict generate_image：preset 的 scoped 安全版和這條 restrict
     // 同屬 preset generation layer，restrict 會連安全版一起藏掉。allowImageGen
@@ -249,7 +252,7 @@ export function apply(ctx, config = {}) {
   const exact = new Set(SAFE_EXACT)
   if (allowImageGen) exact.add('generate_image')
   if (allowDiscordSend) for (const tool of [...DISCORD_TOOLS, ...SLANG_TOOLS]) exact.add(tool)
-  if (allowPrts) for (const tool of PRTS_TOOLS) exact.add(tool)
+  if (allowPrts) for (const tool of [...PRTS_TOOLS, ...ARKNIGHTS_TOOLS]) exact.add(tool)
   for (const tool of allowedTrade) exact.add(tool)
   const failed = []
   for (const tool of denyList) {
@@ -347,6 +350,10 @@ export function apply(ctx, config = {}) {
           return 'operator_artwork 的 large 會把 8MB 原圖直接送進模型；要看 1024px 立繪用 mcp__discord__get_prts_artwork（會先縮圖），要生圖參考直接在 generate_image 填 prts:<幹員>/<檔名>'
         }
       }
+      return
+    }
+    if (named.startsWith('mcp__arknights__')) {
+      if (!allowPrts || !exact.has(named)) return `工具 "${named}" 不在這個 preset 的白名單內，已拒絕`
       return
     }
     // 畫圖的參數鎖在 dc-draw-image（tools/execute）；這裡先擋一次原始參數，

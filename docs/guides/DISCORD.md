@@ -68,9 +68,12 @@ pm2 logs dc-bridge
 看到 `[discord] 已登入：<bot 名稱>` 就是成功了。
 
 > `setup-dsh.mjs` 安裝 Discord 用的 `dc-chat` / `dc-chat-open` / `dc-learner` / `dc-trader` preset（`plugins/dc-agent-presets`）與
-> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-prts` 五個 MCP。重跑時會清掉舊版 QQ
+> `mcp-web-search-safe` / `mcp-discord` / `mcp-slang` / `mcp-trade` / `mcp-arknights` / `mcp-prts` 六個 MCP。重跑時會清掉舊版 QQ
 > 遺留的 `mcp-snowluma` / `mcp-snowluma-host` 條目與 `qq-agent-presets` / `qq-mode-console` 連結；其他 profile 設定保留。
 > 舊 QQ bundle 如果是實體目錄，腳本只印警告、不會遞迴刪除。
+>
+> `mcp-arknights` 是 stdio，直接抓一圖流的公開統計（`auth.yituliu.cn`）與幹員表，不經過橋接、不需要金鑰；
+> 拿到的是全服玩家的專精／模組分布，行程內快取（統計 6 小時、幹員表 24 小時），抓不到時沿用舊快取。
 >
 > `mcp-prts` 是獨立的 Docker container（`ghcr.io/3akhp/prts-mcp:3.2.4`），DSH 連 `http://127.0.0.1:3011/mcp`。
 > compose 在 `/root/bot/nadeko-docker/docker-compose.yml`，資料在 `prts-data` volume（掛到 `/data`），restart policy 是 `unless-stopped`。
@@ -1628,6 +1631,11 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   要看 large 用 `mcp__discord__get_prts_artwork`（會先縮到 `media.maxModelBytes`）。
   貼圖用 `mcp__discord__send_prts_artwork`，生圖參考用 `generate_image` 的
   `inputImage: prts:<幹員>/<檔名>`；參考固定抓 `large`。
+- `mcp__arknights__get_operator_training`（`operator`）：查一圖流（yituliu）全服持有者的專精與模組分布。
+  `operator` 填簡體／繁體名稱或 charId；回每個技能的 M1／M2／M3 人數與專三率、精二人數、每個模組的階段 3 率與開啟率（≥1），依比率排序。
+  比率分母是持有者數；A 模組是特限證章（集成戰略用），名稱照資料顯示。這是玩家實際練度，不是官方推薦。
+  統計由上游離線跑批，可能落後一輪；查不到幹員時回候選名稱，這時改用完整名稱或 charId 再查。
+  跟 PRTS 同一組開關：只有 `dc-chat`／`dc-chat-open` 放行。
 - `mcp__discord__run_script`（`language`、`code`、`stdin` 可省略）：在一次性 Docker 容器裡跑一小段
   Python 或 Node（沒有網路、沒有主機檔案），回 stdout／stderr。預設關閉，只有 `sandbox.channels`
   裡的頻道能用；同一回合最多一次。詳細邊界見「執行程式」。
@@ -1642,8 +1650,9 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
 - `todo_write`（DSH 內建）：模型自己的待辦清單，不會送到 Discord
 
 `mcp__discord__*` 來自 `src/mcp-discord.js`，`mcp__slang__*` 來自 `src/mcp-slang.js`，
-`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__prts__*` 來自 Docker container
-`ghcr.io/3akhp/prts-mcp:3.2.4`（HTTP MCP，`http://127.0.0.1:3011/mcp`）。五個 MCP 都由
+`mcp__web-search-safe__*` 來自 `src/mcp-web-search-safe.js`，`mcp__arknights__*` 來自 `src/mcp-arknights.js`，
+`mcp__prts__*` 來自 Docker container
+`ghcr.io/3akhp/prts-mcp:3.2.4`（HTTP MCP，`http://127.0.0.1:3011/mcp`）。六個 MCP 都由
 `node scripts/setup-dsh.mjs` 寫進 DSH profile 的 `cordis.patch.yml`。
 
 `message`、`reply_to`、`before` 都是 **#編號**：prompt 裡每則訊息（【新訊息】與【最近頻道訊息】）
@@ -1840,6 +1849,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 9. **PRTS 是獨立 container**：`mcp-prts` 跑在 Docker container `ghcr.io/3akhp/prts-mcp:3.2.4`，不掛主機目錄，
    看不到 `config.json`、`state/discord-agent.json` 與 `~/.dsh`。但 HTTP MCP 綁在 `0.0.0.0:3011` 且沒有認證，
    內網任何裝置都能呼叫這些唯讀工具；目前是使用者接受這個風險。container 需要對外連 GitHub／prts.wiki。
+10. **練度統計只讀公開資料**：`mcp-arknights` 是 stdio Node 行程，只連 `auth.yituliu.cn` 與
+    jsDelivr／GitHub 的幹員表，不讀本機檔案、不碰橋接端點；快取只在記憶體。
 
 ## 已知限制
 
@@ -1863,11 +1874,12 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）
   和上傳的附件。沒有預覽的普通網址仍然只是一段文字。
 - 動圖（GIF）太大時會抽帧拼成一張靜態圖（沿用 QQ 版的正規化），不是原動圖。
-- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 37 個，唯一能碰 Discord 與群友記憶的路徑；
+- 模型側工具有 `ask_user_question`、`todo_write`、`mcp__discord__*` 工具（目前 41 個，唯一能碰 Discord 與群友記憶的路徑；
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
-  `mcp__web-search-safe__web_search` / `web_fetch` 與 24 個 `mcp__prts__*`（明日方舟資料）。
-  `dc-learner` 把這些 Discord 與黑話工具全部拿掉；`dc-learner` 與 `dc-trader` 也看不到 PRTS 工具。
+  `mcp__web-search-safe__web_search` / `web_fetch` 與 24 個 `mcp__prts__*`（明日方舟資料），
+  外加只讀的 `mcp__arknights__get_operator_training`（一圖流練度統計）。
+  `dc-learner` 把這些 Discord 與黑話工具全部拿掉；`dc-learner` 與 `dc-trader` 也看不到 PRTS 與練度統計工具。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - **畫圖要 1~3 分鐘**，而且吃 Codex 額度；生圖在背景跑，不卡會話。橋接重啟不影響（外掛最多等 3 分鐘），
   DSH 重啟時還沒完成的工作會消失（橋接約 2~3 分鐘沒收到進度會送一則【生圖失敗】）。

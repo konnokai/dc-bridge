@@ -104,9 +104,10 @@ function yamlSingleQuote(s) {
  * 由桥接托管的 MCP 条目 id。
  *
  * 装 web-search-safe（只读搜索）、mcp-discord（发讯息）、mcp-slang（黑话／频道标签）、
- * mcp-trade（模拟股票）与 mcp-prts（明日方舟 PRTS 资料，独立 Docker container 提供 HTTP MCP）。
+ * mcp-trade（模拟股票）、mcp-arknights（明日方舟练度统计）与 mcp-prts（明日方舟 PRTS 资料，
+ * 独立 Docker container 提供 HTTP MCP）。
  */
-const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord', 'mcp-slang', 'mcp-trade', 'mcp-prts'];
+const DISCORD_MCP_IDS = ['mcp-web-search-safe', 'mcp-discord', 'mcp-slang', 'mcp-trade', 'mcp-arknights', 'mcp-prts'];
 // 舊版 QQ 橋接留下的 MCP 條目：程式已刪除，重跑 setup 時要一併清掉，否則 DSH 重啟會載入失敗。
 const LEGACY_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host'];
 const managedMcpIds = () => DISCORD_MCP_IDS;
@@ -120,6 +121,8 @@ function mcpEntries() {
     'mcp-slang': { serverName: 'slang', script: path.join(REPO_ROOT, 'src', 'mcp-slang.js') },
     // 模擬股票：查價、下單、持股、排行榜；身分與交易規則都在橋接。
     'mcp-trade': { serverName: 'trade', script: path.join(REPO_ROOT, 'src', 'mcp-trade.js') },
+    // 明日方舟練度統計（唯讀公開資料）：直接抓一圖流，不經過橋接。
+    'mcp-arknights': { serverName: 'arknights', script: path.join(REPO_ROOT, 'src', 'mcp-arknights.js') },
     // 明日方舟 PRTS wiki／遊戲資料（唯讀）。獨立 Docker container 提供 HTTP MCP；
     // 立繪工具（24 個）由 container 的 IMAGES_ENABLED=true 決定，這裡只寫 URL。
     'mcp-prts': {
