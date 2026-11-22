@@ -274,14 +274,38 @@ export function apply(ctx, config = {}) {
     timer?.unref?.()
   }
 
-  // Bot 的一次性會話等於一回合：用 sessionId 計數，回合結束會話就歸檔，不需要歸零。
-  const webCounts = new Map()
-  function countWeb(agentId, kind) {
+  // 搜尋每次都打搜尋 API（要錢）：一個回合最多 5 次，抓取不花這筆錢就不設限。
+  // Bot 的一次性會話等於一回合，橋接設定只能再往下收，不能超過 5。
+  const WEB_SEARCHES_PER_TURN = 5
+  const webCounts = new Map() // sessionId -> { turn, search, fetch }
+  let turnLookupWarned = false
+
+  /** 目前回合編號。讀不到就回 null，計數不會歸零（寧可提早停，也不要沒上限）。 */
+  function currentTurn(exec) {
+    const session = exec?.agent?.session
+    if (!session) return null
+    try {
+      const turn = ctx.get?.('agents')?.turnBoundaryOf?.(session)?.lastTurn
+      return Number.isFinite(turn) ? turn : null
+    } catch {
+      return null
+    }
+  }
+
+  function countWeb(agentId, kind, turn) {
     let counts = webCounts.get(agentId)
     if (!counts) {
       if (webCounts.size >= 500) webCounts.delete(webCounts.keys().next().value)
-      counts = { search: 0, fetch: 0 }
+      counts = { turn, search: 0, fetch: 0 }
       webCounts.set(agentId, counts)
+    } else if (turn !== null && counts.turn !== turn) {
+      counts.turn = turn
+      counts.search = 0
+      counts.fetch = 0
+    }
+    if (turn === null && !turnLookupWarned) {
+      turnLookupWarned = true
+      console.error('[dc-tool-restrict] 讀不到回合編號：web_search 每輪上限不會歸零，請確認 DSH 版本')
     }
     counts[kind] += 1
     return counts[kind]
@@ -290,16 +314,23 @@ export function apply(ctx, config = {}) {
   ctx.tools.guard((exec) => {
     const named = exec?.name
     if (typeof named !== 'string' || named.length === 0) return '工具名無效，已拒絕'
-    if (tradeMode === 'bot' && (named === 'mcp__web-search-safe__web_search' || named === 'mcp__web-search-safe__web_fetch')) {
-      const agentId = String(exec?.agent?.id ?? exec?.agentId ?? 'unknown')
+    if (allowWebSearch && WEB_SEARCH_TOOLS.includes(named)) {
       const kind = named.endsWith('web_search') ? 'search' : 'fetch'
-      const bridgeLimits = readTradeLimits()
-      const configured = kind === 'search' ? bridgeLimits?.maxWebSearchesPerTurn : bridgeLimits?.maxWebFetchesPerTurn
-      const ceiling = kind === 'search' ? ceilingSearches : ceilingFetches
-      const limit = Number.isFinite(configured) ? Math.min(ceiling, configured) : ceiling
-      const used = countWeb(agentId, kind)
-      if (used > limit) {
-        return `這一輪最多${kind === 'search' ? '搜尋' : '抓取'} ${limit} 次，已用完；用現有資料做決定`
+      const agentId = String(exec?.agent?.id ?? exec?.agentId ?? 'unknown')
+      let limit = null
+      if (tradeMode === 'bot') {
+        const bridgeLimits = readTradeLimits()
+        const configured = kind === 'search' ? bridgeLimits?.maxWebSearchesPerTurn : bridgeLimits?.maxWebFetchesPerTurn
+        const ceiling = kind === 'search' ? ceilingSearches : ceilingFetches
+        limit = Math.min(WEB_SEARCHES_PER_TURN, Number.isFinite(configured) ? Math.min(ceiling, configured) : ceiling)
+      } else if (kind === 'search') {
+        limit = WEB_SEARCHES_PER_TURN
+      }
+      if (limit !== null && countWeb(agentId, kind, currentTurn(exec)) > limit) {
+        if (tradeMode === 'bot') {
+          return `這一輪最多${kind === 'search' ? '搜尋' : '抓取'} ${limit} 次，已用完；用現有資料做決定`
+        }
+        return `這一輪最多搜尋 ${limit} 次，已經用完；不要再試，查不到的直說`
       }
     }
     if (named.startsWith('mcp__trade__')) {

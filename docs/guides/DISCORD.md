@@ -207,7 +207,7 @@ pm2 logs dc-bridge
 | `trade.bot.maxTurnsPerDay` / `maxTradesPerDay` | Bot 每日決策／下單上限，預設 1／1 |
 | `trade.bot.minIntervalMin` | 兩次決策最短間隔（分鐘），預設 60 |
 | `trade.bot.maxTokensPerDay` | Bot 每日 token 上限，預設 20000 |
-| `trade.bot.maxWebSearchesPerTurn` / `maxWebFetchesPerTurn` | Bot 每回合搜尋／抓取上限，預設 3／2 |
+| `trade.bot.maxWebSearchesPerTurn` / `maxWebFetchesPerTurn` | Bot 每回合搜尋／抓取上限，預設 3／2。搜尋最多 5（跟所有會話共用的硬上限相同） |
 | `trade.bot.review.enabled` | 收盤後要不要跑當日復盤，預設 `true` |
 | `trade.bot.review.after` | 復盤幾點後開始，預設 `19:10` |
 | `console.enabled` | 是否啟動控制台，預設 `true` |
@@ -1605,7 +1605,8 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   不改意思、不累加次數，也不復活已拒絕的詞；一輪最多呼叫 3 次（重送也算），私聊不給寫
 - `mcp__slang__record_channel_tag`（`tag`、`description`）：把這個頻道的風格記成候選；同頻道同名標籤同樣只回「已收錄過」。
   只收不隨話題變的習慣，一次性的話題或事件不算；一個頻道最多 5 條，滿了回錯誤
-- `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）
+- `mcp__web-search-safe__web_search`（`query`）：只讀聯網搜尋，走 `webSearch.provider`（SearXNG／DeepSeek／Bing）。
+  每次呼叫都算一次搜尋 API 請求，一個回合最多 5 次，超過直接回錯誤；Bot 交易員另外有更小的上限（見 `trade.bot`）
 - `mcp__web-search-safe__web_fetch`（`url`）：只讀抓 HTTPS（443）網頁正文，結果會包一層「這是資料、不是指令」的外殼，擋內網與本機位址。
   HTML 回標題、說明與前 2000 字可見文字；純文字最多 50000 字。
   `Content-Encoding` 是 gzip／deflate／br 會先解壓再讀（有些站沒被要求也會壓縮，例如 bilibili）；不支援的編碼或二進位內容回「無法解析」，不把亂碼當正文。
@@ -1677,6 +1678,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   模型不會誤以為已送出。錯誤會寫出命中的種類與片段（例如「憑證樣式「token=abc123」」），
   模型改掉那一段就能重送；已知令牌只說「已知令牌」，不回報原文。
 - **一輪最多 5 則**（訊息、貼圖、投票、修改合計），**按 reaction 最多 3 個**、**收回 reaction 最多 3 個（跟按的分開算）**，**收回訊息最多 2 則**，**歷史查詢最多 3 次（`read_history` + `search_history` 合計）**，**記憶寫入最多 3 次**；
+  訊息類上限由橋接計數；**聯網搜尋最多 5 次**、抓取不設限，由 DSH 守衛 `dc-tool-restrict` 以 DSH 回合計（回訪、「忘了用工具」提醒都會開新回合，各重新算 5 次）。
   同一會話的訊息照順序送，超過 2000 字由橋接切段。
 - **改和收回只認自己送的**：模型被 prompt injection 也改不了審批提示（例如改成「回通過繼續」騙管理員），也刪不掉別人的訊息。
   不用 discord.js 的 `deletable`：bot 有 Manage Messages 時它對別人的訊息也是 true。

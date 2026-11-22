@@ -1,6 +1,8 @@
 // 模擬股票交易規則的離線回歸：不需要 Discord、不需要 DSH、不需要網路。
 //   node scripts/test-discord-trade.mjs
 import assert from 'node:assert/strict';
+import os from 'node:os';
+import path from 'node:path';
 import { openTradeDb } from '../src/core/discord-trade-db.mjs';
 import {
   createTradeService,
@@ -14,7 +16,9 @@ import {
   tickCents,
 } from '../src/core/discord-trade.mjs';
 import { isOrdinaryStockCode, listSymbols, resolveSymbol } from '../src/core/trade-symbols.mjs';
-import { apply as applyToolRestrict } from '../plugins/dc-agent-presets/dc-tool-restrict.mjs';
+// 守衛的 web 上限會讀 state/discord-trade-limits.json；測試指到不存在的檔案，不受本機設定影響。
+process.env.DC_TRADE_LIMITS_FILE = path.join(os.tmpdir(), 'dc-bridge-test-trade-limits-missing.json');
+const { apply: applyToolRestrict } = await import('../plugins/dc-agent-presets/dc-tool-restrict.mjs');
 import { createQuoteProvider } from '../src/core/quote-provider.mjs';
 
 let failures = 0;
@@ -659,6 +663,18 @@ console.log('## 15. 工具權限');
   ok(none.denied.includes('mcp__trade__get_quote'), '沒有開交易時全部藏起來');
   ok(none.denied.includes('mcp__trade__list_symbols'), '沒有開交易時也藏商品清單');
   ok(none.guard({ name: 'mcp__trade__get_quote' }) !== undefined, '沒有開交易時 guard 也擋');
+
+  // web 上限：Bot 預設 3 次搜尋、2 次抓取；設定再大也被 5 封頂。
+  const botWeb = restrictHarness({ trade: 'bot', allowDiscordSend: false });
+  const webExec = (name) => ({ name, agent: { id: 'bot-web' } });
+  for (let i = 1; i <= 3; i += 1) ok(botWeb.guard(webExec('mcp__web-search-safe__web_search')) === undefined, `Bot 第 ${i} 次搜尋放行（預設 3）`);
+  ok(typeof botWeb.guard(webExec('mcp__web-search-safe__web_search')) === 'string', 'Bot 第 4 次搜尋被擋');
+  for (let i = 1; i <= 2; i += 1) ok(botWeb.guard(webExec('mcp__web-search-safe__web_fetch')) === undefined, `Bot 第 ${i} 次抓取放行（預設 2）`);
+  ok(typeof botWeb.guard(webExec('mcp__web-search-safe__web_fetch')) === 'string', 'Bot 第 3 次抓取被擋');
+
+  const botWebHigh = restrictHarness({ trade: 'bot', allowDiscordSend: false, maxWebSearchesPerTurn: 8 });
+  for (let i = 1; i <= 5; i += 1) ok(botWebHigh.guard(webExec('mcp__web-search-safe__web_search')) === undefined, `Bot 設定 8 時第 ${i} 次搜尋放行`);
+  ok(typeof botWebHigh.guard(webExec('mcp__web-search-safe__web_search')) === 'string', 'Bot 設定 8 時第 6 次被 5 封頂');
 }
 
 console.log('## 16. 報價來源快取與重試');

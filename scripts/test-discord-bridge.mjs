@@ -882,6 +882,25 @@ console.log('## 7. dc-chat preset 與守衛');
   ok(restricted.includes('generate_image'), '預設在註冊期隱藏 generate_image');
   ok(typeof guard({ name: 'generate_image' }) === 'string', '沒有 allowImageGen 時拒絕 generate_image');
   {
+    // 聯網搜尋每輪 5 次：新的 turn/start 之後重新計算，抓取不設限。
+    let turn = 4;
+    let webGuard;
+    mod.apply({
+      tools: { restrict: () => {}, guard: (fn) => { webGuard = fn; } },
+      // 沒有 inject agents：比照外掛的選用服務寫法。
+      get: (name) => (name === 'agents' ? { turnBoundaryOf: () => ({ lastTurn: turn }) } : undefined),
+    });
+    const exec = (name) => ({ name, agent: { id: 'ses-web', session: {} } });
+    for (let i = 1; i <= 5; i += 1) ok(webGuard(exec('mcp__web-search-safe__web_search')) === undefined, `一輪第 ${i} 次搜尋放行`);
+    ok(typeof webGuard(exec('mcp__web-search-safe__web_search')) === 'string', '一輪第 6 次搜尋被擋');
+    turn = 5;
+    ok(webGuard(exec('mcp__web-search-safe__web_search')) === undefined, '下一輪重新計算，搜尋又放行');
+    for (let i = 1; i <= 8; i += 1) ok(webGuard(exec('mcp__web-search-safe__web_fetch')) === undefined, `抓取第 ${i} 次不設限`);
+    for (let i = 1; i <= 5; i += 1) guard({ name: 'mcp__web-search-safe__web_search', agent: { id: 'ses-no-turn' } });
+    ok(typeof guard({ name: 'mcp__web-search-safe__web_search', agent: { id: 'ses-no-turn' } }) === 'string',
+      '讀不到回合編號時仍然有上限（不會變無限）');
+  }
+  {
     let imageGuard;
     const imageRestricted = [];
     const safeDescription = 'The tool runs with shell and file writes disabled; use it for drawings.';

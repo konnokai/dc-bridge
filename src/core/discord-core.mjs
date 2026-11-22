@@ -423,7 +423,7 @@ function normalizeTradeConfig(raw) {
       minIntervalMin: strict(bot.minIntervalMin, 60, 'discord.trade.bot.minIntervalMin', { min: 1, max: 1440, integer: true }),
       maxOutputTokens: strict(bot.maxOutputTokens, 500, 'discord.trade.bot.maxOutputTokens', { min: 100, max: 10_000, integer: true }),
       maxTokensPerDay: strict(bot.maxTokensPerDay, 20_000, 'discord.trade.bot.maxTokensPerDay', { min: 1_000, max: 10_000_000, integer: true }),
-      maxWebSearchesPerTurn: strict(bot.maxWebSearchesPerTurn, 3, 'discord.trade.bot.maxWebSearchesPerTurn', { min: 0, max: 10, integer: true }),
+      maxWebSearchesPerTurn: strict(bot.maxWebSearchesPerTurn, 3, 'discord.trade.bot.maxWebSearchesPerTurn', { min: 0, max: 5, integer: true }),
       maxWebFetchesPerTurn: strict(bot.maxWebFetchesPerTurn, 2, 'discord.trade.bot.maxWebFetchesPerTurn', { min: 0, max: 10, integer: true }),
       review: {
         enabled: bot.review?.enabled !== false,
