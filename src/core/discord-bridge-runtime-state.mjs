@@ -48,7 +48,6 @@ export function createRuntimeState() {
     voiceJobs: new Map(), // jobId -> { key, sessionId, status, startedAt, at, ... }
 
     // ── 稍後要重試的提示 ──────────────────────────────────────────────
-    noToolRemindedAt: new Map(), // key -> 上次提醒「只回文字、沒呼叫工具」的時間
     ttftTimers: new Map(), // sessionId -> { timer, key, done }
     ttftTimeouts: new Map(), // key -> 被 TTFT 超時取消的門檻（ms）
     ttftAbandonedTurns: new Map(), // key -> Set(turn)：保底放行後等遲到的 turn/end
@@ -84,8 +83,8 @@ export function createRuntimeState() {
     'botLastByUser', 'recentHumans', 'needsOpening',
   ]);
   const SESSION_SCOPED = Object.freeze(['collectors', 'modelApplied', 'lastTurns', 'openTurns', 'snapshotReady']);
-  // 冷卻時間：/reset 不能清。清了等於讓使用者用 /reset 繞過語音冷卻與「沒呼叫工具」提醒。
-  const SURVIVES_RESET = Object.freeze(['voiceLastAt', 'noToolRemindedAt']);
+  // 冷卻時間：/reset 不能清。清了等於讓使用者用 /reset 繞過語音冷卻。
+  const SURVIVES_RESET = Object.freeze(['voiceLastAt']);
   // 由別的地方用有副作用的方式清：voiceJobs 要順便刪通知訊息，ttftTimers 要先 clearTimeout。
   const OWNED_ELSEWHERE = Object.freeze(['voiceJobs', 'ttftTimers']);
 
