@@ -5520,6 +5520,100 @@ console.log('## 事件流');
   ok(calls.includes('clearTurns'), 'pumpEvents：斷線時清掉 agentSender 的回合');
 }
 
+console.log('## 忘了用工具的提醒');
+{
+  // 行為測試：該說話的回合只輸出文字時都要排提醒（★、回訪、系統訊息），
+  // 但提醒自己的回合與 Web GUI 直接開的回合不提醒，而且不能被時間冷卻吃掉。
+  const reminders = [];
+  const logs = [];
+  const frames = [1, 2, 3, 4, 5, 6].flatMap((turn) => [
+    { type: 'session/event', sessionId: 's1', event: { type: 'turn/start', data: { turn } } },
+    { type: 'session/event', sessionId: 's1', event: { type: 'turn/end', data: { turn } } },
+  ]);
+  const mapOrSet = (name) => (/Taken|Held|Recorded|Ready/.test(name) ? new Set() : new Map());
+  const base = {
+    cfg: { discord: { ttftTimeoutMs: 0, autoCompactTokens: 0, security: {} } },
+    log: (message) => logs.push(String(message)),
+    sessions: { 'ch:1': 's1' },
+    reverse: new Map([['s1', 'ch:1']]),
+    api: { events: { async *mux() { for (const payload of frames) yield { payload }; } } },
+    usage: { ingestEvent() {}, ingestSnapshot() {}, ledger: { turnUsage: () => null } },
+    agentSender: {
+      startTurn() {},
+      noteAttempt() {},
+      clearTurns() {},
+      finishTurn: () => ({ sent: 0, reacted: 0, unreacted: 0, removed: 0, attempted: false }),
+    },
+    createTurnCollector: () => {
+      let turn = 0;
+      return {
+        push(event) {
+          if (event.type === 'turn/start') {
+            turn = event.data.turn;
+            return null;
+          }
+          return event.type === 'turn/end'
+            ? { turn, reason: { kind: 'completed' }, text: '我只輸出了文字' }
+            : null;
+        },
+      };
+    },
+    syncHedgeSettings: async () => {},
+    sleep: async () => { throw new Error('STOP'); },
+    defaultDirect: () => false,
+    markTurnOpen() {},
+    markTurnEnded() {},
+    stopTyping() {},
+    finishProgress() {},
+    hideCompactNotice() {},
+    startProgress() {},
+    showCompactNotice() {},
+    startTyping() {},
+    resolveChannel: async () => ({}),
+    writeTurn: () => {},
+    quietUntil: () => 0,
+    epochOf: () => 0,
+    NO_TOOL_REMINDER: '請用 send_message 把剛才的內容送出',
+    finishCeobeTurn: async () => 0,
+    ASK_CANCEL_FAILED_GRACE_MS: 1,
+    turnGate: {
+      owns: () => true,
+      releaseNormal() {},
+      releaseAll() {},
+      isBusy: () => false,
+      currentTicket: () => 't0',
+      submit: (key, job) => reminders.push({ key, ...job }),
+    },
+  };
+  const deps = new Proxy(base, {
+    get(target, name) {
+      if (name in target) return target[name];
+      target[String(name)] = mapOrSet(String(name));
+      return target[String(name)];
+    },
+  });
+  deps.pendingDirect.set('ch:1', [
+    // 兩個連續的 ★ 批次：每次都提醒，證明沒有時間冷卻。
+    { direct: true, ticket: 'T1', meta: { direct: true, internal: false, reminder: false, chatty: false } },
+    { direct: true, ticket: 'T2', meta: { direct: true, internal: false, reminder: false, chatty: false } },
+    // 提醒自己的回合：只輸出文字也不能再提醒，否則會無限迴圈。
+    { direct: false, ticket: 'R', meta: { direct: false, internal: true, reminder: true } },
+    // 回訪與系統訊息也要提醒。
+    { direct: false, ticket: 'F', meta: { direct: false, internal: true, reminder: false } },
+    { direct: false, ticket: 'S', meta: { direct: false, internal: true, reminder: false } },
+    // Web GUI 直接開的回合沒有 meta，不能提醒。
+    { direct: true, ticket: 'W', meta: null },
+  ]);
+
+  await createTurns(deps).pumpEvents().catch(() => {});
+  ok(reminders.length === 4,
+    `忘了用工具：★、回訪、系統訊息各提醒一次，提醒自己與 Web GUI 不提醒（實際 ${reminders.length} 次）`);
+  ok(reminders.every((job) => job.key === 'ch:1' && job.direct === false && /send_message/.test(job.reminder)),
+    '忘了用工具：提醒排進同一個會話，而且不是直接回合、有寫清楚要用 send_message');
+  ok(logs.filter((line) => line.includes('已提醒模型呼叫工具回話')).length === 4, '忘了用工具：每次提醒都留日誌');
+  ok(!logs.some((line) => line.includes('處理事件失敗')), '忘了用工具：事件流沒有被例外吞掉');
+}
+
 console.log('## TTFT 計時器');
 {
   // 行為測試：TTFT 是「模型太久沒吐第一個字就取消這一輪」的機制，原本只有部署後才知道壞了。
@@ -5777,7 +5871,7 @@ console.log('## 執行期狀態');
   const keptSession = state.SESSION_SCOPED.every((name) => state[name].has(sessionId));
   ok(keptSession, 'forgetKey 不動綁在 sessionId 上的狀態');
   const keptCooldown = state.SURVIVES_RESET.every((name) => state[name].has(key));
-  ok(keptCooldown, 'forgetKey 不清冷卻時間（不然 /reset 能繞過語音與工具提醒的冷卻）');
+  ok(keptCooldown, 'forgetKey 不清冷卻時間（不然 /reset 能繞過語音冷卻）');
 
   state.forgetSession(sessionId);
   const leakedSession = state.SESSION_SCOPED.filter((name) => state[name].has(sessionId));

@@ -625,7 +625,7 @@ async function main() {
     pendingDirect, turnDirect, turnTickets, pendingDirectMessages, turnDirectMessages,
     turnStartedAt, turnFollowupTaken, turnFollowupHeld, pendingLastMessages,
     turnLastMessage, turnMeta, turnSentTexts, turnTools, turnTtftMs,
-    turnTriggerRecorded, noToolRemindedAt, ttftTimers, ttftTimeouts, ttftAbandonedTurns,
+    turnTriggerRecorded, ttftTimers, ttftTimeouts, ttftAbandonedTurns,
     offlineQueue, offlineHintAt, primedKeys, silentPending, botLastByUser, recentHumans,
     needsOpening, collectors, modelApplied, lastTurns, openTurns, snapshotReady,
   } = runtime;
@@ -653,8 +653,7 @@ async function main() {
       log(`生圖工作存檔失敗：${error?.message ?? error}`);
     }
   }
-  const NO_TOOL_REMINDER_MS = 10 * 60_000;
-  const NO_TOOL_REMINDER = '【提醒】你上一輪只輸出了文字，沒有呼叫工具，群友看不到。要回話就呼叫 send_message 或 send_sticker（回哪一則就加 reply_to=#編號）；不想回就保持安靜，這則提醒不用回。';
+  const NO_TOOL_REMINDER = '【提醒】你上一輪只輸出了文字，沒有呼叫工具，群友看不到。要補發就呼叫對應的發送工具（send_message、send_image、send_voice_file 等；回哪一則就加 reply_to=#編號）；不想回就保持安靜，這則提醒不用回。';
   process.on('exit', () => {
     try { flushMemory(); } catch { /* 收尾失敗不影響結束 */ }
     try { flushNotes(); } catch { /* 收尾失敗不影響結束 */ }
@@ -1327,7 +1326,6 @@ async function main() {
     sleep,
     turnsFromRecords,
     NO_TOOL_REMINDER,
-    NO_TOOL_REMINDER_MS,
     addProgress,
     agentSecrets,
     agentSender,
@@ -1362,7 +1360,6 @@ async function main() {
     lastTurns,
     memeSaves,
     memoryWrites,
-    noToolRemindedAt,
     noteWrites,
     openTurns,
     pendingDirect,

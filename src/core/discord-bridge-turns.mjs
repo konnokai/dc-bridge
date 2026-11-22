@@ -41,7 +41,6 @@ export function createTurns(deps) {
     sleep,
     turnsFromRecords,
     NO_TOOL_REMINDER,
-    NO_TOOL_REMINDER_MS,
     addProgress,
     agentSecrets,
     agentSender,
@@ -75,7 +74,6 @@ export function createTurns(deps) {
     lastTurns,
     memeSaves,
     memoryWrites,
-    noToolRemindedAt,
     noteWrites,
     openTurns,
     pendingDirect,
@@ -642,11 +640,11 @@ export function createTurns(deps) {
       // 所以這裡不代送；只留一行日誌方便追「模型忘了用工具」。
       const text = String(ended.text ?? '').trim();
       log(`回合完成但這一輪沒有實際送出訊息（${key}${attempted ? '，工具呼叫失敗或轉成背景工作' : ''}）${text ? `：${text.slice(0, 80)}${text.length > 80 ? '…' : ''}` : ''}`);
-      // ★ 的回合只回了文字：提醒一次，免得群友以為被忽略。
-      // 提醒自己的回合 direct=false，不會再觸發；有下一批在跑就交給那一批，不另外開回合。
-      if (direct && !attempted && text && !quietUntil(key) && !turnGate.isBusy(key)
-        && Date.now() - (noToolRemindedAt.get(key) ?? 0) > NO_TOOL_REMINDER_MS) {
-        noToolRemindedAt.set(key, Date.now());
+      // 該說話的回合只回了文字：★、回訪、系統訊息都提醒，免得群友以為被忽略。
+      // 只認橋接排的批次：Web GUI 直接開的回合沒有 meta；提醒自己的回合也不再觸發。
+      // 有下一批在跑就交給那一批，不另外開回合。
+      if (meta && (meta.direct || meta.internal) && !meta.reminder
+        && !attempted && text && !quietUntil(key) && !turnGate.isBusy(key)) {
         enqueuePrompt(key, { entries: [], direct: false, epoch: epochOf(key), reminder: NO_TOOL_REMINDER });
         log(`已提醒模型呼叫工具回話（${key}）`);
       }
@@ -1210,6 +1208,7 @@ export function createTurns(deps) {
       yielded: false,
       merged: job.merged ?? 0,
       internal: Boolean(job.system || job.reminder || job.followup),
+      reminder: Boolean(job.reminder),
       ceobe: job.ceobe ?? null,
     };
     if (epoch !== epochOf(key)) {

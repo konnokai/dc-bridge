@@ -16,7 +16,7 @@ description: Discord bridge 的 core factory 分層、結構檢查與拆模組�
 - `retireSession` 是跨模組清理中心。拆分時將 per-key/session 狀態集中由 `runtime-state.forgetKey()`／`forgetSession()` 清除；副作用交給 `onRetire` hook。epoch 必須先遞增再 `turnGate.rebase`，`onRetired` 必須在刪除 session 對映後呼叫。
 - 晚綁定 callback 用入口持有的 hooks 物件接線，所有 hook 完成後再 freeze；不要把 callback 放進會離線排隊或被 `mergeJobs` 合併的 job meta。初始化與 queue 合併影響是設計風險，需用測試確認。
 - 2026-11-20 `0500978` 提交 runtime-state、stores 與 turns 初拆；`d6fe960` 再提交訊息入口搬移與結構檢查。後者通過結構檢查及 `npm run test:discord`（37/37），當時只在本機分支、未 push；整體模組拆分仍未完成。
-- 2026-11-20 runtime-state 有 49 個 Map／Set：`KEY_SCOPED` 40、`SESSION_SCOPED` 5、`SURVIVES_RESET` 2、`OWNED_ELSEWHERE` 2。語音與無工具提醒冷卻必須在 `/reset` 後保留；`voiceJobs` 和 `ttftTimers` 由副作用清理。分類測試要用獨立的預期清單，並驗證分類無遺漏、無重複，以及 reset 行為。
+- runtime-state 目前有 48 個 Map／Set：`KEY_SCOPED` 40、`SESSION_SCOPED` 5、`SURVIVES_RESET` 1、`OWNED_ELSEWHERE` 2。語音冷卻必須在 `/reset` 後保留（無工具提醒的 10 分鐘冷卻已於 2026-11-22 移除）；`voiceJobs` 和 `ttftTimers` 由副作用清理。分類測試要用獨立的預期清單，並驗證分類無遺漏、無重複，以及 reset 行為。
 - `pending` 留在入口，因為清除時要取消 timer 並回覆 DSH；`turnSentTexts` 則納入 per-key 清理。背景 prompt 收尾共用 `runtime.forgetSession()`，避免再維護另一份 session 狀態清單。
 - 2026-11-20 `createDirtyStore` 統一記憶、筆記、知識、梗圖與開發回饋的延遲存檔。存檔失敗保留 dirty 狀態；`warningLabel` 與 `label` 分開以保留原本不同的 log 標籤。梗圖需立即寫索引時呼叫 `markDirty()` 再 `flush()`；這會留下已 unref 的延遲 timer，存檔失敗時也會再嘗試一次。
 - 尚待確認的風險：`archive` 當時只在啟動時依 `historyArchive.enabled` 建立；`updateConfig` 換設定後可能不會重建。此行為未驗證，也可能是刻意要求重啟。
