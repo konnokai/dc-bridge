@@ -4687,6 +4687,20 @@ console.log('## 9. 控制台');
       slangReject: (id) => (id === 's1' ? { id, status: 'rejected' } : null),
       slangUpdate: (id, patch) => (id === 's1' ? { id, ...patch } : null),
       slangDelete: (id) => id === 's1',
+      arknightsAliases: () => ({
+        entries: [
+          { id: '银老板', alias: '银老板', charId: 'char_172_svrash', name: '银灰', status: 'active', source: 'prts', addedAt: '2026-01-01T00:00:00.000Z' },
+          { id: '水陈', alias: '水陈', charId: 'char_1013_chen2', name: '假日威龙陈', status: 'rejected', source: 'prts', addedAt: '2026-01-01T00:00:00.000Z' },
+        ],
+        stats: { total: 2, active: 1, rejected: 1 },
+        builtAt: '2026-01-01T00:00:00.000Z',
+        source: 'prts',
+      }),
+      arknightsAliasesSetStatus: (ids, status) => ({ changed: ids.includes('银老板') ? 1 : 0, status }),
+      arknightsAliasesAdd: (alias, operator) => (alias === '小銀' && operator === '银灰'
+        ? { entry: { id: '小银', alias, charId: '', name: operator, status: 'active', source: 'manual' } }
+        : { error: '缺少別名或幹員' }),
+      arknightsAliasesDelete: (ids) => ({ removed: ids.includes('银老板') ? 1 : 0 }),
       logs: (limit) => [{ text: 'line' }].slice(-limit),
     },
   });
@@ -4856,6 +4870,19 @@ console.log('## 9. 控制台');
   ok(slangNoId.status === 400, '缺少 id 回 400');
   const slangDelete = await fetch(`${base}/api/slang/delete`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ id: 's1' }) });
   ok(slangDelete.status === 200 && (await slangDelete.json()).ok === true, '黑話刪除端點會呼叫 handler');
+
+  const aliases = await (await fetch(`${base}/api/arknights-aliases`, { headers: authed })).json();
+  ok(aliases.entries[0].alias === '银老板' && aliases.stats.active === 1, '幹員別名端點可讀');
+  const aliasAdd = await fetch(`${base}/api/arknights-aliases/add`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ alias: '小銀', operator: '银灰' }) });
+  ok(aliasAdd.status === 200 && (await aliasAdd.json()).entry.name === '银灰', '別名新增端點會呼叫 handler');
+  const aliasAddMissing = await fetch(`${base}/api/arknights-aliases/add`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({}) });
+  ok(aliasAddMissing.status === 400, '別名新增缺欄位回 400');
+  const aliasReject = await fetch(`${base}/api/arknights-aliases/reject`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ ids: ['银老板'] }) });
+  ok(aliasReject.status === 200 && (await aliasReject.json()).changed === 1, '別名拒絕端點會呼叫 handler');
+  const aliasNoIds = await fetch(`${base}/api/arknights-aliases/delete`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({}) });
+  ok(aliasNoIds.status === 400, '別名端點缺 id 回 400');
+  const aliasDelete = await fetch(`${base}/api/arknights-aliases/delete`, { method: 'POST', headers: resetHeaders, body: JSON.stringify({ ids: ['银老板'] }) });
+  ok(aliasDelete.status === 200 && (await aliasDelete.json()).removed === 1, '別名刪除端點會呼叫 handler');
 
   const logs = await (await fetch(`${base}/api/logs?limit=10`, { headers: authed })).json();
   ok(logs.logs.length === 1, '日誌端點可讀');

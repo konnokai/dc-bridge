@@ -74,7 +74,7 @@ async function readJson(req) {
  * @param options.port 監聽埠
  * @param options.token 存取 token
  * @param options.htmlPath 控制台 HTML
- * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, archive, followups, deleteFollowup, ceobe, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, logs }
+ * @param options.handlers { status, invite, usage, usageTurns, usageReset, quota, codexQuota, memory, archive, followups, deleteFollowup, ceobe, notes, deleteNote, knowledge, knowledgeCreate, knowledgeConfirm, knowledgeReject, knowledgeUpdate, knowledgeDelete, devFeedback, deleteDevFeedback, ignoreRemove, triggers, sessions, resetSession, reloadSystemPrompt, config, updateConfig, providers, updateProviders, updateProviderKey, rebuildEmojis, slang, slangConfirm, slangConfirmMany, slangReject, slangRejectMany, slangUpdate, slangDelete, arknightsAliases, arknightsAliasesSetStatus, arknightsAliasesAdd, arknightsAliasesDelete, logs }
  * @returns {Promise<{server: http.Server, close: () => Promise<void>}>}
  */
 export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, handlers, log = () => {} }) {
@@ -472,6 +472,47 @@ export async function startConsole({ host = '127.0.0.1', port, token, htmlPath, 
             return;
           }
           sendJson(res, entry ? 200 : 404, entry ? { ok: true, entry } : { error: '找不到詞條' });
+          return;
+        }
+      }
+      if (url.pathname === '/api/arknights-aliases' || url.pathname.startsWith('/api/arknights-aliases/')) {
+        if (req.method === 'GET' && url.pathname === '/api/arknights-aliases') {
+          sendJson(res, 200, handlers.arknightsAliases());
+          return;
+        }
+        if (req.method === 'POST' && url.pathname.startsWith('/api/arknights-aliases/')) {
+          const action = url.pathname.slice('/api/arknights-aliases/'.length);
+          if (!['add', 'reject', 'restore', 'delete'].includes(action)) {
+            sendJson(res, 404, { error: 'not found' });
+            return;
+          }
+          const body = await readJson(req);
+          if (action === 'add') {
+            const alias = typeof body.alias === 'string' ? body.alias.trim() : '';
+            const operator = typeof body.operator === 'string' ? body.operator.trim() : '';
+            if (!alias || alias.length > 40 || !operator || operator.length > 40) {
+              sendJson(res, 400, { error: '別名與幹員都要填（各 40 字內）' });
+              return;
+            }
+            const result = await handlers.arknightsAliasesAdd(alias, operator);
+            if (result?.error) {
+              sendJson(res, result.status ?? 400, { error: result.error });
+              return;
+            }
+            sendJson(res, 200, { ok: true, entry: result.entry });
+            return;
+          }
+          const ids = [...new Set(Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [])].slice(0, 5000);
+          if (!ids.length) {
+            sendJson(res, 400, { error: '缺少別名 id' });
+            return;
+          }
+          if (action === 'reject' || action === 'restore') {
+            const result = handlers.arknightsAliasesSetStatus(ids, action);
+            sendJson(res, 200, { ok: true, ...result });
+            return;
+          }
+          sendJson(res, 200, { ok: true, ...handlers.arknightsAliasesDelete(ids) });
           return;
         }
       }

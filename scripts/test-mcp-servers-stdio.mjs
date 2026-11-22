@@ -23,6 +23,8 @@ for (const { serverName, script } of SERVERS) {
     args: [path.join(ROOT, script)],
     cwd: ROOT,
     stderr: 'pipe',
+    // arknights 預設會在啟動後背景抓 PRTS 別名；這個探測只列工具，不要連外。
+    env: { ...process.env, DC_ARKNIGHTS_NO_WARMUP: '1' },
   });
   const client = new Client({ name: 'dsh-mcp-probe', version: '0.0.0' });
   try {

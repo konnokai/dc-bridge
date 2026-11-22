@@ -183,6 +183,104 @@ try {
     }
   });
 
+  await test('Discord 控制台：幹員別名可拒絕、恢復與刪除', async () => {
+    const entries = [
+      { id: '银老板', alias: '银老板', aliasTw: '銀老闆', charId: 'char_172_svrash', name: '银灰', nameTw: '銀灰', status: 'active', source: 'prts', addedAt: '2026-01-01T00:00:00.000Z' },
+      { id: '水陈', alias: '水陈', aliasTw: '水陳', charId: 'char_1013_chen2', name: '假日威龙陈', nameTw: '假日威龍陳', status: 'rejected', source: 'prts', addedAt: '2026-01-01T00:00:00.000Z' },
+    ];
+    const calls = [];
+    const stats = () => ({
+      total: entries.length,
+      active: entries.filter((entry) => entry.status === 'active').length,
+      rejected: entries.filter((entry) => entry.status === 'rejected').length,
+    });
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: HTML,
+      handlers: {
+        status: () => ({ bot: null, dsh: {}, sessions: 0, pending: 0, allow: { guilds: 0, channels: 0, users: 0 }, ownerIds: [], media: {}, console: { host: '127.0.0.1', port: 0 } }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        memory: () => ({ enabled: true, users: [] }),
+        followups: () => ({ enabled: true, items: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: true } }),
+        knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        arknightsAliases: () => ({ entries: entries.map((entry) => ({ ...entry })), stats: stats(), builtAt: '2026-01-01T00:00:00.000Z', source: 'prts' }),
+        arknightsAliasesSetStatus: (ids, action) => {
+          const status = action === 'reject' ? 'rejected' : 'active';
+          calls.push({ action: status, ids });
+          for (const entry of entries) if (ids.includes(entry.id)) entry.status = status;
+          return { changed: ids.length };
+        },
+        arknightsAliasesAdd: (alias, operator) => {
+          calls.push({ action: 'add', alias, operator });
+          const entry = {
+            id: alias, alias, aliasTw: alias, charId: 'char_172_svrash', name: operator, nameTw: operator,
+            status: 'active', source: 'manual', addedAt: new Date().toISOString(),
+          };
+          entries.push(entry);
+          return { entry };
+        },
+        arknightsAliasesDelete: (ids) => {
+          calls.push({ action: 'delete', ids });
+          for (let index = entries.length - 1; index >= 0; index -= 1) {
+            if (ids.includes(entries[index].id)) entries.splice(index, 1);
+          }
+          return { removed: ids.length };
+        },
+        logs: () => [],
+      },
+    });
+    const dcBase = `http://127.0.0.1:${dc.server.address().port}`;
+    const dcContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      await p.goto(`${dcBase}/?token=t#aliases`);
+      await p.waitForFunction(() => document.querySelectorAll('#alias-rows tr').length === 2);
+      assert.equal(await p.locator('#alias-rows input[type="checkbox"]').count(), 2, '每列都有勾選框');
+
+      await p.fill('#alias-search', '銀老闆');
+      await p.waitForFunction(() => document.querySelectorAll('#alias-rows tr').length === 1);
+      assert.match(await p.locator('#alias-rows tr td:nth-child(2)').textContent(), /银老板/, '繁體搜尋要找得到簡體別名');
+      await p.fill('#alias-search', '');
+      await p.waitForFunction(() => document.querySelectorAll('#alias-rows tr').length === 2);
+
+      const rejectResp = p.waitForResponse((r) => new URL(r.url()).pathname === '/api/arknights-aliases/reject');
+      await p.locator('#alias-rows tr').first().locator('button', { hasText: '拒絕' }).click();
+      await rejectResp;
+      assert.deepEqual(calls.at(-1), { action: 'rejected', ids: ['银老板'] }, '單筆拒絕送正確 id');
+      await p.waitForFunction(() => document.querySelector('#alias-rows tr button')?.textContent.includes('恢復'));
+
+      const restoreResp = p.waitForResponse((r) => new URL(r.url()).pathname === '/api/arknights-aliases/restore');
+      await p.locator('#alias-rows tr').first().locator('button', { hasText: '恢復' }).click();
+      await restoreResp;
+      assert.deepEqual(calls.at(-1), { action: 'active', ids: ['银老板'] }, '恢復改回啟用');
+      await p.waitForFunction(() => document.querySelector('#alias-rows tr button')?.textContent.includes('拒絕'));
+
+      p.once('dialog', (dialog) => dialog.accept());
+      const deleteResp = p.waitForResponse((r) => new URL(r.url()).pathname === '/api/arknights-aliases/delete');
+      await p.locator('#alias-rows tr').first().locator('button', { hasText: '刪除' }).click();
+      await deleteResp;
+      assert.deepEqual(calls.at(-1), { action: 'delete', ids: ['银老板'] }, '刪除送正確 id');
+      await p.waitForFunction(() => document.querySelectorAll('#alias-rows tr').length === 1);
+
+      const addResp = p.waitForResponse((r) => new URL(r.url()).pathname === '/api/arknights-aliases/add');
+      await p.fill('#alias-add-alias', '小銀');
+      await p.fill('#alias-add-operator', '银灰');
+      await p.click('#alias-add');
+      await addResp;
+      assert.deepEqual(calls.at(-1), { action: 'add', alias: '小銀', operator: '银灰' }, '手動新增送別名與幹員');
+      await p.waitForFunction(() => document.querySelectorAll('#alias-rows tr').length === 2);
+      assert.match(await p.locator('#alias-rows tr').nth(1).textContent(), /小銀[\s\S]*银灰/, '新增後表格看得到');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+
   await test('Discord 控制台：群知識可確認、可從訊息連結新增', async () => {
     const entries = [
       {
@@ -559,6 +657,13 @@ try {
         sessions: () => [{ key: 'discord:ch:123456789012345678', label: '#很長的頻道名稱 · 很長的伺服器名稱', sessionId: 'ses_0123456789abcdefghijklmn', preset: 'dc-chat-open', lastActive: old, quietUntil: old, pending: 'question' }],
         config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
         slang: () => ({ entries: [], learning: { enabled: true } }),
+        arknightsAliases: () => ({
+          entries: [{
+            id: '很長的別名', alias: '很長的別名'.repeat(6), charId: 'char_103_angel',
+            name: '很長的幹員名稱'.repeat(4), status: 'active', source: 'prts', addedAt: new Date(old).toISOString(),
+          }],
+          stats: { total: 1, active: 1, rejected: 0 }, builtAt: new Date(old).toISOString(), source: 'prts',
+        }),
         knowledge: () => ({ enabled: true, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
         // 伺服器已按「次數多、最近觸發」排好；同次數時前端不能再重排。
         triggers: () => ({ todayUsers: 2, totalUsers: 2, totalTriggers: 2, totalDraws: 0, users: [
@@ -577,7 +682,7 @@ try {
         .filter((cell) => cell.scrollWidth > cell.clientWidth + 1)
         .map((cell) => `${cell.closest('tbody, thead').id || 'thead'}: ${cell.textContent.trim().slice(0, 30)}`));
       const tabs = [['usage', '#usage-rows tr.clickable'], ['settings', '#emoji-guilds tr td:nth-child(2)'], ['triggers', '#trigger-rows tr:nth-child(2)'],
-        ['memory', '#note-rows button'], ['sessions', '#ignored-rows button']];
+        ['memory', '#note-rows button'], ['sessions', '#ignored-rows button'], ['aliases', '#alias-rows tr']];
       for (const [tab, ready] of tabs) {
         await p.locator(`#tabbtn-${tab}`).click();
         await p.locator(ready).first().waitFor();

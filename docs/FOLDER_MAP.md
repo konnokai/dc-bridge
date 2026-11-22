@@ -17,7 +17,7 @@
 | `mcp-discord.js` | Discord 工具（發訊、看訊息、表情、投票） |
 | `mcp-slang.js` | 黑話工具 |
 | `mcp-trade.js` | 模擬股票工具（商品清單、查價、下單、持股、排行榜） |
-| `mcp-arknights.js` | 明日方舟練度統計工具（專精／模組建議） |
+| `mcp-arknights.js` | 明日方舟練度統計工具（專精／模組建議、PRTS 別名） |
 | `mcp-web-search-safe.js` | 只讀搜尋與抓取工具 |
 | `self-test.js` | DSH 連線自測 |
 
@@ -58,6 +58,7 @@
 | `discord-video-link.mjs` | 影片連結的 yt-dlp 字幕、章節與抽格 |
 | `prts-artwork.mjs` | PRTS 立繪解析 |
 | `arknights-training.mjs` | 一圖流練度統計：專精／模組排行與幹員名稱比對 |
+| `arknights-aliases.mjs` | 幹員別名表：PRTS redirect、自動補寫與控制台狀態 |
 | `discord-gif.mjs` | GIPHY 搜尋 |
 | `discord-security.mjs` | 白名單、敏感詞 |
 | `discord-usage.mjs` | 用量統計 |

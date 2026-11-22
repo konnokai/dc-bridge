@@ -72,8 +72,9 @@ pm2 logs dc-bridge
 > 遺留的 `mcp-snowluma` / `mcp-snowluma-host` 條目與 `qq-agent-presets` / `qq-mode-console` 連結；其他 profile 設定保留。
 > 舊 QQ bundle 如果是實體目錄，腳本只印警告、不會遞迴刪除。
 >
-> `mcp-arknights` 是 stdio，直接抓一圖流的公開統計（`auth.yituliu.cn`）與幹員表，不經過橋接、不需要金鑰；
-> 拿到的是全服玩家的專精／模組分布，行程內快取（統計 6 小時、幹員表 24 小時），抓不到時沿用舊快取。
+> `mcp-arknights` 是 stdio，直接抓一圖流的公開統計（`auth.yituliu.cn`）、幹員表與 PRTS 別名，不經過橋接、不需要金鑰；
+> 拿到的是全服玩家的專精／模組分布，統計與幹員表快取在行程內（6／24 小時），抓不到時沿用舊快取；
+> 別名第一次抓到就寫進 `state/arknights-aliases.json`，之後永久沿用。
 >
 > `mcp-prts` 是獨立的 Docker container（`ghcr.io/3akhp/prts-mcp:3.2.4`），DSH 連 `http://127.0.0.1:3011/mcp`。
 > compose 在 `/root/bot/nadeko-docker/docker-compose.yml`，資料在 `prts-data` volume（掛到 `/data`），restart policy 是 `unless-stopped`。
@@ -607,7 +608,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
 控制台：http://127.0.0.1:3110/?token=<自動產生的 token>
 ```
 
-頁面分成 9 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
+頁面分成 12 個分頁。目前在哪一頁記在網址的 `#`（例如 `#usage`），重新整理會停在同一頁；
 可以用滑鼠點，也可以在分頁列上用左右方向鍵切換。
 
 - **總覽**（`#overview`）
@@ -621,6 +622,9 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   每頁 20 筆、可換頁；每筆可確認、拒絕、編輯、刪除。「頻道風格」多一個頻道下拉選單（預設「全部頻道」），
   選項顯示 `#頻道名（筆數）`，橋接查不到頻道名稱時退回頻道 id，有同名頻道時後面補 id；
   頻道和狀態兩個過濾一起作用，換頻道會回到第 1 頁
+- **別名**（`#aliases`）：明日方舟幹員別名（PRTS redirect）。按狀態（全部／啟用／已拒絕）過濾、搜尋別名或幹員，
+  每頁 20 筆；可單筆或批次拒絕、恢復、刪除，也能手動新增（別名＋幹員正式名稱或 charId，伺服器會解析）。
+  不跟 5 秒輪詢：登入後第一次載入、按分頁內的「重新整理」（或右上角重新整理）或操作後才抓。別名由 `mcp-arknights` 自動匯入與補寫，見「幹員別名」
 - **對話**（`#triggers`）：誰觸發過對話、各自幾次、畫圖幾次、最後在哪個頻道、最後／第一次時間；可搜尋名稱或 user id，每頁 20 人
 - **知識**（`#knowledge`）：群知識的候選與已確認條目；可按狀態過濾、搜尋標題／內容／觸發詞／來源，每頁 20 筆。
   每筆可確認、拒絕、編輯（標題、關鍵字、工具、範圍）、刪除；下面的新增表單貼一則訊息連結就抓原文建檔並直接生效
@@ -636,6 +640,7 @@ Bot 也會用 `dc-trader` preset 在盤中自己決定要不要下一筆單。
   每筆右側有「複製 prompt」，會把來源、問題、需求、驗收標準與觸發訊息整理成可直接交給 coding agent 的 prompt。
   內容只存在 `state/discord-dev-feedback.json`，不會出現在頻道。
   端點：`GET /api/dev-feedback`、`POST /api/dev-feedback/delete`
+- **股盤**（`#trade`）：模擬股票的持股、訂單與排行榜總覽（見「模擬股票」）
 - **設定**（`#settings`）
   - **白名單與媒體**：`allow.*` / `deny.*` / `ownerIds` / `media.*` / `requireMentionInGuild`（勾選框）/
     `requireMentionInChannel`（一行一個 `頻道ID=true|false`）/ `chattyChannels` / `openPoliticsChannels`（一行一個頻道 ID）直接編輯，
@@ -1436,6 +1441,22 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
 - 當事人用 `/forget` 會把記憶和觸發統計一起刪掉，私聊也一樣。
 - 模型可以呼叫 `mcp__discord__conversation_stats` 自己撈同一份統計（全部伺服器加總的今天／總計／總次數／畫圖次數；前 5 名只列同一個伺服器的人，私聊只回數字）。
 
+## 幹員別名（明日方舟）
+
+`mcp-arknights` 查不到正式名稱時，會用 PRTS 幹員頁的 redirect 當別名表（`银老板` → `银灰`、`42` → `史尔特尔`、`水陈` → `假日威龙陈`）。
+
+- **什麼時候抓**：MCP 啟動後在背景抓 `Category:干员` 與每頁 redirect（約 11 個 API 請求），寫進
+  `state/arknights-aliases.json`，之後永久沿用，不再連 PRTS。啟動時抓失敗，5 分鐘後的查詢會再試。
+- **查到就記**：查詢字本身（例如 `飛天貓`）命中現有別名時，直接補進同一個檔，來源標 `query`，不用人工確認。
+  只收接近別名本身的查詢；`42专三` 這種加料的不會存成新別名。
+- **控制台「別名」分頁**：列出別名、幹員、來源、狀態；可以單筆或批次「拒絕」（模型不用這個別名）、「恢復」、刪除，
+  也可以手動新增（填別名與幹員正式名稱或 charId；伺服器會先解析成正式幹員，錯字或多人符合會拒絕）。
+  列表不跟 5 秒輪詢：登入後第一次載入、按分頁內的「重新整理」（或右上角重新整理）或操作後才抓。
+  拒絕只擋完全相同的查詢；刪除只是移除這一條，查詢學到的別名可能被同一個查法再學回來，要擋就用拒絕。
+- **別名檔損毀**：不會自動重建（避免蓋掉拒絕紀錄）；控制台會顯示錯誤。修好或刪掉
+  `state/arknights-aliases.json` 後，下一次查幹員會重抓。
+- **抓不到 PRTS**：跳過別名層，正式名稱查詢照常；5 分鐘內不重試，整次抓取最多 30 秒。
+
 ## 誰決定要不要發訊息（MCP）
 
 回合結束時橋接**不會**自動把模型文字貼到頻道。模型要說話或動作，就呼叫 `mcp__discord__*` 工具。
@@ -1632,7 +1653,7 @@ Qdrant 記得只綁 `127.0.0.1` 或設 API key：這份歸檔是完整的頻道�
   貼圖用 `mcp__discord__send_prts_artwork`，生圖參考用 `generate_image` 的
   `inputImage: prts:<幹員>/<檔名>`；參考固定抓 `large`。
 - `mcp__arknights__get_operator_training`（`operator`）：查一圖流（yituliu）全服持有者的專精與模組分布。
-  `operator` 填簡體／繁體名稱或 charId；回每個技能的 M1／M2／M3 人數與專三率、精二人數、每個模組的階段 3 率與開啟率（≥1），依比率排序。
+  `operator` 填簡體／繁體名稱、群裡的綽號（`银老板`、`42`、`飛天貓`）或 charId；回每個技能的 M1／M2／M3 人數與專三率、精二人數、每個模組的階段 3 率與開啟率（≥1），依比率排序。
   比率分母是持有者數；A 模組是特限證章（集成戰略用），名稱照資料顯示。這是玩家實際練度，不是官方推薦。
   統計由上游離線跑批，可能落後一輪；查不到幹員時回候選名稱，這時改用完整名稱或 charId 再查。
   跟 PRTS 同一組開關：只有 `dc-chat`／`dc-chat-open` 放行。
@@ -1849,8 +1870,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
 9. **PRTS 是獨立 container**：`mcp-prts` 跑在 Docker container `ghcr.io/3akhp/prts-mcp:3.2.4`，不掛主機目錄，
    看不到 `config.json`、`state/discord-agent.json` 與 `~/.dsh`。但 HTTP MCP 綁在 `0.0.0.0:3011` 且沒有認證，
    內網任何裝置都能呼叫這些唯讀工具；目前是使用者接受這個風險。container 需要對外連 GitHub／prts.wiki。
-10. **練度統計只讀公開資料**：`mcp-arknights` 是 stdio Node 行程，只連 `auth.yituliu.cn` 與
-    jsDelivr／GitHub 的幹員表，不讀本機檔案、不碰橋接端點；快取只在記憶體。
+10. **練度統計只讀公開資料**：`mcp-arknights` 是 stdio Node 行程，只連 `auth.yituliu.cn`、jsDelivr／GitHub 的幹員表與
+    `prts.wiki` 的別名；會寫 `state/arknights-aliases.json`（PRTS 別名與群友用過的綽號），不讀其他本機檔案、不碰橋接端點。
 
 ## 已知限制
 
@@ -1878,7 +1899,7 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   `dc-tool-restrict` 逐一列名放行，mcp-discord 新增工具時要同步加進去）、3 個 `mcp__slang__*` 工具
   （只查／收黑話與頻道標籤，收進去的都是候選，管理員確認後才注入），加上只讀的
   `mcp__web-search-safe__web_search` / `web_fetch` 與 24 個 `mcp__prts__*`（明日方舟資料），
-  外加只讀的 `mcp__arknights__get_operator_training`（一圖流練度統計）。
+  外加只讀的 `mcp__arknights__get_operator_training`（一圖流練度統計＋PRTS 別名，別名存 `state/arknights-aliases.json`）。
   `dc-learner` 把這些 Discord 與黑話工具全部拿掉；`dc-learner` 與 `dc-trader` 也看不到 PRTS 與練度統計工具。
 - 沒有定時主動發言：模型只在收到訊息後才有機會說話；要不要送、送幾則，由它呼叫工具決定。
 - **畫圖要 1~3 分鐘**，而且吃 Codex 額度；生圖在背景跑，不卡會話。橋接重啟不影響（外掛最多等 3 分鐘），
