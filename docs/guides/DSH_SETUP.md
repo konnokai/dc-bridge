@@ -29,7 +29,7 @@
    腳本會：
 
    - 從 `dsh/agent-presets/` 重新產生 `plugins/dc-agent-presets/presets/*.patch.yml`，把 `dc-chat` / `dc-chat-open` / `dc-learner` / `dc-trader` 掛進 profile；
-   - 在 `cordis.patch.yml` 掛 `mcp-web-search-safe`、`mcp-discord`、`mcp-slang`、`mcp-trade`、`mcp-prts`；
+   - 在 `cordis.patch.yml` 掛 `mcp-web-search-safe`、`mcp-discord`、`mcp-slang`、`mcp-trade`、`mcp-arknights`、`mcp-prts`；
    - 把 `dc-agent-presets` 與 `dsh-llm-hedge` 用 `link:` 依賴註冊進 profile，並維護 `node_modules` junction；
    - 嘗試執行 `dsh plugin --profile <profile> install`。
 
