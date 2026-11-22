@@ -22,7 +22,7 @@
 - [[graphify-query]] — `graphify query` 結果會截斷；用 `graphify explain` 導航，並以來源碼確認呼叫關係
 - [[discord-agent-tools-structure]] — agent-tools 拆分決策、共用 helper 位置、子 factory 依賴檢查與讀取／交易層邊界（2026-11-20）
 - [[discord-bridge-layering]] — bridge 分層、10 組拆模組決策、依賴／初始化規則與結構檢查（2026-11-20）
-- [[discord-bridge-turns]] — turns 模組範圍、狀態所有權、事件流接線與行為測試
+- [[discord-bridge-turns]] — turns 模組範圍、狀態所有權、事件流接線、行為測試與漏用工具提醒
 
 ## 維運與觀測
 
@@ -54,7 +54,7 @@
 - [[discord-video-subtitles]] — view_message 的 YouTube 連結影片字幕支援：yt-dlp、VTT 解析、章節、直連網址、縮排、白名單
 - [[discord-web-fetch]] — Google Docs/Slides/Sheets export、HTML 抽取、Content-Encoding 解壓與二進位 guard、normalizeWebFetchUrl 回 {url, expectText}
 - [[discord-social-post-fetch]] — ebfix 社群貼文正文優先抓取、可選 Firecrawl shell fallback 與部署安全界線
-- [[discord-web-search]] — 聯網搜尋 provider（DeepSeek/Bing/SearXNG）、SearXNG 實例設定與引擎踩坑
+- [[discord-web-search]] — provider（DeepSeek/Bing/SearXNG）設定、SearXNG 踩坑與 DSH 每回合搜尋上限
 - [[discord-dev-feedback-console]] — 控制台回饋「複製 prompt」按鈕與欄寬
 - [[discord-console-table-layout]] — 黑話／頻道表固定版面、84px 列高、colgroup 欄寬
 - [[discord-console-detail-modal]] — 控制台通用放大彈窗（detail-modal）：CSS [hidden] 陷阱、梗圖 token 守衛、訂單整列點擊、帳號名稱快取
@@ -90,6 +90,7 @@
 - [[discord-elevenlabs-tts]] — 2026-11-13 已移除 ElevenLabs 支援；保留舊音色與 API 調查作歷史
 - [[discord-knowledge]] — 群知識功能：候選/確認流程、三種觸發（always/keywords/tools）、注入位置、清洗、上限、控制台端點、生圖附加；設計原則（資料驅動、注入非查詢、候選人審、原文橋接抓）與評估過但沒採用的方案（2026-11-10）
 - [[discord-prts-mcp]] — PRTS MCP 改為 Docker HTTP（container 3.2.4，DSH 連 127.0.0.1:3011）、GITHUB_TOKEN、8MB 原圖不縮圖與 DNS 不穩
+- [[discord-arknights-training]] — 一圖流練度 MCP、統計口徑與 PRTS 永久別名表的解析、暖機防護及控制台手動維護（2026-11-22）
 - [[discord-prts-artwork]] — PRTS 立繪改走 Cloudflare Worker + R2 快取：MediaWiki 路徑、large 404 fallback 原圖、bridge /prtsImage
 - [[discord-trade]] — 台股模擬交易：官方行情補一般股、ETF 白名單規則、漲跌停與稅率、結算、Bot 交易員及控制台
 - [[discord-twitter-post]] — X／Twitter 貼文用 FxEmbed 公開 API 解析：模組、view_message/web_fetch 整合、預算、媒體、測試（回饋 df_mw7etjk73dae52）

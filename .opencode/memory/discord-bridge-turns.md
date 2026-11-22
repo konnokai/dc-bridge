@@ -4,6 +4,7 @@ description: `discord-bridge-turns.mjs` 的功能範圍、狀態所有權、事�
 ---
 
 - 2026-11-20 的 `d6fe960` 將訊息入口搬進 `createTurns(deps)`，涵蓋離線佇列、批次組裝、投遞與 reaction；連同提問／審批、自動壓縮、TTFT、DSH 事件流，私人回合仍留在入口。該 commit 通過結構檢查和 `npm run test:discord`（37/37），只在本機分支、未 push。review 後修掉 `enqueuePrompt` TDZ、`formatQuietUntil`／`OPENING_HINT`／`formatFollowupDelay` 漏 import，以及 `emojiCatalogs` 快照；沒有此後重新審查或部署的證據。
+- 2026-11-22，沒有呼叫 Discord 工具且只輸出文字時，橋接會對 ★ 批次、回訪與系統訊息補提醒；Web GUI 回合（沒有 `meta`）和提醒自己的回合（`meta.reminder`）不提醒。仍要求非安靜、回合閘門不忙、回合未嘗試工具；提醒以 `direct=false` 排進同一會話。提示要呼叫適合內容的發送工具（如 `send_message`、`send_image`、`send_voice_file`），避免系統訊息只被導向文字工具。無 10 分鐘冷卻；若 MCP 工具未掛載，每個符合條件的回合都可能增加一輪模型成本。測試覆蓋 ★×2、提醒、回訪、系統與 Web GUI，`npm run test:discord` 通過 40/40；安靜期間仍不提醒，見 [[discord-quiet-gate]]。
 - **取代先前的 `late.turnGate` 接線方案**：`turnGate` 要在 `createTurns` 前建立並直接注入。曾把 `late.turnGate = turnGate` 放進 `deliver` 的 `job.ask` 分支；首次 `/ask` 前事件處理會因 `late.turnGate` 未定義失敗，斷線清理也會再失敗。移除 `late` 可避免這種初始化依賴。
 - factory deps 解構成 `const` 後不能在模組內重新賦值。`lastFrameAt`、`offlineTimer`、`offlineFlushing` 由唯一寫入者在模組內持有 `let`；外部需要讀取的 `lastFrameAt` 用 getter 暴露。搬移後要掃描依賴寫入，因 `node --check` 不會抓這類執行期錯誤。
 - 大段搬移用語意錨點定位，避免固定行號；巢狀函式也可能有 `return {`，找 factory 回傳物件要比對精確的頂層縮排。先移除原始區間再插別名，避免行號位移。搬完逐行比對來源，只放行明確列出的接線改動；若腳本弄壞區塊，可從 `git show HEAD:<path>` 還原原始範圍再驗證。
