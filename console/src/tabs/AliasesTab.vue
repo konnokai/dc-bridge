@@ -71,7 +71,7 @@ function toggleOne(entry, checked) {
 async function act(action, entry = null) {
   const ids = entry ? [entry.id] : [...selected];
   if (!ids.length) { alert('先勾選別名'); return; }
-  if (action === 'delete' && !confirm(`刪除 ${ids.length} 條別名？`)) return;
+  if (action === 'delete' && !confirm(`刪除 ${ids.length} 條別名？刪除只是移除這一條，同一個查法可能再學回來；要永久擋用「拒絕」。`)) return;
   for (const id of ids) busy.add(id);
   try {
     await api('/api/arknights-aliases/' + action, { method: 'POST', body: JSON.stringify({ ids }) });
@@ -106,10 +106,6 @@ async function submitAdd() {
 <template>
 <section class="card">
   <h2>幹員別名 <span id="alias-count" class="muted">（{{ stats.total }} 條｜啟用 {{ stats.active }}｜已拒絕 {{ stats.rejected }}）</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">
-    PRTS 幹員頁的 redirect 自動匯入，查幹員時也會補上群裡用過的叫法；也可以手動新增。列表不自動更新，登入後第一次載入與按「重新整理」才抓。
-    拒絕後模型就不用這個別名；刪除只是移除這一條，同一個查法可能再學回來，要擋就用拒絕。
-  </p>
   <p v-if="missing" id="alias-missing" class="muted">還沒建立別名表；MCP 啟動後會自動抓 PRTS，下一次查幹員時也會等它，抓到就永久保留。</p>
   <p v-if="data.arknightsAliasesError" id="alias-load-error" class="muted" style="color:var(--danger)">讀取失敗：{{ data.arknightsAliasesError }}</p>
   <p v-if="corrupt" id="alias-corrupt" class="muted" style="color:var(--danger)">

@@ -51,7 +51,6 @@ function onOrderClick(order, event) {
 <template>
 <section class="card">
   <h2>模擬股盤 <span id="trade-summary" class="muted">{{ summary }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">唯讀。交易資料在 state/discord-trade.sqlite；下單只能從 Discord 對話或 Bot 排程，這裡不能改餘額或持倉。</p>
   <div class="table-wrap">
     <table style="min-width:760px">
       <colgroup><col style="width:24%"><col style="width:8%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:10%"></colgroup>

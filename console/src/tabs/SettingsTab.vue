@@ -672,11 +672,6 @@ watch(() => data.providers, (value) => { if (value) applyProviders(value); }, { 
           <input id="ceobe-enabled" v-model="ceobe.enabled" type="checkbox" style="width:auto;margin:0;flex:none">
           ceobe.enabled：把小刻食堂的新餅投給下面列出的頻道
         </label>
-        <p class="muted" style="grid-column:1/-1;margin:0;font-size:12px">
-          每個頻道可以勾選要接收的資料源。第一次加入的頻道或來源只從加入之後的新餅開始，不會補推舊的。
-          頻道要同時在 allow 名單裡，bot 也要有「查看頻道」與「傳送訊息」權限。
-          餅會送進該頻道的 DSH 會話，由人格整理後發文；原文連結由模型保留，漏掉時橋接會補。
-        </p>
         <div id="ceobe-targets" style="grid-column:1/-1">
           <div v-for="(row, index) in ceobe.rows" :key="index" class="ceobe-target">
             <div class="row">

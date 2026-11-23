@@ -113,7 +113,7 @@ async function deleteNote(note) {
 }
 
 async function deleteMeme(meme) {
-  if (!confirm('刪掉這張梗圖？模型之後就送不出它了。')) return;
+  if (!confirm('刪掉這張梗圖？模型之後就送不出它了。梗圖庫所有伺服器共用。')) return;
   try {
     await api('/api/memes/delete', { method: 'POST', body: JSON.stringify({ id: meme.id }) });
     await refresh();
@@ -127,7 +127,6 @@ async function deleteMeme(meme) {
 <template>
 <section class="card">
   <h2>群友記憶 <span id="memory-count" class="muted">{{ data.memory?.enabled ? `（${(data.memory?.users ?? []).length} 人）` : '（已關閉：config.json 的 discord.memory.enabled）' }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 remember_user 記下的事，唯讀。要刪請當事人用 /forget。</p>
   <div class="row" style="margin-bottom:10px">
     <input id="memory-search" type="search" aria-label="搜尋群友記憶" placeholder="搜尋名稱或 user id" style="max-width:260px"
            :value="pagedLists.memory.query" @input="setQuery('memory', $event)">
@@ -157,7 +156,7 @@ async function deleteMeme(meme) {
 
 <section class="card">
   <h2>歷史歸檔 <span id="archive-count" class="muted">{{ data.archive?.count == null || !data.archive?.enabled ? '' : `（${data.archive.count} 個點）` }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">頻道訊息 embed 後存進 Qdrant，給 recall_history 用。端點與 key 在 config.json；開關與保留天數在「設定」頁，重啟後生效。<strong>這裡看得到所有已歸檔頻道的原文。</strong></p>
+  <p class="muted" style="margin:0 0 10px;font-size:12px"><strong>這裡看得到所有已歸檔頻道的原文。</strong></p>
   <p id="archive-status" class="muted">{{ archiveStatus }}</p>
   <div class="row" style="margin:10px 0">
     <select id="archive-channel" aria-label="歸檔頻道" :value="archiveState.channelId" @change="archiveChannelChange">
@@ -198,7 +197,6 @@ async function deleteMeme(meme) {
 
 <section class="card">
   <h2>頻道筆記 <span id="notes-count" class="muted">{{ data.notes?.enabled ? `（${(data.notes?.notes ?? []).length} 條）` : '（已關閉：config.json 的 discord.notes.enabled）' }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 note_event 記下的事，加上每天自動產生的頻道摘要。刪掉後模型就看不到那條。</p>
   <div class="row" style="margin-bottom:10px">
     <input id="note-search" type="search" aria-label="搜尋頻道筆記" placeholder="搜尋頻道名稱或 channel id" style="max-width:260px"
            :value="pagedLists.note.query" @input="setQuery('note', $event)">
@@ -228,7 +226,6 @@ async function deleteMeme(meme) {
 
 <section class="card">
   <h2>梗圖 <span id="memes-count" class="muted">{{ data.memes?.enabled ? `（${(data.memes?.memes ?? []).length} 張）` : '（已關閉：config.json 的 discord.memes.enabled）' }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 save_meme 存下的小圖，用 send_image 的 meme:名稱 送出。刪掉後模型就送不出那張；梗圖庫所有伺服器共用。</p>
   <div class="row" style="margin-bottom:10px">
     <input id="meme-search" type="search" aria-label="搜尋梗圖" placeholder="搜尋名稱或梗圖 id" style="max-width:260px"
            :value="pagedLists.meme.query" @input="setQuery('meme', $event)">

@@ -63,7 +63,6 @@ function setPage(page) {
 <template>
 <section class="card">
   <h2>對話次數 <span id="trigger-summary" class="muted">{{ summary }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型真的送出訊息才算一次；同一個回合只算一次。「畫圖」是送出生成圖片的次數。只記名字、次數與時間，不記聊天內容。</p>
   <div class="row" style="margin-bottom:10px">
     <input id="trigger-search" type="search" aria-label="搜尋群友" placeholder="搜尋名稱或 user id" style="max-width:260px"
            :value="triggerState.search" @input="setSearch">

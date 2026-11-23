@@ -154,7 +154,6 @@ function setChannel(event) {
     </select>
     <input id="style-search" type="search" aria-label="搜尋頻道標籤" placeholder="搜尋頻道、標籤、描述" style="max-width:260px"
            :value="listView.style.query" @input="setQuery('style', $event)">
-    <span class="muted" style="font-size:12px">跟黑話同一次抽；確認後才會注入那個頻道</span>
   </template>
   <template #cell-channel="{ e }"><div class="cell-clamp">{{ channelLabel(e) }}</div></template>
   <template #cell-term="{ e }"><div class="cell-clamp"><strong>{{ e.term }}</strong></div></template>

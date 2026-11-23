@@ -79,7 +79,6 @@ async function remove(item) {
 <template>
 <section class="card">
   <h2>功能申請與意見回饋 <span id="dev-feedback-count" class="muted">（{{ data.devFeedback?.items?.length ?? 0 }} 筆）</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 submit_feedback 送出的意見，只存在本機 state/discord-dev-feedback.json，不會出現在頻道。時間下面的連結會開到觸發那一輪的訊息；session 是當時的 DSH 會話。</p>
   <div class="table-wrap">
     <table style="min-width:960px">
       <colgroup><col style="width:13%"><col style="width:18%"><col><col><col><col style="width:220px"></colgroup>

@@ -86,7 +86,6 @@ async function releaseIgnore(user) {
 
 <section class="card">
   <h2>回訪排程 <span id="followup-count" class="muted">{{ followupCount }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 schedule_followup 排的「之後回來看」（2 分鐘～1 個月）。時間到會給它一個提示，要不要說話由它決定；重啟不會清掉，停機超過 30 分鐘的會丟掉。</p>
   <div class="table-wrap">
     <table style="min-width:640px">
       <colgroup><col style="width:20%"><col><col style="width:13%"><col style="width:19%"><col style="width:9%"></colgroup>
@@ -109,7 +108,6 @@ async function releaseIgnore(user) {
 
 <section class="card">
   <h2>模型自己不理的人 <span id="ignored-count" class="muted">{{ ignoredCount }}</span></h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">模型用 ignore_user 設的暫時名單，時間到自動失效。跟管理員封鎖（deny.users）、本人 /blacklist（deny.self）分開；這裡的人連 @ 都不處理。</p>
   <div class="table-wrap">
     <table style="min-width:600px">
       <colgroup><col style="width:20%"><col style="width:34%"><col style="width:20%"><col style="width:14%"><col style="width:12%"></colgroup>

@@ -168,7 +168,6 @@ function setQuery(event) {
   :columns="columns"
   :filters="KNOWLEDGE_FILTERS"
   empty="還沒有群知識。群友請模型記下設定時會進候選；也可以直接貼訊息連結新增。"
-  description="群友提供的設定、規則、世界觀。候選要確認後才會進 prompt：「每批」= 每次對話都帶（單條 300 字以內）、「關鍵字」= 這批訊息命中才帶、「工具」= 呼叫那個工具時由橋接帶（生圖目前是 generate_image）。"
 >
   <template #toolbar>
     <input id="knowledge-search" type="search" aria-label="搜尋群知識" placeholder="搜尋標題、內容、觸發詞、來源" style="max-width:300px"
@@ -194,7 +193,6 @@ function setQuery(event) {
 
 <section class="card">
   <h2>新增（直接生效）</h2>
-  <p class="muted" style="margin:0 0 10px;font-size:12px">貼一則 Discord 訊息連結就抓原文當內容；也可以自己填。建立後立刻生效，不用再按確認。</p>
   <div class="row" style="margin-bottom:8px">
     <input id="knowledge-link" v-model="form.link" type="url" placeholder="https://discord.com/channels/伺服器/頻道/訊息" style="flex:1;min-width:280px" aria-label="訊息連結">
     <select id="knowledge-scope" v-model="form.scope" aria-label="可見範圍">

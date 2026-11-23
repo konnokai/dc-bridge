@@ -10,7 +10,6 @@ const props = defineProps({
   columns: { type: Array, required: true },
   filters: { type: Array, default: () => [['all', '全部'], ['candidate', '待確認'], ['confirmed', '已確認'], ['rejected', '已拒絕']] },
   empty: { type: String, default: '' },
-  description: { type: String, default: '' },
   selectable: { type: Boolean, default: false },
 });
 
@@ -80,7 +79,6 @@ function toggleOne(entry, checked) {
 <template>
 <section class="card">
   <h2>{{ title }} <span :id="kind + '-count'" class="muted">（{{ summary }}）</span></h2>
-  <p v-if="description" class="muted" style="margin:0 0 10px;font-size:12px">{{ description }}</p>
   <div class="row" style="margin-bottom:10px">
     <slot name="toolbar" />
     <div :id="kind + '-filter'" class="seg">
