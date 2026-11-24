@@ -47,6 +47,7 @@ export function createDshSessions({
   imageJobs,
   pendingDraws,
   voiceJobs,
+  transcriptJobs,
   persistImageJobs,
   runtime,
   stopTyping,
@@ -205,6 +206,7 @@ export function createDshSessions({
       voiceJobs.delete(jobId);
       void job.notice?.delete().catch(() => {});
     }
+    transcriptJobs?.cancelKey(key);
     const entry = pending.get(key);
     if (entry) {
       clearTimeout(entry.timer);

@@ -16,6 +16,7 @@ import { formatFollowupDelay, formatFollowupPrompt, formatFollowupStatus } from 
 import { formatReactionInbox } from './discord-feedback.mjs';
 import { formatQuietUntil, isQuietBatchSkipped } from './discord-quiet.mjs';
 import { describeSkipped, embedImages, fetchDiscordMedia, prepareMediaBlock } from './discord-media.mjs';
+import { SYNC_MAX_SECONDS, formatSeconds } from './discord-stt.mjs';
 import { formatReloadSummary, peekReloadSummary, takeReloadSummary } from './discord-reload.mjs';
 
 const MEMORY_USERS_PER_BATCH = 5; // 一批最多帶幾個人的群友記憶
@@ -117,6 +118,7 @@ export function createTurns(deps) {
     memeStore,
     memoryStore,
     messageRefs,
+    transcriptJobs,
     notesStore,
     reactionInbox,
     reactionLastAt,
@@ -850,6 +852,75 @@ export function createTurns(deps) {
   // 單頻道覆寫優先；私聊一律算 direct。
   const requireMentionFor = (key) => !key.startsWith('ch:') || requireMentionForChannel(cfg.discord, key.slice(3));
 
+  /** 批次裡一則語音的轉錄：短的就地轉，長的就開背景工作。 */
+  async function transcribeEntryAudio(key, entry, entryRef, skipped, budget) {
+    const audio = entry.media?.audio ?? [];
+    if (!audio.length || !cfg.discord.stt.enabled) return '';
+    if (entry.stt) return `[語音訊息] ${entry.stt}`;
+    const first = audio[0];
+    const cacheKey = `${entry.id}:${first.id || first.name}`;
+    const cached = transcriptJobs.lookup(cacheKey);
+    if (cached) {
+      entry.stt = cached.text;
+      return `[語音訊息] ${cached.text}${cached.truncated ? '（只取前段）' : ''}`;
+    }
+    if (first.duration > cfg.discord.stt.maxMediaSeconds) {
+      return `[語音 ${formatSeconds(first.duration)}，超過 ${formatSeconds(cfg.discord.stt.maxMediaSeconds)} 上限，沒有轉錄]`;
+    }
+    const background = () => transcriptJobs.start({
+      key,
+      sessionId: sessions[key],
+      ref: `#${entryRef}`,
+      cacheKey,
+      source: { kind: 'discord', url: first.url, name: first.name, id: first.id, duration: first.duration },
+      label: '語音訊息',
+    });
+    const marker = `[語音 ${formatSeconds(first.duration)}，背景轉錄中，完成會通知]`;
+    const canSync = entry.direct && first.duration > 0
+      && first.duration <= SYNC_MAX_SECONDS && budget.left > 0 && !transcriptJobs.busy();
+    if (canSync) {
+      budget.left -= 1;
+      try {
+        const result = await transcriptJobs.transcribeSync({
+          source: { kind: 'discord', url: first.url, name: first.name, id: first.id, duration: first.duration },
+          cacheKey,
+          timeoutMs: 45_000,
+        });
+        entry.stt = result.text;
+        return `[語音訊息] ${result.text}${result.truncated ? '（只取前段）' : ''}`;
+      } catch {
+        // 同步失敗就改排背景；Mac 可能正忙或剛好逾時。
+        try {
+          const started = background();
+          if (started.cached) {
+            entry.stt = started.cached.text;
+            return `[語音訊息] ${started.cached.text}`;
+          }
+          skipped.push({ name: first.name, reason: `背景轉錄中（job ${started.jobId}）` });
+          return marker;
+        } catch (error) {
+          skipped.push({ name: first.name, reason: `stt 轉錄失敗：${error?.message ?? error}` });
+          return '';
+        }
+      }
+    }
+    if (!entry.direct) {
+      return `[語音 ${formatSeconds(first.duration)}，沒有轉錄（沒叫 bot）]`;
+    }
+    try {
+      const started = background();
+      if (started.cached) {
+        entry.stt = started.cached.text;
+        return `[語音訊息] ${started.cached.text}${started.cached.truncated ? '（只取前段）' : ''}`;
+      }
+      skipped.push({ name: first.name, reason: `背景轉錄中（job ${started.jobId}）` });
+      return marker;
+    } catch (error) {
+      skipped.push({ name: first.name, reason: error?.message ?? String(error) });
+      return '';
+    }
+  }
+
   /**
    * 一批訊息 → prompt 文字與圖片。附件、引用、上下文都在投遞時才抓：
    * 這樣排在同一條佇列裡，順序不會亂；任何一項失敗只略過那一項。
@@ -866,9 +937,11 @@ export function createTurns(deps) {
     const entries = [];
     const images = [];
     const skipped = [];
+    const syncBudget = { left: 2 };
     for (const entry of job.entries) {
       skipped.push(...(entry.media?.skipped ?? []));
       const entryRef = messageRefs.register(key, entry.id, { authorId: entry.userId, at: entry.at });
+      const voiceText = await transcribeEntryAudio(key, entry, entryRef, skipped, syncBudget);
       // 連結預覽的圖（Tenor／Giphy 的 GIF）是 Discord 稍後用 messageUpdate 補上的，
       // 到這裡才讀 message.embeds：批次至少等過幾秒（有人 @ 時 8 秒），多半拿到了。沒有就只剩網址。
       // 轉發的預覽圖在快照裡，一起算。
@@ -930,7 +1003,7 @@ export function createTurns(deps) {
       }
       entries.push({
         author: entry.author,
-        text: entry.text,
+        text: [entry.text, voiceText].filter(Boolean).join(' '),
         rawText: entry.rawText ?? entry.text,
         direct: entry.direct,
         // 已退出的人 @ 你／回覆你時照常進批次，讓 formatBatch 標「可以回」。

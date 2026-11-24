@@ -145,6 +145,11 @@ export async function createConsoleLayer({
       ownerIds: cfg.discord.ownerIds,
       media: cfg.discord.media,
       tts: cfg.discord.tts,
+      stt: {
+        enabled: cfg.discord.stt.enabled,
+        model: cfg.discord.stt.model,
+        maxMediaSeconds: cfg.discord.stt.maxMediaSeconds,
+      },
       context: cfg.discord.context,
       batch: cfg.discord.batch,
       security: cfg.discord.security,
@@ -359,6 +364,7 @@ export async function createConsoleLayer({
       ownerIds: patch?.ownerIds ?? cfg.discord.ownerIds,
       media: pick(cfg.discord.media, patch?.media, ['enabled', 'maxBytes', 'maxModelBytes', 'maxLongEdge', 'maxCount', 'timeoutMs', 'maxVideoSeconds']),
       tts: pick(cfg.discord.tts, patch?.tts, ['enabled', 'model', 'accent', 'refAudio', 'refText', 'timeoutMs', 'maxChars', 'cooldownSec', 'maxPerTurn', 'channels']),
+      stt: pick(cfg.discord.stt, patch?.stt, ['enabled', 'model', 'maxMediaSeconds']),
       context: pick(cfg.discord.context, patch?.context, ['enabled', 'messages', 'maxChars']),
       batch: pick(cfg.discord.batch, patch?.batch, ['debounceMs', 'maxWaitMs', 'maxMessages']),
       security: pick(cfg.discord.security, patch?.security, ['blockSensitive']),
@@ -450,7 +456,7 @@ export async function createConsoleLayer({
     };
     // 新區塊只在這次真的送了才寫回：/blacklist、/mention 不該把 tts、reactions 等
     // 整份 normalize 後的預設值一起寫進 config.json。
-    for (const key of ['tts', 'context', 'batch', 'security', 'emoji', 'memes', 'reactions', 'memory', 'notes', 'knowledge', 'followup', 'ceobe', 'slang', 'videoLinks', 'historyArchive']) {
+    for (const key of ['tts', 'stt', 'context', 'batch', 'security', 'emoji', 'memes', 'reactions', 'memory', 'notes', 'knowledge', 'followup', 'ceobe', 'slang', 'videoLinks', 'historyArchive']) {
       if (patch?.[key] !== undefined) doc.discord[key] = next[key];
     }
     for (const key of ['typing', 'sendDelayMs', 'maxMessageChars', 'ackMessage', 'autoCompactTokens', 'ttftTimeoutMs']) {
@@ -481,6 +487,7 @@ export async function createConsoleLayer({
     cfg.discord.ownerIds = next.ownerIds;
     cfg.discord.media = next.media;
     cfg.discord.tts = next.tts;
+    cfg.discord.stt = next.stt;
     cfg.discord.context = next.context;
     cfg.discord.batch = next.batch;
     cfg.discord.security = next.security;

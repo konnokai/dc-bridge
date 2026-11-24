@@ -158,7 +158,7 @@ tool(
 
 tool(
   'job_status',
-  '查這個頻道現在有沒有背景工作在跑（生圖、語音）。使用者問「畫好了沒」「語音好了沒」，或你懷疑工作卡住時用；照回覆講，不要用猜的。',
+  '查這個頻道現在有沒有背景工作在跑（生圖、語音、影音轉錄）。使用者問「畫好了沒」「語音好了沒」「轉好了沒」，或你懷疑工作卡住時用；照回覆講，不要用猜的。',
   {
     token: sessionToken,
   },
@@ -413,6 +413,7 @@ tool(
     token: sessionToken,
     message: z.string().describe('要看的那則訊息：這個頻道的 #編號（例如 #k7f3ab），或訊息 ID（Discord 訊息連結的最後一段）'),
     channel: z.string().optional().describe('頻道 ID（可以寫 <#頻道ID>）；省略就是目前頻道。只能給同一個伺服器、bot 看得到的頻道'),
+    transcribe: z.boolean().optional().describe('要聽這則的語音、影片或影片連結內容時填 true。短音檔立即轉；長媒體排背景，完成後會收到【轉錄完成】。不填只會提示有語音。'),
   },
   '/view',
   (result) => [

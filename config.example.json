@@ -71,6 +71,12 @@
       "maxPerTurn": 1,
       "channels": []
     },
+    "stt": {
+      "enabled": false,
+      "baseUrl": "",
+      "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+      "maxMediaSeconds": 1200
+    },
     "prts": {
       "proxyUrl": "",
       "proxyToken": ""

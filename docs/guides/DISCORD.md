@@ -1008,6 +1008,54 @@ VoiceDesign 每次呼叫都會重新抽聲線。要固定聲音，把 `tts.model
 - 需要 bot 的 **Attach Files** 權限；語音訊息另外需要 **Send Voice Messages**。沒有後者時橋接直接改送一般音檔。
   舊版客戶端或部分第三方客戶端可能把它顯示成一般音檔，這是 Discord 端的限制。
 
+## 語音與影音轉文字（選用）
+
+模型可以把語音訊息、音檔、影片連結與 SNS 修復 bot 的影片轉成文字。後端是 Mac mini 上的 `mlx_audio.server`。
+
+**Mac 端**
+
+- 裝 ffmpeg：`brew install ffmpeg`。`~/tts-server/run.sh` 已經 export `/opt/homebrew/bin`；
+  重啟後在服務環境裡 `which ffmpeg` 要有值。
+- 橋接**不轉檔**：語音直接上傳 OGG/Opus，影片上傳原始 mp4／webm，由 Mac 的 ffmpeg 解碼。
+- Discord 附件沿用 `media.maxBytes`（預設 20 MB）；SNS／YouTube 下載上限 200 MB。
+  一次只跑一個轉錄工作。
+
+**設定**
+
+```json
+"stt": {
+  "enabled": true,
+  "baseUrl": "",
+  "model": "mlx-community/Qwen3-ASR-1.7B-8bit",
+  "maxMediaSeconds": 1200
+}
+```
+
+- `baseUrl` 空字串沿用 `tts.baseUrl`（同一台、同一個 8100）。控制台只開放
+  `enabled`、`model`、`maxMediaSeconds`。
+- 換模型只改 `model`；備援 `Qwen3-ASR-0.6B-8bit`、`whisper-large-v3-turbo-asr-fp16`。
+
+**流程**
+
+- 批次：★ 的語音 ≤120 秒同步轉，結果寫成 `[語音訊息] …`；更長的自動開背景工作。
+  沒叫 bot 的語音不轉，只標「未轉錄」。
+- `view_message`：帶 `transcribe: true` 才轉。短音檔同步；影片、沒有字幕的 YouTube、
+  SNS 代理影片開背景。完成後收到【轉錄完成】`#編號`，模型用 `send_message` 回覆原訊息。
+- SNS（X／IG／Threads／FB）：先找目標訊息或修復 bot 訊息裡的 Discord 代理影片；
+  沒有才用 **無 cookie** 的 yt-dlp 抓原站。需要登入、直播、或超過 20 分鐘會失敗；
+  IG 很大比例要登入，這是預期。
+- 全域同時 1 個工作、每頻道最多排 3 個；工作進行中 `send_voice` 直接回 409，叫模型先用文字。
+- `/reset` 與重載 system prompt 都會取消排隊與進行中的轉錄工作；工作進行中 `send_voice` 回 409。
+- 工作存在 `state/discord-transcript-jobs.json`；橋接重啟後舊工作收到【轉錄失敗】。
+- 逐字稿截 12,000 字，不寫進歷史歸檔；`recall_history` 找不到逐字稿。
+
+**閒置卸載**
+
+`~/tts-server/server.py` 是 `mlx_audio.server` 的 wrapper：模型閒置
+`MLX_IDLE_UNLOAD_SEC`（預設 300）秒就卸載，並用 `mx.clear_cache()` 把 RAM 還給 OS。
+`run.sh` 已改成執行 wrapper；`MLX_IDLE_UNLOAD_SEC=0` 可關閉。詳見
+`docs/design/PLAN_MODEL_IDLE_UNLOAD.md`。
+
 ## 執行程式（選用）
 
 模型可以用 `mcp__discord__run_script` 在一次性 Docker 容器裡跑一小段 Python 或 Node，把 stdout／stderr
@@ -1772,8 +1820,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   算 1 張圖、一樣受 `media.maxCount` 限制。那一行會寫成
   `[圖：影片 12.3s，抽 6 格拼成 3×2（約 0/10/20/30/40/50s，左上→右下），只有畫面沒有聲音]`，
   模型才知道這是格子圖、只看過前面那段、每一格大約是第幾秒。抽不出畫面（沒裝 ffmpeg、解碼失敗、壞檔）會回一句原因，不會讓整批失敗。
-- **語音**：Discord 的語音訊息與上傳的音檔（`audio/*`、mp3／ogg／m4a 等）不送進模型。只 @bot 或回覆 bot 時回一句
-  「這則是語音或音訊，我聽不到；打字告訴我內容好嗎」；沒叫 bot 的就安靜略過。
+- **語音**：`stt.enabled` 時，Discord 的語音訊息與音檔會轉成文字（≤120 秒同步，更長排背景）。
+  沒開時維持原本那句「這則是語音或音訊，我聽不到」；沒叫 bot 的就安靜略過。
 - **排隊**：縮圖與抽格全程序同時最多 2 個（下載仍並行），多個頻道一起丟影片時不會把 CPU 打滿。
   排隊中的圖不會被丟掉；每一張本身都有 `media.timeoutMs` 的 ffmpeg 逾時。
 - **貼圖**：群友送的貼圖寫成 `[貼圖：名稱]`；png/apng/gif 貼圖的圖也當成圖片送進模型（跟附件一起算 `[圖 #編號/n]`、
@@ -1891,7 +1939,8 @@ Persona 把「用工具說話」放在最前面：每一則 ★（有人在叫�
   `prts-mcp` 3.2.4 起 `operator_artwork action=get` 的圖上限是 8 MiB（`PRTS_MAX_IMAGE_BYTES` 可覆蓋），
   但原圖不經縮圖直接進模型；模型看 large 要走橋接的 `get_prts_artwork`（會先用 `media.maxModelBytes`／`maxLongEdge` 縮圖再進模型，
   生圖參考的 `prts:` 仍拿原檔）。
-- **語音訊息與音檔聽不到**：沒有 ASR，`audio/*` 一律不進模型；只 @bot 時回一句請對方打字。
+- **語音訊息與音檔**：沒開 `stt.enabled` 時聽不到，只 @bot 會回一句請對方打字；開了之後短音檔同步轉、
+  長媒體排背景，轉不出來才請對方改用文字。
 - **影片只看前 60 秒、只有畫面沒有聲音**：超過 `media.maxVideoSeconds` 的部分不看；要描述對話內容做不到。
   長影片、大檔案（超過 `media.maxBytes`，預設 20MB）會被跳過並回一句原因。
 - **訊息文字裡貼的圖片網址不會直接抓**：只抓 Discord 自己做好的連結預覽圖（`images-ext-*` 等代理網址）

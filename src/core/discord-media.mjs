@@ -85,20 +85,47 @@ function inferMime(name) {
  * 從一則訊息的附件挑出可用的圖片與影片。
  * @param attachments discord.js 的 Collection（或同形狀的陣列）
  * @param limits { maxBytes, maxCount }
- * @returns {{accepted: {url:string,name:string,mime:string}[], skipped: {name:string,reason:string}[]}}
+ * @param options.allowAudio true 時 audio 附件放進獨立的 audio 清單（不吃圖片名額）
+ * @returns {{accepted: {url:string,name:string,mime:string}[], audio: {url:string,name:string,mime:string,duration:number}[], skipped: {name:string,reason:string}[]}}
  */
-export function collectMediaAttachments(attachments, limits) {
+export function collectMediaAttachments(attachments, limits, { allowAudio = false } = {}) {
   const list = Array.isArray(attachments)
     ? attachments
     : [...(attachments?.values?.() ?? [])];
   const accepted = [];
+  const audio = [];
   const skipped = [];
 
   for (const item of list) {
     const name = safeName(item?.name);
     const declared = String(item?.contentType ?? '').toLowerCase();
     if (declared.startsWith('audio/') || (!declared && AUDIO_EXT.has(/\.([a-z0-9]+)$/i.exec(name)?.[1]?.toLowerCase()))) {
-      skipped.push({ name, reason: '語音或音訊（聽不到）', kind: 'audio' });
+      if (!allowAudio) {
+        skipped.push({ name, reason: '語音或音訊（聽不到）', kind: 'audio' });
+        continue;
+      }
+      if (Number.isFinite(item?.size) && item.size > limits.maxBytes) {
+        skipped.push({ name, reason: `超過 ${mb(limits.maxBytes)} 下載上限`, kind: 'audio' });
+        continue;
+      }
+      let audioUrl;
+      try {
+        audioUrl = new URL(String(item?.url ?? ''));
+      } catch {
+        skipped.push({ name, reason: '附件網址無效', kind: 'audio' });
+        continue;
+      }
+      if (audioUrl.protocol !== 'https:' || !DISCORD_IMAGE_HOSTS.includes(audioUrl.hostname)) {
+        skipped.push({ name, reason: `不是 Discord CDN 的網址（${audioUrl.hostname || '未知'}）`, kind: 'audio' });
+        continue;
+      }
+      audio.push({
+        url: audioUrl.toString(),
+        name,
+        id: String(item?.id ?? ''),
+        mime: declared || 'audio/*',
+        duration: Number.isFinite(Number(item?.duration)) ? Number(item.duration) : 0,
+      });
       continue;
     }
     const mime = declared
@@ -127,9 +154,9 @@ export function collectMediaAttachments(attachments, limits) {
       skipped.push({ name, reason: `不是 Discord CDN 的網址（${url.hostname || '未知'}）` });
       continue;
     }
-    accepted.push({ url: url.toString(), name, mime });
+    accepted.push({ url: url.toString(), name, mime, id: String(item?.id ?? '') });
   }
-  return { accepted, skipped };
+  return { accepted, audio, skipped };
 }
 
 /**
@@ -518,7 +545,43 @@ export function embedImages(embeds) {
   });
 }
 
-/** 被跳過的附件寫成一行給模型看的說明（模型才知道要跟使用者說看不到什麼）。 */
+/** 只認 Discord CDN／代理的網址（下載前的白名單檢查）。 */
+export function isDiscordMediaUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' && DISCORD_IMAGE_HOSTS.includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * embed 裡的影片（修復 bot 常把 X／IG 的影片代理到 Discord）。
+ * 只回 Discord 代理過的網址；原站網址交給 yt-dlp 那條路。
+ */
+export function embedVideoUrls(embeds) {
+  const out = [];
+  for (const embed of embeds ?? []) {
+    const data = embed?.data ?? embed;
+    if (embedIsSensitive(data)) continue;
+    const video = data?.video;
+    const url = video?.proxyURL ?? video?.proxy_url ?? video?.url;
+    if (url && isDiscordMediaUrl(url)) {
+      out.push({ name: 'embed-video', id: new URL(String(url)).pathname, url: String(url) });
+    }
+    for (const item of componentParts(data?.components).media) {
+      if (!item.url || !String(item.contentType ?? '').startsWith('video/')) continue;
+      if (isDiscordMediaUrl(item.url)) {
+        out.push({ name: safeName(item.name) || 'component-video', id: new URL(String(item.url)).pathname, url: String(item.url) });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 被跳過的附件寫成一行給模型看的說明（模型才知道要跟使用者說看不到什麼）。
+ */
 export function describeSkipped(skipped) {
   if (!skipped?.length) return '';
   const items = skipped.map((s) => `${safeName(s.name)}（${s.reason}）`).join('；');
