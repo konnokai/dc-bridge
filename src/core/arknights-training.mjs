@@ -77,7 +77,8 @@ async function loadJson(key, urls, ttlMs, label, check = () => true) {
 }
 
 async function loadStats() {
-  const doc = await loadJson('stats', [STATS_URL], STATS_TTL_MS, '練度統計', (data) => {
+  // 一圖流偶爾第一次連線失敗；同一個 URL 再試一次，避免短暫抖動變成查無資料。
+  const doc = await loadJson('stats', [STATS_URL, STATS_URL], STATS_TTL_MS, '一圖流練度統計', (data) => {
     if (data?.code !== 200) return `練度統計回應格式不對（code=${data?.code ?? '?'}）`;
     if (!Array.isArray(data.data) || data.data.length === 0) return '練度統計目前是空的（上游還沒跑完批次）';
     return true;

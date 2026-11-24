@@ -219,6 +219,26 @@ await assert.rejects(lookupWithStub('empty', { code: 200, data: [] }, table), /�
 await assert.rejects(lookupWithStub('bad-table', { code: 200, data: [angelStat] }, { foo: {} }), /幹員表格式不對/, '壞幹員表不能進快取')
 assert.match(await lookupWithStub('good', { code: 200, data: [angelStat] }, table), /過載模式|过载模式/, '正常資料要能回答')
 
+let statsCalls = 0
+const retried = await lookupWithStub('retry-once', { code: 200, data: [angelStat] }, table, '能天使', undefined, (url) => {
+  if (isStats(url) && ++statsCalls === 1) throw new TypeError('fetch failed')
+})
+assert.equal(statsCalls, 2, '一圖流第一次失敗要再試一次')
+assert.match(retried, /過載模式|过载模式/, '重試成功要回統計')
+
+let failedStatsCalls = 0
+await assert.rejects(
+  lookupWithStub('retry-failed', { code: 200, data: [angelStat] }, table, '能天使', undefined, (url) => {
+    if (isStats(url)) {
+      failedStatsCalls += 1
+      throw new TypeError('fetch failed')
+    }
+  }),
+  /一圖流練度統計讀取失敗：fetch failed/,
+  '兩次都失敗要明確回一圖流讀取錯誤',
+)
+assert.equal(failedStatsCalls, 2, '一圖流最多重試一次')
+
 // PRTS 抓取：cmcontinue／rdcontinue 要合併，error 欄位要當失敗。
 const originalStubFetch = globalThis.fetch
 try {
