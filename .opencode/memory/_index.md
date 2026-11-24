@@ -23,6 +23,7 @@
 - [[discord-agent-tools-structure]] — agent-tools 拆分決策、共用 helper 位置、子 factory 依賴檢查與讀取／交易層邊界（2026-11-20）
 - [[discord-bridge-layering]] — bridge 分層、10 組拆模組決策、依賴／初始化規則與結構檢查（2026-11-20）
 - [[discord-bridge-turns]] — turns 模組範圍、狀態所有權、事件流接線、行為測試與漏用工具提醒
+- [[windows-git-merge-message]] — PowerShell 下 merge commit message 用 `-m` 傳入；`-F -` 會被當成檔案路徑
 
 ## 維運與觀測
 
@@ -52,6 +53,8 @@
 - [[discord-jev-decision-gate]] — Jev 普通對話閘門成本結論，以及黑話候選分流、控制台門檻與 auto 區間驗證（2026-11-16）
 - [[discord-quiet-gate]] — 安靜期間 /send 閘門擋 send_message/send_sticker/create_poll
 - [[discord-video-subtitles]] — view_message 的 YouTube 連結影片字幕支援：yt-dlp、VTT 解析、章節、直連網址、縮排、白名單
+- [[discord-asr]] — Discord 語音與影音轉錄：mlx-audio、同步／背景工作、來源限制與 prompt 安全處理
+- [[discord-mlx-idle-unload]] — Mac mini mlx_audio 的 TTS／ASR 閒置卸載、記憶體回收與升級風險
 - [[discord-web-fetch]] — Google Docs/Slides/Sheets export、HTML 抽取、Content-Encoding 解壓與二進位 guard、normalizeWebFetchUrl 回 {url, expectText}
 - [[discord-social-post-fetch]] — ebfix 社群貼文正文優先抓取、可選 Firecrawl shell fallback 與部署安全界線
 - [[discord-web-search]] — provider（DeepSeek/Bing/SearXNG）設定、SearXNG 踩坑與 DSH 每回合搜尋上限
@@ -90,7 +93,7 @@
 - [[discord-elevenlabs-tts]] — 2026-11-13 已移除 ElevenLabs 支援；保留舊音色與 API 調查作歷史
 - [[discord-knowledge]] — 群知識功能：候選/確認流程、三種觸發（always/keywords/tools）、注入位置、清洗、上限、控制台端點、生圖附加；設計原則（資料驅動、注入非查詢、候選人審、原文橋接抓）與評估過但沒採用的方案（2026-11-10）
 - [[discord-prts-mcp]] — PRTS MCP 改為 Docker HTTP（container 3.2.4，DSH 連 127.0.0.1:3011）、GITHUB_TOKEN、8MB 原圖不縮圖與 DNS 不穩
-- [[discord-arknights-training]] — 一圖流練度 MCP、統計口徑與 PRTS 永久別名表的解析、暖機防護及控制台手動維護（2026-11-22）
+- [[discord-arknights-training]] — 一圖流練度 MCP、統計口徑與一次重試、PRTS 永久別名表解析、暖機防護及控制台手動維護
 - [[discord-prts-artwork]] — PRTS 立繪改走 Cloudflare Worker + R2 快取：MediaWiki 路徑、large 404 fallback 原圖、bridge /prtsImage
 - [[discord-trade]] — 台股模擬交易：官方行情補一般股、ETF 白名單規則、漲跌停與稅率、結算、Bot 交易員及控制台
 - [[discord-twitter-post]] — X／Twitter 貼文用 FxEmbed 公開 API 解析：模組、view_message/web_fetch 整合、預算、媒體、測試（回饋 df_mw7etjk73dae52）

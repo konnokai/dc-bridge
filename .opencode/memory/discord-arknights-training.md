@@ -12,10 +12,13 @@ description: 明日方舟玩家練度統計 MCP、名稱比對、資料驗證與
 - A 類模組是集成戰略的特限證章；模組名稱與技能名稱照幹員表資料呈現。
 - 名稱先做繁簡、Unicode 全半形、括號／間隔號／空白與大小寫正規化。優先用幹員名包含查詢字串；單字名可能造成反向誤配，遇到多個候選要列出候選，不可猜一位回統計。`charId` 可直接查。
 - 快取只收通過格式驗證的非空統計陣列與有效幹員表；壞回應不能蓋掉好快取。上游失敗時可沿用舊快取，並以 60 秒重試間隔避免每次查詢都等完整逾時。記憶體快取 TTL：統計 6 小時、幹員表 24 小時。
+- 2026-11-24：統計第一次請求約 10.6 秒失敗，立即再試約 0.5 秒成功；採用同一 stats URL 重試一次，而非只拉長 timeout。兩次失敗且沒有舊快取時會明確回「一圖流練度統計讀取失敗」；有舊快取時仍沿用舊資料並延後 60 秒再試。重試目前也會涵蓋 4xx、空統計或格式錯誤。使用者選擇不限制模型改用 PRTS；只改統計重試與錯誤訊息。
 - 工具是獨立 stdio MCP，直接讀公開資料，不經橋接也不需 token。`dc-tool-restrict.mjs` 把它和 PRTS 放在同一開關下，只允許 `dc-chat`／`dc-chat-open`；learner、trader 不應看到或呼叫它。
-- 測試入口是 `scripts/test-discord-arknights.mjs`；涵蓋名稱歧義、異格／括號、髒 key、無模組與只開低階模組、快取格式及 preset 白名單。註冊同步到 `scripts/setup-dsh.mjs` 和 `scripts/test-mcp-servers-stdio.mjs`。
+- 測試入口是 `scripts/test-discord-arknights.mjs`；涵蓋名稱歧義、異格／括號、髒 key、無模組與只開低階模組、快取格式、preset 白名單，以及統計重試成功／失敗兩種情況。註冊同步到 `scripts/setup-dsh.mjs` 和 `scripts/test-mcp-servers-stdio.mjs`。
 
 2026-11-22 的測試伺服器實測能天使輸出正常；當時 `npm run test:discord` 為 41/41，MCP stdio 清單與 preset patch check 通過。
+2026-11-24 重試改動通過 code review；`npm run test:discord` 為 42/42，preset patch check 通過。
+2026-11-24 部署 `33501d5` 後，MCP stdio 實查 `get_operator_training`（但書）成功；部署檢查與健康檢查均通過。部署流程見 [[discord-deploy]]。
 
 ## 幹員別名解析
 

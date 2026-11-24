@@ -38,7 +38,8 @@ cmd /c "node scripts/test-discord-bridge.mjs > test-out.txt 2>&1"; "exit=$LASTEX
 - `npm run test:console-ui` = `scripts/test-console-ui.mjs`，用 Playwright + Chromium；**缺任一就直接中止**，不會自動改用本機 Chrome/Edge。要跑先裝：`npm install --no-save playwright` + `npx playwright install chromium`，或設 `PLAYWRIGHT_MODULE` / `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`。
 - OpenChamber 這台沒有本機 Chrome/Playwright，`npm run test:console-ui` 會直接中止，不算失敗。目視檢查改用 `openchamber_web`（`browser.open`／`snapshot`／`click`／`close`）開 `http://127.0.0.1:...`；要先起臨時 server（照 `test-console-ui.mjs` 的 `startConsole({ host, port, token, htmlPath, handlers })` 寫法，handlers 必須包含頁面會打的每個 `/api/*`，缺一個就 500）。不要用 obscura：它會擋私有 IP，`127.0.0.1` 和區網都開不了。
 - 覆蓋含 Discord 控制台「回訪排程」卡片與取消按鈕、固定欄寬、375px 不溢出。2026-11-18 加入 360px 設定頁回歸：刻意放大 select／time 欄位，檢查頁面不溢出、欄位不超卡片、checkbox 不被壓扁；同日另在 iPhone Chrome 實機驗證。版面細節見 [[discord-console-mobile-layout]]。
-- `test-console-ui.mjs` 會精確檢查功能設定欄位總數；新增欄位時要同步更新該數字。2026-11-17 的總數由 52 更新為 55；改預期值後的後續測試結果見下。
+- `test-console-ui.mjs` 會精確檢查功能設定欄位總數；新增欄位時要同步更新該數字。2026-11-17 由 52 更新為 55；2026-11-24 語音轉文字新增 3 欄後，總數更新為 58。
+- 2026-11-24 `openchamber_web` 的 `browser.open`／`browser.snapshot` 回傳值是 JSON 字串；先 `JSON.parse(...)` 再取 `.data`，直接讀 `.data` 會得到 `undefined`。
 - 2026-11-08 曾有兩支 FAIL：「All submitted payloads exactly match the pre-redesign console baseline」與「Token usage trend chart renders bars, tiers and range/metric switching（切到 7 天後桶寬變成 6 小時）」。這是歷史紀錄；2026-11-17 重跑時趨勢圖失敗未再出現，但 baseline payload 失敗仍在。是否與當次改動相關仍未確認。
 
 ### Vite + Vue 控制台（2026-11-20）

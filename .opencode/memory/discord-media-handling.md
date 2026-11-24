@@ -3,7 +3,7 @@ name: discord-media-handling
 description: Discord 媒體處理：語音訊息分類、行程級媒體佇列、view_message 預算、影片抽格時間戳、PNG sBIT 修復與 alpha 保留策略
 ---
 
-- 語音／音訊附件：`src/core/discord-media.mjs` 把 `audio/*` 或副檔名在 `AUDIO_EXT`（mp3/ogg/oga/opus/wav/m4a/aac/flac/weba）的附件分類為 skipped，kind `audio`，reason「語音或音訊（聽不到）」，不進模型。橋接在 `src/discord-bridge.js` 只有音訊附件時回人話「這則是語音或音訊，我聽不到；打字告訴我內容好嗎」；混其他附件時仍用技術原因。測試：`test-discord-bridge.mjs` 4 條。
+- 語音／音訊附件：`discord.stt.enabled` 預設 `false`，所以預設仍沿用音訊 skipped 與「聽不到」回覆；啟用後改走 ASR，批次、`view_message` 與長媒體背景工作見 [[discord-asr]]。
 - 行程級媒體佇列：`createMediaQueue(2)` 包住 `prepareMediaBlock` 與 `prepareVideoUrlBlock`，多頻道同時丟影片時 ffmpeg 最多 2 個，避免 heartbeat 與回合回應變慢。佇列 FIFO、名額直接交給下一個、同步丟例外也會釋放；每個任務內部仍有 ffmpeg 逾時，不會永久卡住。測試：peak===2、排隊任務全跑、例外後名額釋放。
 - 媒體預算：佇列任務開始時檢查剩餘預算，少於 10 秒就跳過（避免排隊等完才跑、一定逾時）。`view_message` 傳 `deadline = viewStart + 55_000` 給 prepare 呼叫；影片連結 yt-dlp 上限 20 秒、ffmpeg 共用剩下的預算，少於 12 秒就放棄連結、保住前面的文字結果。`media.enabled` 關掉時不跑影片連結；yt-dlp URL 解析會剝掉尾端 ASCII `)`，並拒絕 `userinfo` 偽裝 host（回歸測試已釘住）。
 - 影片抽格時間戳：`src/media-normalize.js` 的 `frameTimesLabel` 在 note 補「約 X/Ys」，例如「抽 6 格拼成 3×2（約 0/12/…s，左上→右下）」，讓模型能說「0:30 那裡」。真畫時間碼（drawtext）未做。
@@ -16,4 +16,4 @@ description: Discord 媒體處理：語音訊息分類、行程級媒體佇列�
 - 2026-11-19 起，`referenceRefsByUrl()` 也替 component／連結預覽圖與 X 貼文圖片建立生圖參考對照。X 貼文圖片接在訊息本身的圖片後，編號沿用完整貼文媒體清單（不是只計入下載成功的圖片）。相關路徑：`src/core/discord-media.mjs`、`src/discord-bridge.js`。
 - component embed／Components V2 的 media、敏感 flags、type 11 fallback、attachment alt 與 spoiler 見 [[discord-message-preview]]。
 
-相關：[[discord-video-subtitles]]、[[discord-message-preview]]。
+相關：[[discord-video-subtitles]]、[[discord-message-preview]]、[[discord-asr]]。

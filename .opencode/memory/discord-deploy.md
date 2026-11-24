@@ -14,6 +14,7 @@ description: 部署到 Discord 測試伺服器的腳本行為、已知誤判風�
 - 2026-11-19 `node scripts/deploy-discord.mjs` 部署 `abb35c0` 成功；已由 2026-11-20 部署取代。
 - 2026-11-20 `node scripts/deploy-discord.mjs` 部署 `660c027` 成功；後由 `2a2ff7f` 取代。
 - 2026-11-20 部署 `2a2ff7f` 成功：本機與遠端 preset patch、Discord 測試通過，只重啟 `dc-bridge`，健康檢查確認程序 online 且新 log 有 Discord 登入訊息。沒有實際發送 Discord 訊息驗證投遞。
+- 2026-11-24 最新測試伺服器部署為 `33501d5`，取代 `657084f`；本機與遠端檢查、健康檢查通過，另以 MCP stdio 實查 `get_operator_training` 成功。明確驗證功能 UI 時再用 `openchamber_web`，見 [[dc-bridge-tests]]。
 - 2026-11-18 發現 deploy 輸出可能帶出控制台 token 明文；不要把含 token 的部署輸出貼到公開位置。token 值不記錄；這個既有行為未在當次修正。
 - 2026-11-17 `deploy-discord.mjs` 輸出精簡改動已提交並推送為 `c1e431e`：本機測試成功時隱藏輸出，失敗時最多印末 120 行；遠端成功測試不輸出，失敗時印步驟標籤與末 30 行；遠端錯誤不再回印整段腳本。當日已跑 `node --check scripts/deploy-discord.mjs` 和 `--dry-run`，沒有實際部署。`--skip-tests` 分支仍會印 skip 警告，未驗證。
 - 2026-11-13 遠端 `npm install` 曾回報 7 個 audit vulnerability（5 moderate、1 high、1 critical）；沒有檢查套件明細，屬當日觀察，不代表目前仍有相同數量。

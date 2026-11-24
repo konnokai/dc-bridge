@@ -15,4 +15,5 @@ description: view_message 的 YouTube 連結影片字幕支援：yt-dlp、VTT �
 - 白名單是防 SSRF：yt-dlp 會連原站，不能讓群友丟任何網址就讓伺服器去抓。抓 YouTube 違反其服務條款，要不要開由管理員決定；預設關閉，yt-dlp 要自己定期更新。
 - 部署：2026-11-07 部署，遠端 yt-dlp 2026.10.21 實測抓到 `zh-TW` 6254 字字幕 + 10 章節 + 直連網址；MCP `listTools` 30 個工具，`view_message` 描述含「字幕」。
 - 測試：`scripts/test-discord-bridge.mjs`（`parseVideoMeta`、`pickSubtitleFile`、`parseVtt`、`clipTranscript`）。
-- 相關：[[discord-message-preview]]、[[discord-web-fetch]]。
+- 沒有字幕時的按需語音轉錄需由 `view_message` 明確帶 `transcribe: true`；同步／背景分流見 [[discord-asr]]。
+- 相關：[[discord-message-preview]]、[[discord-web-fetch]]、[[discord-asr]]。

@@ -18,6 +18,7 @@ description: Codex（ChatGPT 方案）額度查詢、生圖守門、5 小時窗�
 - `codexDrawGate()`：5 小時剩 < 15%（`CODEX_DRAW_MIN_FIVE_HOUR_PERCENT`）或每週剩 < 5%（`CODEX_DRAW_MIN_WEEKLY_PERCENT`）就暫停生圖。
 - 進 queue 前與真正開 Codex 前各查一次。
 - `/status` 一行：`formatCodexQuota()` 印 5 小時／每週剩餘與重置時間、重置券張數、credits。
+- 控制台 Codex 回應使用根層 `fiveHour`／`weekly`，不是訂閱額度的 `windows[]`。共用 `QuotaCard.vue` 若只讀 `windows[]`，卡片會留下標題但沒有額度列；這是前端資料形狀不符，不代表 DSH 額度查詢失效。2026-11-24 已補 Codex 額度 UI 回歸並部署驗證，5 小時與每週列均顯示。Vue 控制台建置方式見 [[discord-console-vue]]。
 
 ## 5 小時窗口重置 ping
 

@@ -19,6 +19,7 @@ description: Discord 語音背景工作、送出流程、限制與狀態查詢
 - 2026-11-13 較早的測試伺服器檢查使用 VoiceDesign 模型，`/v1/models` 與 `/v1/audio/speech` 均回 HTTP 200；這項設定後來已被 Base 模型與參考音設定取代。當日用本機程式合成後手動送出 Discord 語音成功（6.64 秒），但不代表新橋接版本已部署或完成端到端驗證。派蒙社群 TTS 因使用者認為效果不如 Qwen3-TTS 而放棄，見 [[discord-paimon-tts]]。
 - 2026-11-12 用 Discord.js 14.27.0 做過獨立送訊息測試：OGG/Opus 音檔需搭配 `AttachmentBuilder.setWaveform()`（256 bytes waveform 的 base64）與秒數 `duration`，並以 `MessageFlags.IsVoiceMessage` 送出；回讀確認 flags `8192`、`isVoice`、`audio/ogg`、waveform 與 duration。測試音是 2 秒合成正弦波，只驗證 Discord 語音訊息投遞，不代表 TTS 或橋接端到端測試。
 - `mlx_audio.server` 沒有 API 認證；只可放在可信 LAN 或 VPN，不要直接暴露公網。模型端選型與 Voicebox 差異見 [[discord-tts-model-selection]]。
+- Mac mini 上的 TTS 與 ASR 共用 `mlx_audio.server`；閒置模型回收由 Mac 端 wrapper 負責，DELETE 單獨使用不足以釋放 MLX cache。細節見 [[discord-mlx-idle-unload]]。
 
 已取代（2026-11-13）：早期同步方案由 persona 先貼預告，並可能碰到 MCP 工具逾時；目前改由橋接自動提示並以背景工作完成語音。
 
