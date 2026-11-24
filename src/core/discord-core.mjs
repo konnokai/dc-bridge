@@ -106,6 +106,10 @@ export function normalizeDiscordConfig(raw) {
   } else if (/-base(-|$)/i.test(ttsModel)) {
     throw new Error('discord.tts.model 是 Base 模型但沒有 refAudio：Base 沒有預設聲音，每次呼叫會亂抽');
   }
+  if (src.stt?.enabled === true && !(src.stt?.baseUrl || src.tts?.baseUrl)) {
+    throw new Error('discord.stt.enabled 需要 stt.baseUrl 或 tts.baseUrl');
+  }
+  if (src.stt?.baseUrl) httpBaseUrl(src.stt.baseUrl, 'discord.stt.baseUrl');
 
   // Jev 自動分流：預設關閉（fork 不一定有 Command Code 訂閱），四段模式見 docs/guides/DISCORD.md。
   // 門檻只收 0～1 的數字：null／字串／超出範圍一律回預設，不能 clamp 成 0 或 1（auto 會全收或全拒）。
@@ -198,6 +202,16 @@ export function normalizeDiscordConfig(raw) {
       maxPerTurn: clamp(src.tts?.maxPerTurn, 1, 1, 5),
       // 留空 = 全部頻道；有值 = 只開這些頻道。
       channels: idList(src.tts?.channels, 'discord.tts.channels'),
+    },
+    stt: {
+      // 語音／影音轉文字。預設關閉：要把音檔送到 Mac mini 的 mlx_audio。
+      // baseUrl 留空沿用 tts.baseUrl（同一台、同一個 8100）；這裡保留空字串，
+      // 避免控制台存檔時把解析後的網址寫死，之後改 tts.baseUrl 反而不同步。
+      enabled: src.stt?.enabled === true,
+      baseUrl: typeof src.stt?.baseUrl === 'string' ? src.stt.baseUrl.trim() : '',
+      model: text(src.stt?.model, 'mlx-community/Qwen3-ASR-1.7B-8bit'),
+      // 單一媒體最長轉錄秒數；再長只取前段（YouTube）或直接拒絕（SNS，橋接不轉檔）。
+      maxMediaSeconds: clamp(src.stt?.maxMediaSeconds, 1200, 30, 3600),
     },
     // 選用：Cloudflare Worker + R2 的 PRTS 圖片快取。留空就直連。
     prts: {

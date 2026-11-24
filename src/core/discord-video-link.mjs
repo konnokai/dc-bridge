@@ -18,6 +18,30 @@ export const VIDEO_LINK_HOSTS = Object.freeze([
   'www.youtube-nocookie.com',
 ]);
 
+/** 無 cookie best-effort 的 SNS 網域：修復 bot 沒給代理影片時才用 yt-dlp 抓原站。 */
+export const SNS_LINK_HOSTS = Object.freeze([
+  'x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com',
+  'instagram.com', 'www.instagram.com', 'instagr.am',
+  'threads.com', 'www.threads.com', 'threads.net', 'www.threads.net',
+  'facebook.com', 'www.facebook.com', 'm.facebook.com', 'fb.watch', 'fb.com', 'www.fb.com',
+]);
+
+export function isYoutubeLink(value) {
+  try {
+    return VIDEO_LINK_HOSTS.includes(new URL(String(value)).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+export function isSnsLink(value) {
+  try {
+    return SNS_LINK_HOSTS.includes(new URL(String(value)).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 /** 從訊息文字挑出白名單網域的連結（去重，保持出現順序）。 */
 export function videoLinks(text) {
   const found = new Map();

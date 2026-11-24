@@ -85,6 +85,7 @@ import {
 import {
   pruneVoiceJobs
 } from './core/discord-voice-jobs.mjs';
+import { createTranscriptJobs } from './core/discord-stt.mjs';
 import { readDshCredential } from './web-search.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -112,6 +113,7 @@ const AGENT_ENDPOINT_FILE = path.join(STATE_DIR, 'discord-agent.json');
 // generate_image 的輸出目錄；dc-draw-image 會把 outputDir 固定到這裡，send_image 也只認這裡。
 const AGENT_IMAGE_DIR = path.join(STATE_DIR, 'discord-images');
 const IMAGE_JOBS_FILE = path.join(STATE_DIR, 'discord-image-jobs.json');
+const TRANSCRIPT_JOBS_FILE = path.join(STATE_DIR, 'discord-transcript-jobs.json');
 // 梗圖庫：不放進 discord-images，那個目錄只留最新 100 張、會被 dc-draw-image 清掉。
 const MEMES_DIR = path.join(STATE_DIR, 'discord-memes');
 const MEMES_INDEX_FILE = path.join(MEMES_DIR, 'index.json');
@@ -1032,6 +1034,17 @@ async function main() {
   // createTurns 的接線都要用它。ensureSession 等別名在下面 turns 接線處解出。
   const epochOf = (key) => epochs.get(key) ?? 0;
 
+  // 語音／影音轉文字的背景工作。enqueuePrompt 由 turns 提供，這裡先給轉發箭頭。
+  const transcriptJobs = createTranscriptJobs({
+    cfg,
+    log,
+    sessions,
+    epochOf,
+    enqueuePrompt: (key, options) => enqueuePrompt(key, options),
+    file: TRANSCRIPT_JOBS_FILE,
+    ytDlpPath: cfg.discord.videoLinks.ytDlpPath || null,
+  });
+
   // ── Discord 送出 ─────────────────────────────────────────────────────────
   // 會話改名、頻道解析與分條發送在 core/discord-bridge-output.mjs。
   const outputLayer = createOutputLayer({
@@ -1083,6 +1096,7 @@ async function main() {
     archive,
     imageJobs,
     pendingDraws,
+    transcriptJobs,
     persistImageJobs,
     persistMemesNow,
     markMemoryDirty,
@@ -1402,6 +1416,7 @@ async function main() {
     memeStore,
     memoryStore,
     messageRefs,
+    transcriptJobs,
     notesStore,
     reactionInbox,
     reactionLastAt,
@@ -1444,6 +1459,9 @@ async function main() {
     maybeReact,
   } = turns;
 
+  // 上次執行中的轉錄工作沒有結果了：叫醒對應會話，叫模型改用文字。
+  void transcriptJobs.startup();
+
   // DSH 會話層在 core/discord-bridge-dsh-sessions.mjs；ensureSession 依賴 turnGate，
   // turnGate 又要 epochOf，所以這層只能在 turns 之後接線。createTurns 拿的是
   // ensureSession 的轉發箭頭：箭頭裡的名字執行期才解析，接線時不會讀到還沒宣告的別名。
@@ -1482,6 +1500,7 @@ async function main() {
     imageJobs,
     pendingDraws,
     voiceJobs,
+    transcriptJobs,
     persistImageJobs,
     runtime,
     stopTyping,
@@ -1845,6 +1864,7 @@ async function main() {
   log('模型發訊息：mcp__discord__*（DSH 要掛 mcp-discord）');
   // 外掛失聯（DSH 重啟、當掉、連不上）：不會再有 poll 或 done，等 2 分鐘就收掉並告訴頻道。
   const imageJobSweep = setInterval(() => {
+    transcriptJobs.sweep();
     for (const job of pruneVoiceJobs({ jobs: voiceJobs })) {
       log(`語音工作逾時，丟棄（${job.key}，job ${job.id}）`);
       void job.notice?.delete().catch(() => {});

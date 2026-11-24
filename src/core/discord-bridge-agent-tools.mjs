@@ -80,6 +80,7 @@ export function createAgentTools({
   archive,
   imageJobs,
   pendingDraws,
+  transcriptJobs,
   persistImageJobs,
   persistMemesNow,
   markMemoryDirty,
@@ -651,6 +652,8 @@ export function createAgentTools({
     memoryStore,
     triggerStore,
     ownerIds,
+    sessions,
+    transcriptJobs,
   });
   const tradeTools = createAgentTradeTools({
     agentSender,
@@ -798,6 +801,9 @@ export function createAgentTools({
     // 語音：合成、轉檔、送出都在這裡；安靜與補句跟 send 完全一樣，文字不進頻道。
     async sendVoice(body) {
       const { sessionId, key, channel } = await agentSender.resolve(body.token);
+      if (transcriptJobs?.busy?.()) {
+        throw toolError('ASR 正在轉錄，先用文字回覆；等【轉錄完成】再試語音', 409);
+      }
       const used = voicePerTurn.get(key) ?? 0;
       const previousLastAt = voiceLastAt.get(key) ?? 0;
       const gate = voiceGate({
@@ -964,6 +970,9 @@ export function createAgentTools({
       }
       for (const job of listImageJobs({ jobs: imageJobs, key, now: nowFn })) {
         lines.push(`生圖：排隊或生成中（開始 ${formatJobAge(now - job.startedAt)}前，最後回報 ${formatJobAge(now - job.at)}前）`);
+      }
+      for (const job of transcriptJobs?.list?.(key) ?? []) {
+        lines.push(`轉錄：${job.label}${job.ref ? ` ${job.ref}` : ''}（${job.status === 'working' ? '轉錄中' : '排隊中'}，開始 ${formatJobAge(now - job.startedAt)}前）`);
       }
       return { key, text: lines.length ? `背景工作：\n- ${lines.join('\n- ')}` : '目前沒有在跑的背景工作。' };
     },

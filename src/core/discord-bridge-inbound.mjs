@@ -251,12 +251,23 @@ export function createInbound({
     }
 
     const stickers = stickerLabel(parts.stickers);
+    // 音檔的分類跟 media 開關脫鉤：media 關掉時圖片不送，但 STT 還是要收到語音。
+    const collected = collectMediaAttachments(
+      [...parts.attachments, ...stickerImages(parts.stickers)],
+      cfg.discord.media,
+      { allowAudio: cfg.discord.stt.enabled },
+    );
     const media = cfg.discord.media.enabled
-      ? collectMediaAttachments([...parts.attachments, ...stickerImages(parts.stickers)], cfg.discord.media)
-      : { accepted: [], skipped: [] };
+      ? collected
+      : {
+          accepted: [],
+          audio: collected.audio,
+          skipped: collected.skipped.filter((item) => item.kind === 'audio'),
+        };
     // 只有 @bot／回覆 bot、沒有其他內容：不能當空訊息丟掉，模型要知道有人在叫它。
-    const emptyDirect = direct && !fullText && !stickers && media.accepted.length === 0;
-    if (!fullText && !stickers && media.accepted.length === 0) {
+    const hasAudio = media.audio.length > 0;
+    const emptyDirect = direct && !fullText && !stickers && media.accepted.length === 0 && !hasAudio;
+    if (!fullText && !stickers && media.accepted.length === 0 && !hasAudio) {
       if (direct && parts.attachments.length) {
         // 只有語音時說人話；其他附件維持原本的技術說明（含是哪一種格式被擋）。
         const audioOnly = media.skipped.length > 0 && media.skipped.every((item) => item.kind === 'audio');
@@ -327,8 +338,8 @@ export function createInbound({
       isOwner,
       media,
       hasImage: parts.hasImage,
-      // 整則沒有文字、只有圖片／貼圖：chatty 頻道的純媒體閘門用。
-      mediaOnly: !fullText && (media.accepted.length > 0 || parts.stickers.length > 0),
+      // 整則沒有文字、只有圖片／貼圖／語音：chatty 頻道的純媒體閘門用。
+      mediaOnly: !fullText && (media.accepted.length > 0 || media.audio.length > 0 || parts.stickers.length > 0),
       at: message.createdTimestamp,
     });
     lastActive.set(key, Date.now());

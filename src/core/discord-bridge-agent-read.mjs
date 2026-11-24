@@ -9,13 +9,14 @@ import { canReadMessage, isSilentMessage, isSkippedMessage, matchesTerms, search
 import { defang, isVisible, repliedName, resolveMentions, visibleName } from './discord-batch.mjs';
 import { authorName, componentParts, embedIsSensitive, flat, linkPaths, messageParts, parseHistoryDate, referencedMessage, textArg, visibleAttachments, warmMemberCache, withStickers } from './discord-context.mjs';
 import { bySnowflake, collectSearchHits, guildSearchParams, scanHistoryMessages, SEARCH_PAGE_MAX } from './discord-history.mjs';
-import { collectMediaAttachments, fetchDiscordMedia, prepareMediaBlock, prepareVideoUrlBlock, referenceImageCount, referenceRefsByUrl, viewMediaItems } from './discord-media.mjs';
+import { collectMediaAttachments, embedVideoUrls, fetchDiscordMedia, prepareMediaBlock, prepareVideoUrlBlock, referenceImageCount, referenceRefsByUrl, viewMediaItems } from './discord-media.mjs';
+import { SYNC_MAX_SECONDS, UPLOAD_MAX_BYTES, formatSeconds } from './discord-stt.mjs';
 import { labelEmojiTags } from './discord-emoji.mjs';
 import { numberFacts, userFacts } from './discord-memory.mjs';
 import { triggerStats, triggerUserList } from './discord-trigger-stats.mjs';
 import { fetchTwitterImage, fetchTwitterPost, firstTwitterPost, twitterImageUrls, twitterPostLines } from './twitter-post.mjs';
 import { embedFixLines, embedFixTarget, fetchEmbedFixPost, firstEmbedFixPost } from './embed-fix.mjs';
-import { fetchVideoLink, formatChapters, formatVideoTime, videoLinks } from './discord-video-link.mjs';
+import { fetchVideoLink, formatChapters, formatVideoTime, isSnsLink, videoLinks } from './discord-video-link.mjs';
 
 export function createAgentReadTools({
   cfg,
@@ -31,6 +32,8 @@ export function createAgentReadTools({
   memoryStore,
   triggerStore,
   ownerIds,
+  sessions,
+  transcriptJobs,
 }) {
   const toolError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
@@ -351,6 +354,8 @@ export function createAgentReadTools({
         : `頻道 ${source.id} 訊息 ${message.id}`);
       const canRef = source.id === channel.id && cfg.discord.media.enabled;
       const targetRef = canRef ? messageRefs.register(key, target.id) : '';
+      // ASR 回覆用的 ref 不受 media 開關影響；只有同一個頻道才登記。
+      const replyRef = targetRef || (source.id === channel.id ? messageRefs.register(key, target.id) : '');
       const lines = [
         `${labelFor(target)} ${shortTime(target.createdAt)} ${flat(authorName(target), 40)}${self}${target.editedAt ? '（編輯過）' : ''}`,
         `內容：${flat(labelEmojiTags(resolveMentions(withStickers(target), target), getEmojiCatalogs()), VIEW_TEXT_MAX) || '（沒有文字）'}`,
@@ -410,6 +415,7 @@ export function createAgentReadTools({
       const tweetPromise = tweetSource
         ? fetchTwitterPost(tweetSource).catch((error) => ({ ok: false, reason: error?.message ?? String(error) }))
         : null;
+      let tweetPost = null;
       // Threads／Instagram／Facebook 原站是 SPA，Discord 預覽常常只有標題；直接向 ebfix 要正文。
       // 先記下結果：等 X 貼文與圖片跑完時，它通常早就回來了，不要因為「剩餘秒數」把它丟掉。
       const socialSource = firstEmbedFixPost(linkSourceInputs);
@@ -437,7 +443,7 @@ export function createAgentReadTools({
         ? referenceRefsByUrl([target, repliedMessage, ...fixMessages], cfg.discord.media, labelFor)
         : new Map();
       const targetRefBase = canRef ? referenceImageCount(target, cfg.discord.media) : 0;
-      const media = collectMediaAttachments(viewMediaItems({ target, replied: repliedMessage, fixMessages }), cfg.discord.media);
+      const media = collectMediaAttachments(viewMediaItems({ target, replied: repliedMessage, fixMessages }), cfg.discord.media, { allowAudio: cfg.discord.stt.enabled });
       const settled = await Promise.allSettled(media.accepted.map(async (item) => {
         const prepared = await prepareMediaBlock(await fetchDiscordMedia(item.url, cfg.discord.media), item.name, cfg.discord.media, { deadline: viewStart + 55_000 });
         if (!prepared.block) throw new Error(prepared.error);
@@ -470,6 +476,7 @@ export function createAgentReadTools({
         } else {
           const post = await withTimeout(tweetPromise, Math.min(20_000, tweetLeft), 'X 貼文')
             .catch((error) => ({ ok: false, reason: error?.message ?? String(error) }));
+          tweetPost = post;
           for (const line of twitterPostLines(post)) {
             // 推文正文最多 4000 字，這裡跟其他內容一樣收在 1500 字；截斷要看得出來。
             const text = flat(line, 1501);
@@ -563,6 +570,7 @@ export function createAgentReadTools({
       // 群友貼的影片連結（YouTube 等）：一次 yt-dlp 取字幕文字、標題／章節與直連網址，再跟附件同一套抽格。
       // 字幕與影片資訊是文字，不受 media 開關與圖片名額限制；只有抽格受這兩個條件管。
       const linkUrl = cfg.discord.videoLinks.enabled ? videoLinks(targetParts.text)[0] : '';
+      let videoHadTranscript = false;
       if (linkUrl) {
         // 整個工具呼叫有 60 秒上限（mcp-discord 的逾時）；花光的話連前面那些文字都會被丟掉。
         // 所以 yt-dlp 與 ffmpeg 共用剩下的預算，不夠就放棄這次連結，保住其餘結果。
@@ -584,6 +592,7 @@ export function createAgentReadTools({
             if (chapters) lines.push(`影片章節：${flat(chapters, 1000)}`);
             if (video.description) lines.push(`影片簡介：${flat(video.description, 500)}`);
             if (video.transcript) {
+              videoHadTranscript = true;
               // 每行縮排：字幕是外部內容，不能讓它偽造橋接自己的「生圖參考」「附上 N 張圖」這種行首結構。
               const body = defang(video.transcript).replace(/\n/g, '\n  ');
               lines.push(`影片字幕（${flat(video.transcriptLang, 20) || '不明語系'}${video.transcriptTruncated ? '，只取前段' : ''}，用這段文字回答影片在講什麼）：\n${body}\n（影片字幕結束）`);
@@ -602,6 +611,89 @@ export function createAgentReadTools({
               }
             }
           }
+        }
+      }
+
+      // 音檔／影片的 ASR：transcribe=true 才轉；短音檔同步，長媒體開背景工作。
+      if (cfg.discord.stt.enabled) {
+        const asrLimits = { ...cfg.discord.media, maxBytes: UPLOAD_MAX_BYTES, maxCount: 4 };
+        const audioItems = collectMediaAttachments(targetParts.attachments, asrLimits, { allowAudio: true }).audio;
+        const videoItems = collectMediaAttachments(targetParts.attachments, asrLimits).accepted
+          .filter((item) => item.mime.startsWith('video/'));
+        const embedVideos = [
+          ...embedVideoUrls(targetParts.embeds),
+          ...fixMessages.flatMap((message) => embedVideoUrls(messageParts(message).embeds)),
+        ];
+        const linkText = [targetParts.text, ...fixMessages.map((message) => message.content)].join('\n');
+        const snsUrl = [...String(linkText ?? '').matchAll(/https?:\/\/[^\s<>]+/g)]
+          .map((match) => match[0].replace(/[.,;:!?，。；：！？」』）)】]+$/u, ''))
+          .find((url) => isSnsLink(url)) ?? '';
+        const tweetHasVideo = tweetPost?.ok && Array.isArray(tweetPost.media)
+          && tweetPost.media.some((item) => item.type === 'video' || item.type === 'gif');
+        const sources = [
+          ...audioItems.map((item) => ({ kind: 'discord', url: item.url, name: item.name, id: item.id, duration: item.duration, label: '語音訊息' })),
+          ...videoItems.map((item) => ({ kind: 'discord', url: item.url, name: item.name, id: item.id, duration: 0, label: '影片' })),
+          ...embedVideos.map((item) => ({ kind: 'discord', url: item.url, name: item.name, id: item.id, duration: 0, label: '影片' })),
+        ];
+        if (!videoHadTranscript && linkUrl) {
+          sources.push({ kind: 'ytdlp', url: linkUrl, youtube: true, duration: 0, label: 'YouTube 影片', id: linkUrl });
+        } else if (snsUrl && tweetHasVideo) {
+          // 純文字的 X／IG 貼文不算影片；要有影片證據才開 yt-dlp。
+          sources.push({ kind: 'ytdlp', url: snsUrl, youtube: false, duration: 0, label: 'SNS 影片', id: snsUrl });
+        }
+        const first = sources[0];
+        if (first && first.duration > cfg.discord.stt.maxMediaSeconds) {
+          lines.push(`（${first.label} ${formatSeconds(first.duration)} 超過 ${formatSeconds(cfg.discord.stt.maxMediaSeconds)} 上限，沒有轉錄）`);
+        } else if (first) {
+          const cacheKey = `${target.id}:${first.id || first.name || first.url}`;
+          const show = (text, truncated) => {
+            const clipped = flat(text, 4000);
+            return `${clipped}${truncated || String(text).length > 4000 ? '（只取前段）' : ''}`;
+          };
+          const startBackground = () => {
+            const started = transcriptJobs.start({
+              key,
+              sessionId: sessions[key],
+              ref: replyRef ? `#${replyRef}` : '',
+              cacheKey,
+              source: { ...first, duration: first.duration || 0 },
+              label: first.label,
+            });
+            if (started.cached) {
+              lines.push(`[${first.label}轉錄] ${show(started.cached.text, started.cached.truncated)}`);
+            } else {
+              lines.push(`[轉錄中] ${first.label}已排入背景轉錄（job ${started.jobId}）；完成後會收到【轉錄完成】。`);
+            }
+          };
+          const cached = transcriptJobs.lookup(cacheKey);
+          if (cached) {
+            lines.push(`[${first.label}轉錄] ${show(cached.text, cached.truncated)}`);
+          } else if (!body.transcribe) {
+            lines.push(`（有${first.label}${first.duration ? `，${formatSeconds(first.duration)}` : ''}；要聽內容就再呼叫 view_message，帶 transcribe: true）`);
+          } else if (first.kind === 'discord' && first.duration > 0 && first.duration <= SYNC_MAX_SECONDS
+            && !transcriptJobs.busy() && 55_000 - (Date.now() - viewStart) >= 25_000) {
+            try {
+              const result = await transcriptJobs.transcribeSync({
+                source: first,
+                cacheKey,
+                timeoutMs: Math.max(10_000, Math.min(45_000, 55_000 - (Date.now() - viewStart))),
+              });
+              lines.push(`[${first.label}轉錄] ${show(result.text, result.truncated)}`);
+            } catch (error) {
+              try {
+                startBackground();
+              } catch {
+                lines.push(`[${first.label}轉錄失敗] ${flat(error?.message ?? error, 200)}`);
+              }
+            }
+          } else {
+            try {
+              startBackground();
+            } catch (error) {
+              lines.push(`[轉錄中] ${flat(error?.message ?? error, 200)}`);
+            }
+          }
+          if (sources.length > 1) lines.push(`（另有 ${sources.length - 1} 個媒體這次沒轉，只處理第一個）`);
         }
       }
 

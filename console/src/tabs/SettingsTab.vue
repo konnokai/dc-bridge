@@ -32,6 +32,9 @@ const FEATURE_FIELDS = [
   { path: 'tts.refAudio', label: 'tts.refAudio：參考音檔（TTS 主機上的絕對路徑）', kind: 'text', wide: true },
   { path: 'tts.refText', label: 'tts.refText：參考音逐字稿', kind: 'text', wide: true },
   { path: 'tts.channels', label: 'tts.channels：開放語音的頻道（一行一個；留空＝全部）', kind: 'ids', wide: true },
+  { path: 'stt.enabled', label: 'stt.enabled：語音／影音轉文字', kind: 'bool' },
+  { path: 'stt.model', label: 'stt.model：ASR 模型', kind: 'text' },
+  { path: 'stt.maxMediaSeconds', label: 'stt.maxMediaSeconds：單一媒體最長轉錄秒數', kind: 'number', min: 30, max: 3600, step: 30 },
   { path: 'security.blockSensitive', label: 'security.blockSensitive：攔下含敏感資訊的回覆', kind: 'bool' },
   { path: 'emoji.enabled', label: 'emoji.enabled：自訂表情目錄', kind: 'bool' },
   { path: 'emoji.maxCandidates', label: 'emoji.maxCandidates：候選數', kind: 'number', min: 3, max: 30, step: 1 },
@@ -67,7 +70,7 @@ const FEATURE_FIELDS = [
 // 分區看 path 第一段；沒有前綴的是對話行為。沒列到的前綴直接顯示原名，欄位不會消失。
 const FEATURE_SECTIONS = {
   '': '對話行為', media: '媒體', videoLinks: '影片連結', context: '上下文', batch: '批次',
-  tts: '語音（TTS）', security: '安全', emoji: '表情', memes: '梗圖', reactions: 'Reaction',
+  tts: '語音（TTS）', stt: '語音轉文字（STT）', security: '安全', emoji: '表情', memes: '梗圖', reactions: 'Reaction',
   memory: '群友記憶', notes: '頻道筆記', knowledge: '群知識', followup: '回訪排程', slang: '黑話', historyArchive: '歷史歸檔',
 };
 
