@@ -1131,7 +1131,7 @@ try {
         })
         .map((h) => h.firstChild.textContent));
       assert.deepEqual(unnamed, [], '每個功能區都有中文區名');
-      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 55, '功能欄位沒有漏掉');
+      assert.equal(await p.locator('#feature-fields input, #feature-fields textarea').count(), 58, '功能欄位沒有漏掉');
       assert.equal(await p.locator('#cf-slang-jev-mode').inputValue(), 'auto', 'Jev 模式要從設定帶入');
       assert.equal(await p.locator('#fsec-tts #cf-tts-channels').count(), 1, 'TTS 欄位歸在語音區');
       assert.equal(await p.locator('#fsec-videoLinks #cf-videoLinks-enabled').count(), 1, '影片連結自己一區');
@@ -1340,6 +1340,55 @@ try {
       await deletedResponse;
       await p.waitForFunction(() => document.querySelector('#dev-feedback-rows td').textContent.includes('還沒有人'));
       assert.equal(deleted, 'df1', '刪除會呼叫 handler');
+    } finally {
+      await dcContext.close();
+      await dc.close();
+    }
+  });
+  await test('Discord 控制台：Codex 額度列出 5 小時與每週', async () => {
+    const dc = await startConsole({
+      port: 0, token: 't', htmlPath: HTML,
+      handlers: {
+        status: () => ({
+          bot: null, dsh: {}, sessions: 0, pending: 0, ownerIds: [], ignored: [],
+          allow: { guilds: 0, channels: 0, users: 0 }, media: {},
+          console: { host: '127.0.0.1', port: 0 },
+        }),
+        invite: () => ({}),
+        usage: ({ range }) => ({ range, totals: {}, conversations: [], series: { buckets: [] } }),
+        quota: async () => ({ skipped: true }),
+        codexQuota: async () => ({
+          ok: true,
+          fetchedAt: Date.now(),
+          fiveHour: { remainingPercent: 94, resetsAt: Date.now() + 3 * 3600_000 },
+          weekly: { remainingPercent: 85, resetsAt: Date.now() + 4 * 86400_000 },
+          resetCredits: { availableCount: 3 },
+        }),
+        memory: () => ({ enabled: false, users: [] }),
+        followups: () => ({ enabled: false, items: [] }),
+        notes: () => ({ enabled: false, notes: [] }),
+        sessions: () => [],
+        config: () => ({ allow: {}, deny: {}, ownerIds: [], media: {} }),
+        slang: () => ({ entries: [], learning: { enabled: false } }),
+        knowledge: () => ({ enabled: false, stats: { total: 0, candidate: 0, approved: 0, rejected: 0 }, entries: [] }),
+        logs: () => [],
+      },
+    });
+    const dcContext = await browser.newContext({ viewport: { width: 645, height: 903 } });
+    try {
+      const p = await dcContext.newPage();
+      p.setDefaultTimeout(8000);
+      const errors = [];
+      p.on('pageerror', (error) => errors.push(error.message));
+      await p.goto(`http://127.0.0.1:${dc.server.address().port}/?token=t#overview`);
+      await p.waitForFunction(() => document.querySelectorAll('#codex-quota .quota-row').length === 2);
+      assert.equal(await p.locator('#codex-quota-card').isHidden(), false, '有資料時卡片要顯示');
+      assert.match(await p.locator('#codex-quota-note').textContent(), /重置券 3 張/);
+      assert.deepEqual(await p.locator('#codex-quota .quota-row .muted').allTextContents(), ['5 小時', '每週']);
+      const texts = await p.locator('#codex-quota .quota-row .num').allTextContents();
+      assert.match(texts[0], /^94%/);
+      assert.match(texts[1], /^85%/);
+      assert.deepEqual(errors, []);
     } finally {
       await dcContext.close();
       await dc.close();

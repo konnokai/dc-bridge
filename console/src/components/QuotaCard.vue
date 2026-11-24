@@ -45,7 +45,12 @@ function rowOf(window) {
 const rows = computed(() => {
   const q = props.quota;
   if (!q || !q.ok) return [];
-  const windows = q.windows ?? [];
+  // Codex 只回固定的 fiveHour／weekly，沒有訂閱額度那種 windows 陣列。
+  const windows = props.kind === 'codex'
+    ? [['5 小時', q.fiveHour], ['每週', q.weekly]]
+      .filter(([, window]) => window)
+      .map(([label, window]) => ({ ...window, label }))
+    : q.windows ?? [];
   const list = [];
   for (const window of windows) {
     list.push(rowOf(window));
